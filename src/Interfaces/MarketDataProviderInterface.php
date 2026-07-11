@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Interfaces;
 
-use StockAnalyzer\Models\Company;
-use StockAnalyzer\Models\Fundamentals;
-use StockAnalyzer\Models\Quote;
-use StockAnalyzer\Models\MarketSnapshot;
+use StockAnalyzer\Models\Stock;
 
 interface MarketDataProviderInterface
 {
-    public function getSnapshot(string $ticker): MarketSnapshot;
+    public function getStock(string $ticker): Stock;
+
+    /**
+     * @return list<\StockAnalyzer\Models\HistoricalQuote>
+     */
+    public function getHistoricalQuotes(string $ticker): array;
 }

@@ -18,9 +18,9 @@ enum ScoreCategory: string
     public function label(): string
     {
         return match ($this) {
-            self::TECHNICAL => 'Análisis técnico',
+            self::TECHNICAL => 'Analisis tecnico',
             self::FUNDAMENTAL => 'Fundamentales',
-            self::VALUATION => 'Valoración',
+            self::VALUATION => 'Valoracion',
             self::NEWS => 'Noticias',
             self::MOMENTUM => 'Momentum',
             self::RISK => 'Riesgo',
@@ -29,9 +29,6 @@ enum ScoreCategory: string
         };
     }
 
-    /**
-     * Peso máximo permitido para esta categoría.
-     */
     public function maxScore(): float
     {
         return match ($this) {
