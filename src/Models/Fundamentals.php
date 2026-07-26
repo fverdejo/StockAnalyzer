@@ -6,6 +6,26 @@ namespace StockAnalyzer\Models;
 
 class Fundamentals
 {
+    /**
+     * @param ?float $per Price/Earnings (ratio, ej. 18.4)
+     * @param ?float $peg PER ajustado al crecimiento (ratio, ej. 1.2)
+     * @param ?float $roe Rentabilidad sobre recursos propios (porcentaje, ej. 24.0 = 24%)
+     * @param ?float $roic Rentabilidad sobre capital invertido (porcentaje). Yahoo no lo expone
+     *                      de forma fiable en sus endpoints publicos: normalmente sera null.
+     * @param ?float $eps Beneficio por accion (en la divisa de la empresa)
+     * @param ?float $marketCap Capitalizacion bursatil (en la divisa de la empresa)
+     * @param ?float $debtToEquity Deuda/Patrimonio (ratio, ej. 0.8)
+     * @param ?float $freeCashFlow Flujo de caja libre (en la divisa de la empresa)
+     * @param ?float $evToEbitda Enterprise Value / EBITDA (ratio, ej. 11.5)
+     * @param ?float $priceToBook Precio/Valor contable (ratio, ej. 3.2)
+     * @param ?float $dividendYield Rentabilidad por dividendo (porcentaje, ej. 2.5 = 2.5%)
+     * @param ?float $payoutRatio Porcentaje del beneficio destinado a dividendos (ej. 35.0 = 35%)
+     * @param ?float $grossMargin Margen bruto (porcentaje)
+     * @param ?float $operatingMargin Margen operativo (porcentaje)
+     * @param ?float $netMargin Margen neto (porcentaje)
+     * @param ?float $revenueGrowth Crecimiento de ingresos interanual (porcentaje)
+     * @param ?float $currentRatio Ratio de liquidez corriente (ratio, ej. 1.8)
+     */
     public function __construct(
         private readonly ?float $per,
         private readonly ?float $peg,
@@ -14,8 +34,28 @@ class Fundamentals
         private readonly ?float $eps,
         private readonly ?float $marketCap,
         private readonly ?float $debtToEquity,
-        private readonly ?float $freeCashFlow
+        private readonly ?float $freeCashFlow,
+        private readonly ?float $evToEbitda = null,
+        private readonly ?float $priceToBook = null,
+        private readonly ?float $dividendYield = null,
+        private readonly ?float $payoutRatio = null,
+        private readonly ?float $grossMargin = null,
+        private readonly ?float $operatingMargin = null,
+        private readonly ?float $netMargin = null,
+        private readonly ?float $revenueGrowth = null,
+        private readonly ?float $currentRatio = null
     ) {
+    }
+
+    /**
+     * Fundamentales vacios: se usa cuando el proveedor no pudo obtener
+     * datos fundamentales para un ticker (por ejemplo, si falla la
+     * conexion). El resto de la aplicacion trata estos campos null como
+     * "dato no disponible", nunca como cero.
+     */
+    public static function empty(): self
+    {
+        return new self(null, null, null, null, null, null, null, null);
     }
 
     public function getPer(): ?float
@@ -56,5 +96,65 @@ class Fundamentals
     public function getFreeCashFlow(): ?float
     {
         return $this->freeCashFlow;
+    }
+
+    public function getEvToEbitda(): ?float
+    {
+        return $this->evToEbitda;
+    }
+
+    public function getPriceToBook(): ?float
+    {
+        return $this->priceToBook;
+    }
+
+    public function getDividendYield(): ?float
+    {
+        return $this->dividendYield;
+    }
+
+    public function getPayoutRatio(): ?float
+    {
+        return $this->payoutRatio;
+    }
+
+    public function getGrossMargin(): ?float
+    {
+        return $this->grossMargin;
+    }
+
+    public function getOperatingMargin(): ?float
+    {
+        return $this->operatingMargin;
+    }
+
+    public function getNetMargin(): ?float
+    {
+        return $this->netMargin;
+    }
+
+    public function getRevenueGrowth(): ?float
+    {
+        return $this->revenueGrowth;
+    }
+
+    public function getCurrentRatio(): ?float
+    {
+        return $this->currentRatio;
+    }
+
+    /**
+     * Rentabilidad por flujo de caja libre respecto a la capitalizacion
+     * (porcentaje). Se deriva de freeCashFlow y marketCap en lugar de
+     * pedirse como campo independiente, porque ambos ya viajan juntos en
+     * este objeto y el ratio pierde sentido si se separan.
+     */
+    public function getFreeCashFlowYield(): ?float
+    {
+        if ($this->freeCashFlow === null || $this->marketCap === null || $this->marketCap <= 0) {
+            return null;
+        }
+
+        return ($this->freeCashFlow / $this->marketCap) * 100;
     }
 }

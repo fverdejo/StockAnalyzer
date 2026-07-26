@@ -4,88 +4,73 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Analyzer;
 
+use StockAnalyzer\Config\ScoreWeights;
+use StockAnalyzer\DTO\CategoryResult;
+use StockAnalyzer\DTO\ScoreResult;
+use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\TechnicalSnapshot;
 use StockAnalyzer\Enums\ScoreCategory;
+use StockAnalyzer\Enums\SignalVerdict;
 use StockAnalyzer\Models\Score;
 use StockAnalyzer\Models\Stock;
 
+/**
+ * Orquesta los analizadores especializados (tecnico y fundamental), suma
+ * sus puntuaciones en un Score y conserva las Signals de cada uno para que
+ * RecommendationExplainer pueda explicar el resultado sin recalcular nada.
+ *
+ * Los pesos (ScoreWeights) se cargan una vez aqui y se pasan tanto a los
+ * analizadores como al Score final, para que los tres usen siempre el
+ * mismo maximo por categoria y no puedan desincronizarse.
+ *
+ * NEWS sigue siendo un valor fijo: no hay todavia un proveedor de noticias
+ * (ver roadmap v1.7), asi que se deja como neutro en lugar de simularlo.
+ */
 class ScoreCalculator
 {
-    public function calculate(Stock $stock, TechnicalSnapshot $technical): Score
+    private readonly ScoreWeights $weights;
+    private readonly TechnicalScoreAnalyzer $technicalScoreAnalyzer;
+    private readonly FundamentalAnalyzer $fundamentalAnalyzer;
+
+    public function __construct(?ScoreWeights $weights = null)
     {
-        $price = $stock->getQuote()->getPrice();
-
-        $score = new Score();
-        $score
-            ->add(ScoreCategory::TECHNICAL, $this->technicalScore($price, $technical))
-            ->add(ScoreCategory::MOMENTUM, $this->momentumScore($technical))
-            ->add(ScoreCategory::RISK, $this->riskScore($technical))
-            ->add(ScoreCategory::VALUATION, $this->valuationScore($price, $technical))
-            ->add(ScoreCategory::FUNDAMENTAL, 15)
-            ->add(ScoreCategory::QUALITY, 7)
-            ->add(ScoreCategory::NEWS, 5)
-            ->add(ScoreCategory::DIVIDEND, 2.5);
-
-        return $score;
+        $this->weights = $weights ?? new ScoreWeights();
+        $this->technicalScoreAnalyzer = new TechnicalScoreAnalyzer($this->weights);
+        $this->fundamentalAnalyzer = new FundamentalAnalyzer($this->weights);
     }
 
-    private function technicalScore(float $price, TechnicalSnapshot $technical): float
+    public function calculate(Stock $stock, TechnicalSnapshot $technical): ScoreResult
     {
-        $score = 10.0;
+        $categoryResults = [
+            ...$this->technicalScoreAnalyzer->analyze($stock, $technical),
+            ...$this->fundamentalAnalyzer->analyze($stock->getFundamentals()),
+            $this->newsPlaceholder(),
+        ];
 
-        if ($technical->getSma20() !== null && $price > $technical->getSma20()) {
-            $score += 8;
+        $score = new Score($this->weights);
+
+        foreach ($categoryResults as $categoryResult) {
+            $score->add($categoryResult->getCategory(), $categoryResult->getScore());
         }
 
-        if ($technical->getSma50() !== null && $price > $technical->getSma50()) {
-            $score += 8;
-        }
-
-        if ($technical->getSma20() !== null && $technical->getSma50() !== null && $technical->getSma20() > $technical->getSma50()) {
-            $score += 4;
-        }
-
-        return $score;
+        return new ScoreResult($score, $categoryResults);
     }
 
-    private function momentumScore(TechnicalSnapshot $technical): float
+    public function getWeights(): ScoreWeights
     {
-        $momentum = $technical->getMomentum30();
-
-        if ($momentum === null) {
-            return 5;
-        }
-
-        return 5 + ($momentum * 0.35);
+        return $this->weights;
     }
 
-    private function riskScore(TechnicalSnapshot $technical): float
+    private function newsPlaceholder(): CategoryResult
     {
-        $volatility = $technical->getVolatility20();
-
-        if ($volatility === null) {
-            return 5;
-        }
-
-        return 10 - ($volatility * 2);
-    }
-
-    private function valuationScore(float $price, TechnicalSnapshot $technical): float
-    {
-        $sma50 = $technical->getSma50();
-
-        if ($sma50 === null || $sma50 <= 0) {
-            return 10;
-        }
-
-        $distance = (($price - $sma50) / $sma50) * 100;
-
-        return match (true) {
-            $distance < -8 => 18,
-            $distance < 0 => 15,
-            $distance < 8 => 12,
-            $distance < 18 => 8,
-            default => 5,
-        };
+        return new CategoryResult(
+            ScoreCategory::NEWS,
+            $this->weights->getMax(ScoreCategory::NEWS) / 2,
+            [new Signal(
+                'Noticias',
+                SignalVerdict::NEUTRAL,
+                'El analisis de noticias todavia no esta implementado; esta categoria se mantiene neutra y no influye en la recomendacion.'
+            )]
+        );
     }
 }

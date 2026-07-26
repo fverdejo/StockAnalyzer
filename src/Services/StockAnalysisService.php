@@ -23,8 +23,15 @@ class StockAnalysisService
         $stock = $this->marketDataProvider->getStock($ticker);
         $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
         $technicalSnapshot = $this->technicalAnalyzer->analyze($history);
-        $score = $this->scoreCalculator->calculate($stock, $technicalSnapshot);
+        $chartSeries = $this->technicalAnalyzer->buildChartSeries($history);
+        $scoreResult = $this->scoreCalculator->calculate($stock, $technicalSnapshot);
 
-        return new StockAnalysis($stock, $score, $technicalSnapshot);
+        return new StockAnalysis(
+            $stock,
+            $scoreResult->getScore(),
+            $technicalSnapshot,
+            $scoreResult->getCategoryResults(),
+            $chartSeries
+        );
     }
 }

@@ -6,6 +6,8 @@ Stock Analyzer es una aplicación web desarrollada en PHP cuyo objetivo es ayuda
 
 No pretende ser un visor de cotizaciones ni una plataforma de trading.
 
+(Está planificado un simulador de cartera - ver `versions.md` v2.2 - para que cada usuario pueda comprobar la rentabilidad de sus decisiones. No mueve dinero real ni se conecta a ningún bróker: solo registra operaciones hipotéticas a precio de mercado. Sigue sin ser una plataforma de trading.)
+
 Su objetivo principal es responder diariamente a la siguiente pregunta:
 
 > ¿Cuáles son las mejores acciones para comprar hoy según un conjunto de criterios objetivos?
@@ -49,6 +51,8 @@ Construir un motor que analice automáticamente cientos de acciones y genere dia
 - Analizar noticias.
 - Calcular una puntuación objetiva.
 - Mostrar recomendaciones claras.
+- Explicar el motivo de cada recomendación, no solo mostrar la cifra.
+- Permitir a cada usuario simular sus decisiones de compra/venta y ver si le habrían funcionado.
 
 ---
 
@@ -69,8 +73,8 @@ Construir un motor que analice automáticamente cientos de acciones y genere dia
 
 ## Frontend
 
-- Bootstrap 5
-- Chart.js
+- CSS propio (sin Bootstrap: `Web/Layout.php` define una hoja de estilos compartida por todas las páginas; se decidió así al implementar `v0.6`/`v1.5` para no añadir una dependencia de frontend a un proyecto sin build step).
+- Chart.js (vía CDN, no como dependencia de Composer).
 
 ---
 
@@ -82,6 +86,8 @@ El proyecto estará dividido en capas.
 src/
 
 Analyzer/
+Auth/            (planeado, v2.1: registro, login, sesión)
+Config/
 DTO/
 Enums/
 Exceptions/
@@ -89,10 +95,15 @@ Infrastructure/
 Interfaces/
 Models/
 Providers/
-Repository/
+Repository/      (planeado, v2.1: UserRepository, TransactionRepository)
 Services/
 Utils/
+Web/
 ```
+
+`Web/` contiene la capa de presentación (`Layout`, `DashboardPage`, `StockDetailPage`...): no hay motor de plantillas, son clases con un método `render()` que devuelven HTML, igual que el resto de capas devuelven objetos.
+
+`Config/` contiene la configuración que se puede ajustar sin tocar código (por ejemplo `ScoreWeights`, que lee `config/weights.php`).
 
 No utilizaremos MVC clásico.
 
@@ -204,6 +215,30 @@ Ejemplo:
 - Risk
 
 El algoritmo podrá modificarse sin cambiar la clase Score.
+
+---
+
+## Dominio ampliado: usuarios y cartera (planeado, ver `versions.md` v2.1/v2.2)
+
+Es un dominio aparte del análisis (Stock → Analyzer → Score → Recommendation no cambia). Se relaciona con él solo en que una `Transaction` referencia un ticker.
+
+```
+User
+
+↓
+
+Transaction (compra o venta: ticker, cantidad, precio, fecha)
+
+↓
+
+Holding (posición actual, calculada a partir de las Transaction)
+
+↓
+
+Portfolio (conjunto de Holding de un usuario)
+```
+
+`Transaction` es el dato real guardado; `Holding` y `Portfolio` se calculan a partir de él, no se guardan como estado aparte. Así el historial de operaciones no se pierde nunca.
 
 ---
 
@@ -340,6 +375,10 @@ Capaz de analizar automáticamente cientos de empresas.
 
 ---
 
+Esta sección describe el plan original (`v0.1` a `v1.0`). Las versiones posteriores, incluyendo la fase de cuentas de usuario y cartera simulada, se planifican y se siguen en `roadmap.md` y `versions.md`, no aquí: este documento es la visión general del proyecto y cambia poco; el estado y el plan detallado cambian con cada sesión de trabajo.
+
+---
+
 # Reglas del proyecto
 
 - No usar arrays cuando exista un objeto apropiado.
@@ -376,3 +415,4 @@ Construir una herramienta personal capaz de analizar automáticamente el mercado
 - ¿Qué acciones vender?
 - ¿Cuáles presentan la mejor relación riesgo/beneficio?
 - ¿Qué empresas tienen mayor potencial según criterios objetivos?
+- ¿Habrían funcionado esas recomendaciones en la práctica? (cartera simulada, ver `versions.md` v2.2)

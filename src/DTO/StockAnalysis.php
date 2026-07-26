@@ -9,10 +9,15 @@ use StockAnalyzer\Models\Stock;
 
 class StockAnalysis
 {
+    /**
+     * @param list<CategoryResult> $categoryResults
+     */
     public function __construct(
         private readonly Stock $stock,
         private readonly Score $score,
-        private readonly TechnicalSnapshot $technicalSnapshot
+        private readonly TechnicalSnapshot $technicalSnapshot,
+        private readonly array $categoryResults,
+        private readonly PriceChartSeries $chartSeries
     ) {
     }
 
@@ -29,5 +34,18 @@ class StockAnalysis
     public function getTechnicalSnapshot(): TechnicalSnapshot
     {
         return $this->technicalSnapshot;
+    }
+
+    /**
+     * @return list<CategoryResult>
+     */
+    public function getCategoryResults(): array
+    {
+        return $this->categoryResults;
+    }
+
+    public function getChartSeries(): PriceChartSeries
+    {
+        return $this->chartSeries;
     }
 }
