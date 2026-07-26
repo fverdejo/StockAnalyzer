@@ -6,3 +6,6 @@
 .vscode/
 
 *.log
+
+# Archivos ADS de Windows (Mark of the Web)
+*:Zone.Identifier
