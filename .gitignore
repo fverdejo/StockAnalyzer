@@ -1,8 +1,21 @@
+# Dependencias
 /vendor/
-/storage/
+
+# Entorno
 /.env
 
+# IDEs
 .idea/
 .vscode/
 
+# Logs
 *.log
+
+# Archivos temporales
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# ADS de Windows
+*:Zone.Identifier
