@@ -21,7 +21,7 @@ use StockAnalyzer\Services\StockAnalysisService;
 use StockAnalyzer\Utils\TickerNormalizer;
 
 $options = getopt('', ['universe::', 'tickers::', 'name::']);
-$universeKey = is_string($options['universe'] ?? null) ? (string) $options['universe'] : 'default';
+$universeKey = is_string($options['universe'] ?? null) ? (string) $options['universe'] : 'largecap60';
 $name = is_string($options['name'] ?? null) ? (string) $options['name'] : $universeKey;
 
 $connection = new Connection();

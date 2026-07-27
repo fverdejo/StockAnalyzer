@@ -24,7 +24,7 @@ class Navigation
             $items[] = self::link('register', 'Registro', '?page=register', $active);
         }
 
-        return '<nav class="main-nav">' . implode('', $items) . '</nav>';
+        return '<nav class="main-nav" aria-label="Navegacion principal">' . implode('', $items) . '</nav>';
     }
 
     private static function link(string $key, string $label, string $href, string $active): string

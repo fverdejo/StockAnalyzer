@@ -28,7 +28,7 @@ class DashboardPage
         array $results,
         array $errors,
         ?User $currentUser = null,
-        string $selectedUniverse = 'default',
+        string $selectedUniverse = 'largecap60',
         array $universes = [],
         string $selectedRecommendation = '',
         string $selectedSort = 'score_desc'
@@ -68,7 +68,7 @@ class DashboardPage
                 </div>
                 <button type="submit">Analizar</button>
             </form>
-            <p class="muted" style="margin:10px 0 0;font-size:12px"><a href="{$apiHref}">API JSON de este ranking</a></p>
+            <p class="muted panel-note"><a href="{$apiHref}">API JSON de este ranking</a></p>
         </section>
 
         {$errorsHtml}

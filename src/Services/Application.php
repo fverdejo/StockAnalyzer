@@ -43,7 +43,8 @@ use Throwable;
  */
 class Application
 {
-    private const DEFAULT_TICKERS = 'AAPL MSFT NVDA AMZN GOOGL META TSLA JPM V XOM';
+    private const DEFAULT_UNIVERSE = 'largecap60';
+    private const DEFAULT_TICKERS = 'AAPL MSFT NVDA AMZN GOOGL META TSLA AVGO BRK-B JPM LLY V XOM UNH MA COST NFLX WMT PG JNJ HD ABBV BAC KO CRM ORCL CVX MRK AMD PEP LIN TMO ACN MCD CSCO ADBE IBM GE QCOM WFC CAT TXN PM INTU AMGN DIS GS ISRG VZ NOW RTX BKNG SPGI PFE NKE HON LOW UPS BA SBUX';
 
     private Connection $connection;
     private MarketDataProviderInterface $marketDataProvider;
@@ -229,7 +230,10 @@ class Application
      */
     private function resolveTickerRequest(): array
     {
-        $universe = $this->queryString('universe') ?: 'default';
+        $requestedUniverse = $this->queryString('universe');
+        $universe = $this->universeConfig->tickers($requestedUniverse) !== []
+            ? $requestedUniverse
+            : self::DEFAULT_UNIVERSE;
         $tickers = $_GET['tickers'] ?? '';
 
         if (is_string($tickers) && trim($tickers) !== '') {

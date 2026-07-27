@@ -33,7 +33,7 @@ class StockDetailPage
         $recommendation = $score->getRecommendation();
 
         $header = sprintf(
-            '<div><h1>%s <span class="muted">%s</span></h1><p class="subtitle">%s &middot; %s &middot; %s %s</p></div>',
+            '<div class="detail-title"><h1>%s <span class="muted">%s</span></h1><p class="subtitle">%s &middot; %s &middot; %s %s</p></div>',
             Layout::escape($company->getTicker()),
             Layout::escape($company->getName()),
             Layout::escape($company->getMarket()),
@@ -43,7 +43,7 @@ class StockDetailPage
         );
 
         $topbarRight = sprintf(
-            '<div style="text-align:right"><a class="back-link" href="%s">&larr; Volver al ranking</a><div style="margin-top:8px"><span class="recommendation %s" style="font-size:16px;padding:7px 14px">%s</span> <strong style="font-size:20px">%s%%</strong></div></div>',
+            '<div class="header-actions"><a class="back-link" href="%s">&larr; Volver al ranking</a><div class="score-pill"><span class="recommendation recommendation-large %s">%s</span> <strong class="score-percent">%s%%</strong></div></div>',
             Layout::escape($backHref),
             Layout::recommendationClass($recommendation),
             Layout::escape($recommendation),
@@ -102,7 +102,7 @@ class StockDetailPage
         );
 
         $fundamentalValues = sprintf(
-            '<section class="panel"><h2>Fundamentales</h2><div class="values-grid">%s</div><p class="muted" style="margin-top:10px;font-size:12px">M = millones, MM = miles de millones. Los campos en "-" no estaban disponibles en la fuente de datos.</p></section>',
+            '<section class="panel"><h2>Fundamentales</h2><div class="values-grid">%s</div><p class="muted panel-note">M = millones, MM = miles de millones. Los campos en "-" no estaban disponibles en la fuente de datos.</p></section>',
             implode('', [
                 self::valueBox('PER', Layout::formatNullable($fundamentals->getPer())),
                 self::valueBox('PEG', Layout::formatNullable($fundamentals->getPeg())),
@@ -126,7 +126,7 @@ class StockDetailPage
         );
 
         $body = sprintf(
-            '<header class="topbar">%s</header>%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             '',
             $charts,
@@ -359,7 +359,7 @@ HTML;
             $ratio = $max > 0 ? min(100, max(0, ($score / $max) * 100)) : 0;
 
             $items[] = sprintf(
-                '<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span>%s</span><span class="muted">%s / %s</span></div><div style="background:var(--surface-alt);border-radius:6px;height:8px;overflow:hidden"><div style="width:%s%%;height:100%%;background:var(--accent)"></div></div></div>',
+                '<div class="score-bar-row"><div class="score-bar-head"><span>%s</span><span class="muted">%s / %s</span></div><div class="score-bar-track"><div class="score-bar-fill" style="width:%s%%"></div></div></div>',
                 Layout::escape((string) ($category['label'] ?? '')),
                 Layout::formatNumber($score),
                 Layout::formatNumber($max),
@@ -367,7 +367,7 @@ HTML;
             );
         }
 
-        return implode('', $items);
+        return '<div class="score-bars">' . implode('', $items) . '</div>';
     }
 
     private static function valueBox(string $label, string $value): string

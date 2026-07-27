@@ -392,7 +392,7 @@ Incluye:
 
 Implementacion actual:
 
-- `bin/analyze.php --universe=default --name=default` calcula ranking diario y lo guarda en `daily_rankings`.
+- `bin/analyze.php --universe=largecap60 --name=largecap60` calcula ranking diario y lo guarda en `daily_rankings`.
 - Puede programarse con cron/Task Scheduler. No se instala automaticamente ninguna tarea del sistema.
 - No hay alertas todavia.
 
@@ -540,7 +540,8 @@ Analizar mas tickers implica mas llamadas a Yahoo (cotizacion + historico + inte
 
 Implementacion actual:
 
-- `Application::DEFAULT_TICKERS` mantiene una lista inicial moderada para que la portada cargue sin cache.
+- `config/universes.php` elimina el universo `default` de 10 tickers y usa `largecap60` como universo inicial ampliado.
+- `Application::DEFAULT_TICKERS` queda como respaldo con los mismos 60 tickers por si falla la carga de config.
 - `TickerNormalizer` permite hasta 60 tickers por peticion si se introducen manualmente.
 - `DashboardPage` separa Compras / Mantener / Ventas con hasta 10 resultados por bloque.
 - El bloque de ventas ordena primero las puntuaciones mas bajas.

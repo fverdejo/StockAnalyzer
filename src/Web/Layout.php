@@ -33,16 +33,22 @@ class Layout
     <title>{$safeTitle}</title>
     <style>
         :root {
-            --bg: #f3f5f7;
+            --bg: #f5f7fb;
+            --bg-soft: #edf3f6;
             --surface: #ffffff;
-            --surface-alt: #eef2f4;
-            --text: #17212b;
-            --muted: #64717f;
-            --line: #d8e0e6;
-            --accent: #0f6b77;
-            --good: #176b43;
-            --warn: #9a6500;
-            --bad: #a23b35;
+            --surface-alt: #f0f5f7;
+            --text: #17202a;
+            --muted: #5f6c78;
+            --line: #d7e0e8;
+            --line-strong: #b7c5d0;
+            --accent: #0f766e;
+            --accent-strong: #0b4f57;
+            --accent-soft: #dff4f1;
+            --good: #147a46;
+            --warn: #986a10;
+            --bad: #b42318;
+            --focus: #2563eb;
+            --shadow: 0 12px 30px rgba(23, 32, 42, 0.08);
         }
 
         * { box-sizing: border-box; }
@@ -52,42 +58,128 @@ class Layout
             background: var(--bg);
             color: var(--text);
             font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
         }
 
-        a { color: var(--accent); }
+        a {
+            color: var(--accent);
+            text-underline-offset: 3px;
+        }
+
+        a:hover {
+            color: var(--accent-strong);
+        }
+
+        canvas,
+        img,
+        svg {
+            max-width: 100%;
+        }
 
         .shell {
             width: min(1240px, calc(100% - 32px));
             margin: 0 auto;
-            padding: 26px 0 42px;
+        }
+
+        .app-header {
+            background: linear-gradient(180deg, #ffffff 0%, #f7fafb 100%);
+            border-bottom: 1px solid var(--line);
+        }
+
+        .header-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: end;
+            gap: 18px;
+            padding: 22px 0 14px;
+        }
+
+        .brand-block {
+            min-width: 0;
+        }
+
+        .topbar-meta,
+        .header-actions {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            min-width: max-content;
+        }
+
+        .topbar-meta:empty {
+            display: none;
+        }
+
+        .nav-shell {
+            padding-bottom: 14px;
+        }
+
+        .page-content {
+            flex: 1;
+            padding: 22px 0 42px;
+        }
+
+        .app-footer {
+            border-top: 1px solid var(--line);
+            background: #ffffff;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .footer-shell {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 16px 0;
         }
 
         .topbar {
             display: flex;
             justify-content: space-between;
-            align-items: flex-end;
+            align-items: flex-start;
             gap: 16px;
             margin-bottom: 18px;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+
+        .detail-topbar {
+            border-bottom: 1px solid var(--line);
+            padding-bottom: 16px;
+        }
+
+        .detail-title {
+            min-width: 0;
         }
 
         .main-nav {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
-            margin: -6px 0 18px;
+            margin: 0;
         }
 
         .main-nav a {
+            display: inline-flex;
+            align-items: center;
+            min-height: 38px;
             border: 1px solid var(--line);
             border-radius: 8px;
             background: var(--surface);
             color: var(--muted);
-            padding: 8px 11px;
+            padding: 8px 12px;
             text-decoration: none;
             font-size: 14px;
             font-weight: 700;
+            white-space: nowrap;
         }
 
+        .main-nav a:hover,
         .main-nav a.active {
             background: var(--accent);
             border-color: var(--accent);
@@ -98,11 +190,13 @@ class Layout
             margin: 0;
             font-size: 30px;
             line-height: 1.15;
+            overflow-wrap: anywhere;
         }
 
         h2 {
             margin: 0 0 12px;
             font-size: 18px;
+            line-height: 1.25;
         }
 
         .subtitle,
@@ -113,6 +207,7 @@ class Layout
         .subtitle {
             margin: 6px 0 0;
             font-size: 15px;
+            max-width: 760px;
         }
 
         .version,
@@ -122,13 +217,37 @@ class Layout
             border-radius: 8px;
             padding: 9px 12px;
             color: var(--muted);
-            white-space: nowrap;
             font-size: 14px;
+            line-height: 1.2;
         }
 
         .back-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 40px;
             text-decoration: none;
             font-weight: 700;
+        }
+
+        .version {
+            background: var(--accent-soft);
+            border-color: #bde4df;
+            color: var(--accent-strong);
+            font-weight: 700;
+        }
+
+        .score-pill {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .score-percent {
+            font-size: 20px;
+            line-height: 1;
         }
 
         .panel,
@@ -136,6 +255,7 @@ class Layout
             background: var(--surface);
             border: 1px solid var(--line);
             border-radius: 8px;
+            box-shadow: var(--shadow);
         }
 
         .panel {
@@ -147,6 +267,8 @@ class Layout
             display: grid;
             grid-template-columns: 1fr auto;
             gap: 12px;
+            align-items: end;
+            min-width: 0;
         }
 
         .stack-form {
@@ -159,13 +281,13 @@ class Layout
         }
 
         .trade-form {
-            grid-template-columns: 1fr 150px auto auto;
+            grid-template-columns: minmax(220px, 2fr) repeat(auto-fit, minmax(140px, 1fr));
             align-items: end;
         }
 
         .mini-form {
             display: grid;
-            grid-template-columns: minmax(86px, 1fr) auto;
+            grid-template-columns: minmax(96px, 1fr) auto;
             gap: 6px;
         }
 
@@ -175,6 +297,7 @@ class Layout
         }
 
         .mini-form button {
+            min-height: 34px;
             height: 34px;
             padding: 0 10px;
             font-size: 13px;
@@ -192,31 +315,54 @@ class Layout
         input,
         select {
             width: 100%;
-            height: 42px;
+            min-width: 0;
+            height: 44px;
             border: 1px solid var(--line);
             border-radius: 8px;
             padding: 0 12px;
             font-size: 16px;
             background: #ffffff;
+            color: var(--text);
+        }
+
+        input:focus,
+        select:focus,
+        button:focus-visible,
+        .main-nav a:focus-visible,
+        .back-link:focus-visible {
+            outline: 3px solid rgba(37, 99, 235, 0.22);
+            outline-offset: 2px;
+            border-color: var(--focus);
         }
 
         button {
             align-self: end;
-            height: 42px;
+            min-height: 44px;
             border: 0;
             border-radius: 8px;
-            padding: 0 18px;
+            padding: 10px 18px;
             background: var(--accent);
             color: #ffffff;
             font-size: 15px;
             font-weight: 700;
             cursor: pointer;
+            line-height: 1.15;
+            text-align: center;
+            overflow-wrap: anywhere;
+        }
+
+        button:hover {
+            background: var(--accent-strong);
         }
 
         .secondary-button {
             background: var(--surface-alt);
             color: var(--text);
             border: 1px solid var(--line);
+        }
+
+        .secondary-button:hover {
+            background: #e5edf1;
         }
 
         .danger-button {
@@ -234,6 +380,7 @@ class Layout
             border: 1px solid var(--line);
             border-radius: 8px;
             padding: 20px;
+            box-shadow: var(--shadow);
         }
 
         .form-error,
@@ -258,24 +405,27 @@ class Layout
 
         .cards {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
             gap: 12px;
             margin-bottom: 16px;
         }
 
         .metric {
             padding: 15px;
+            min-width: 0;
         }
 
         .metric strong {
             display: block;
             margin-top: 6px;
             font-size: 24px;
+            line-height: 1.15;
+            overflow-wrap: anywhere;
         }
 
         .split {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 16px;
         }
 
@@ -285,20 +435,25 @@ class Layout
         }
 
         .list-row {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: start;
             gap: 12px;
             border-bottom: 1px solid var(--line);
-            padding-bottom: 8px;
+            padding: 8px 0;
+            min-width: 0;
         }
 
         .table-wrap {
             overflow-x: auto;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #ffffff;
         }
 
         table {
             width: 100%;
-            min-width: 1120px;
+            min-width: 860px;
             border-collapse: collapse;
         }
 
@@ -308,6 +463,7 @@ class Layout
             padding: 11px 10px;
             text-align: left;
             vertical-align: top;
+            overflow-wrap: anywhere;
         }
 
         th {
@@ -315,6 +471,8 @@ class Layout
             color: var(--muted);
             font-size: 12px;
             text-transform: uppercase;
+            letter-spacing: 0;
+            white-space: nowrap;
         }
 
         .ticker,
@@ -337,6 +495,13 @@ class Layout
             padding: 4px 9px;
             font-size: 12px;
             font-weight: 800;
+            line-height: 1.2;
+            white-space: nowrap;
+        }
+
+        .recommendation-large {
+            font-size: 15px;
+            padding: 7px 13px;
         }
 
         .buy { background: #dff3e8; color: var(--good); }
@@ -355,12 +520,12 @@ class Layout
             padding: 3px 7px;
             color: var(--muted);
             font-size: 12px;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
 
         .home-grid {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
             gap: 16px;
         }
 
@@ -380,6 +545,8 @@ class Layout
             border: 1px solid var(--line);
             border-radius: 8px;
             padding: 10px 12px;
+            min-width: 0;
+            background: #ffffff;
         }
 
         .value-box .muted {
@@ -391,6 +558,8 @@ class Layout
 
         .value-box strong {
             font-size: 18px;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
         }
 
         .signal-list {
@@ -424,6 +593,7 @@ class Layout
             padding: 14px 16px;
             font-size: 15px;
             line-height: 1.5;
+            overflow-wrap: anywhere;
         }
 
         .chart-wrap {
@@ -432,6 +602,7 @@ class Layout
             border-radius: 8px;
             padding: 16px;
             margin-bottom: 16px;
+            box-shadow: var(--shadow);
         }
 
         .chart-toolbar {
@@ -442,6 +613,8 @@ class Layout
         }
 
         .chart-toolbar button {
+            width: auto;
+            min-height: 32px;
             height: 32px;
             padding: 0 11px;
             border: 1px solid var(--line);
@@ -454,6 +627,44 @@ class Layout
             background: var(--accent);
             border-color: var(--accent);
             color: #ffffff;
+        }
+
+        .panel-note {
+            margin: 10px 0 0;
+            font-size: 12px;
+        }
+
+        .score-bars {
+            display: grid;
+            gap: 12px;
+        }
+
+        .score-bar-row {
+            min-width: 0;
+        }
+
+        .score-bar-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 13px;
+            margin-bottom: 5px;
+        }
+
+        .score-bar-head span:first-child {
+            overflow-wrap: anywhere;
+        }
+
+        .score-bar-track {
+            background: var(--surface-alt);
+            border-radius: 999px;
+            height: 9px;
+            overflow: hidden;
+        }
+
+        .score-bar-fill {
+            height: 100%;
+            background: var(--accent);
         }
 
         .education-grid {
@@ -481,7 +692,7 @@ class Layout
 
         .provider-row {
             display: grid;
-            grid-template-columns: 220px 1fr auto;
+            grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) minmax(0, auto);
             align-items: center;
             gap: 10px;
             border: 1px solid var(--line);
@@ -506,14 +717,25 @@ class Layout
         .profit-negative { color: var(--bad); }
 
         canvas {
-            max-width: 100%;
+            display: block;
+            width: 100% !important;
         }
 
-        @media (max-width: 820px) {
+        @media (max-width: 920px) {
+            .header-shell {
+                grid-template-columns: 1fr;
+                align-items: start;
+            }
+
+            .topbar-meta,
+            .header-actions {
+                align-items: flex-start;
+                min-width: 0;
+                width: 100%;
+            }
+
             .topbar,
-            form,
             .split,
-            .trade-form,
             .home-grid,
             .education-grid,
             .provider-row {
@@ -521,29 +743,89 @@ class Layout
                 grid-template-columns: 1fr;
             }
 
-            .cards {
-                grid-template-columns: 1fr 1fr;
+            .trade-form {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
-            button {
+            form button {
                 width: 100%;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .shell {
+                width: min(100% - 20px, 1240px);
+            }
+
+            .header-shell {
+                padding-top: 16px;
+            }
+
+            .page-content {
+                padding-top: 16px;
+            }
+
+            .main-nav {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                padding-bottom: 2px;
+            }
+
+            h1 {
+                font-size: 25px;
+            }
+
+            .panel,
+            .auth-panel,
+            .chart-wrap {
+                padding: 14px;
+            }
+
+            form,
+            .trade-form,
+            .mini-form,
+            .footer-shell,
+            .score-bar-head {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-shell,
+            .score-bar-head {
+                display: grid;
+            }
+
+            .list-row {
+                grid-template-columns: 1fr;
+            }
+
+            table {
+                min-width: 720px;
             }
         }
     </style>
 </head>
 <body>
-    <main class="shell">
-        <header class="topbar">
-            <div>
+    <header class="app-header">
+        <div class="shell header-shell">
+            <div class="brand-block">
                 <h1>Stock Analyzer</h1>
                 <p class="subtitle">Ranking diario con datos reales, indicadores tecnicos y puntuacion objetiva.</p>
             </div>
-            {$topbarRight}
-        </header>
-
-        {$navigation}
+            <div class="topbar-meta">{$topbarRight}</div>
+        </div>
+        <div class="shell nav-shell">
+            {$navigation}
+        </div>
+    </header>
+    <main class="shell page-content">
         {$body}
     </main>
+    <footer class="app-footer">
+        <div class="shell footer-shell">
+            <span>Stock Analyzer</span>
+            <span>Demo educativa. Sin operaciones reales ni conexion con broker.</span>
+        </div>
+    </footer>
 </body>
 </html>
 HTML;
