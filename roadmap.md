@@ -11,7 +11,7 @@ Esta seccion (y la tabla de progreso de debajo) llevaba sin tocarse desde el `20
 - `versions.md` es el documento con el estado real, detallado, categoria por categoria.
 - `roadmap.md` (este documento) se centra en que falta por hacer y en que orden, no en repetir el estado exacto de cada pieza.
 
-Resumen muy rapido a fecha de esta revision (2026-07-26): la v1.0 (motor de analisis con indicadores tecnicos y fundamentales reales, pesos configurables, y dashboard con ranking + detalle de accion + graficos) esta funcional. El detalle exacto esta en `versions.md`.
+Resumen muy rapido a fecha de esta revision (2026-07-27): la app esta avanzada hasta `v2.3` y cubre tambien cache/persistencia de mercado, universos configurables, filtros/ordenaciones, API JSON, backtesting basico, ranking diario por CLI y noticias/sentimiento por CSV. El detalle exacto esta en `versions.md`.
 
 ---
 
@@ -21,24 +21,23 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 ---
 
-# Próxima tarea
+# Proxima tarea
 
-## Cuentas de usuario y cartera simulada
+## Tests, alertas y proveedores oficiales
 
 Objetivo
 
-Diferenciar usuarios (registro/login) y que cada uno pueda simular compras y ventas de acciones para ver su rentabilidad, sin dinero real.
+Convertir la demo avanzada en una herramienta mas robusta: tests automatizados, alertas/watchlist/exportacion y proveedores oficiales para datos/noticias.
 
 Orden recomendado (detalle tecnico completo en `versions.md`):
 
-1. `v2.1` - Cuentas de usuario.
-2. `v2.2` - Cartera simulada.
-3. `v1.8` - Indicadores explicados y `v1.9` - Graficos mejorados (no dependen de lo anterior, se pueden hacer en paralelo).
-4. `v1.10` - Fuente de datos configurable.
-5. `v2.3` - Menu de navegacion.
-6. `v1.11` - Universo ampliado y Home en tres bloques.
+1. Tests automatizados de servicios/repositorios/rutas.
+2. Watchlist personal y alertas basicas.
+3. Exportacion CSV.
+4. Proveedor oficial de noticias o datos fundamentales.
+5. Universos mantenidos automaticamente.
 
-Cuando esto este resuelto, retomar `v1.1` (persistencia y cache de cotizaciones): la conexion a base de datos que trae `v2.1` es la misma infraestructura que `v1.1` necesita.
+La conexion a base de datos, cache y comandos CLI ya existen.
 
 ---
 
@@ -46,28 +45,21 @@ Cuando esto este resuelto, retomar `v1.1` (persistencia y cache de cotizaciones)
 
 ## Prioridad alta
 
-- Cuentas de usuario (`v2.1`)
-- Cartera simulada (`v2.2`)
+- Tests automatizados
+- Watchlist personal y alertas basicas
 
 ---
 
 ## Prioridad media
 
-- Indicadores explicados: tooltips y explicaciones ampliadas (`v1.8`)
-- Gráficos mejorados: temporalidad y máximo/mínimo (`v1.9`)
-- Fuente de datos configurable desde una pantalla (`v1.10`)
-- Menú de navegación (`v2.3`)
-- Universo ampliado y Home en tres bloques: compras / mantener / ventas (`v1.11`)
+- Exportacion CSV
+- Proveedor oficial de noticias/datos
+- Universo completo mantenido automaticamente, tipo S&P 500 (`v1.2` avanzado)
 
 ---
 
 ## Prioridad baja
 
-- Persistencia y cache de cotizaciones (`v1.1`)
-- Universo completo de mercado, tipo S&P 500 (`v1.2`)
-- Automatización diaria: cron, histórico de recomendaciones, alertas básicas (`v1.6`)
-- Noticias y sentimiento (`v1.7`)
-- Backtesting
 - IA (explicar el porqué de una puntuación con un modelo, más allá de las explicaciones fijas de `v1.8`)
 
 ---
@@ -330,3 +322,26 @@ Se completan `v1.3` (fundamentales reales), `v1.4` (indicadores técnicos comple
 Se planifica una fase nueva, no prevista en `project.md` original: cuentas de usuario y cartera simulada, más varias mejoras de interfaz pedidas directamente por el usuario. Se define como `v1.8` a `v1.11` y `v2.1` a `v2.3` en `versions.md`, con el orden de ejecución recomendado explicado ahí mismo. Nada de esta fase nueva está implementado todavía: es planificación.
 
 Se reordena este documento (`roadmap.md`) para dejar de duplicar el estado detallado, que a partir de ahora vive solo en `versions.md`.
+
+---
+
+## 2026-07-27
+
+Se implementa la fase planificada `v1.8` a `v1.11` y `v2.1` a `v2.3`: indicadores explicados, graficos con temporalidad y maximo/minimo, configuracion local de proveedor, universo por defecto ampliado, cuentas de usuario, cartera simulada y menu de navegacion.
+
+Queda como siguiente bloque real `v1.1`: persistencia/cache de cotizaciones e historicos, usando la infraestructura PDO y migraciones ya creada para usuarios/cartera.
+
+---
+
+## 2026-07-27 (segunda fase)
+
+Se implementan `v1.1`, `v0.6.3`, `v0.6.4`, `v0.5.4`, `v1.6` y `v1.7` en version pragmatica:
+
+- cache de datos de mercado en MariaDB;
+- rankings diarios guardados por CLI;
+- universos configurables;
+- filtros, ordenaciones y API JSON;
+- backtesting basico;
+- importacion CSV de noticias con sentimiento por palabras clave.
+
+El siguiente trabajo de valor ya no es anadir mas pantallas grandes, sino endurecer calidad: tests, watchlist/alertas, exportacion CSV y proveedores oficiales.

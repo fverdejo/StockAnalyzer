@@ -7,6 +7,7 @@ namespace StockAnalyzer\Web;
 use StockAnalyzer\DTO\Explanation;
 use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\StockAnalysis;
+use StockAnalyzer\Models\User;
 
 /**
  * Pantalla de detalle de una accion: valores tecnicos y fundamentales,
@@ -15,7 +16,13 @@ use StockAnalyzer\DTO\StockAnalysis;
  */
 class StockDetailPage
 {
-    public static function render(StockAnalysis $analysis, Explanation $explanation, string $backHref): string
+    public static function render(
+        StockAnalysis $analysis,
+        Explanation $explanation,
+        string $backHref,
+        ?User $currentUser = null,
+        string $csrfToken = ''
+    ): string
     {
         $stock = $analysis->getStock();
         $company = $stock->getCompany();
@@ -62,6 +69,12 @@ class StockDetailPage
         $scoreBreakdown = self::renderScoreBreakdown($score->toArray()['categories']);
 
         $charts = self::renderCharts($analysis);
+        $tradePanel = self::renderTradePanel($analysis, $currentUser, $csrfToken);
+        $education = IndicatorEducation::render(
+            $explanation->getPositives(),
+            $explanation->getNegatives(),
+            $explanation->getNeutrals()
+        );
 
         $technicalValues = sprintf(
             '<section class="panel"><h2>Indicadores tecnicos</h2><div class="values-grid">%s</div></section>',
@@ -73,7 +86,7 @@ class StockDetailPage
                 self::valueBox('EMA 26', Layout::formatNullable($technical->getEma26())),
                 self::valueBox('RSI (14)', Layout::formatNullable($technical->getRsi14())),
                 self::valueBox('MACD', Layout::formatNullable($technical->getMacd())),
-                self::valueBox('MACD señal', Layout::formatNullable($technical->getMacdSignal())),
+                self::valueBox('MACD senal', Layout::formatNullable($technical->getMacdSignal())),
                 self::valueBox('MACD histograma', Layout::formatNullable($technical->getMacdHistogram())),
                 self::valueBox('Bollinger superior', Layout::formatNullable($technical->getBollingerUpper())),
                 self::valueBox('Bollinger inferior', Layout::formatNullable($technical->getBollingerLower())),
@@ -113,14 +126,16 @@ class StockDetailPage
         );
 
         $body = sprintf(
-            '<header class="topbar">%s</header>%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s',
+            '<header class="topbar">%s</header>%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             '',
             $charts,
+            $tradePanel,
             Layout::formatNumber($score->getPercentage()),
             Layout::formatNumber(100.0),
             $scoreBreakdown,
             $summary,
+            $education,
             $signalSections,
             $technicalValues . $fundamentalValues
         );
@@ -128,7 +143,27 @@ class StockDetailPage
         return Layout::render(
             sprintf('%s - Stock Analyzer', $company->getTicker()),
             $topbarRight,
-            $body
+            $body,
+            $currentUser,
+            'dashboard'
+        );
+    }
+
+    private static function renderTradePanel(StockAnalysis $analysis, ?User $currentUser, string $csrfToken): string
+    {
+        $ticker = $analysis->getStock()->getCompany()->getTicker();
+
+        if (!$currentUser instanceof User) {
+            return sprintf(
+                '<section class="panel"><h2>Cartera simulada</h2><p class="muted">Inicia sesion para registrar compras y ventas hipoteticas de %s.</p><a class="back-link" href="?page=login">Entrar</a></section>',
+                Layout::escape($ticker)
+            );
+        }
+
+        return sprintf(
+            '<section class="panel"><h2>Operacion simulada</h2><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001" required></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form></section>',
+            Layout::escape($csrfToken),
+            Layout::escape($ticker)
         );
     }
 
@@ -139,6 +174,8 @@ class StockDetailPage
 
         $labels = self::jsonFor($series->getLabels());
         $closes = self::jsonFor($series->getCloses());
+        $highs = self::jsonFor($series->getHighs());
+        $lows = self::jsonFor($series->getLows());
         $sma20 = self::jsonFor($series->getSma20());
         $sma50 = self::jsonFor($series->getSma50());
         $bbUpper = self::jsonFor($series->getBollingerUpper());
@@ -150,6 +187,13 @@ class StockDetailPage
         return <<<HTML
         <div class="chart-wrap">
             <h2>Evolucion del precio - {$ticker}</h2>
+            <div class="chart-toolbar" data-target="{$canvasId}">
+                <button type="button" data-months="1">1M</button>
+                <button type="button" data-months="3">3M</button>
+                <button type="button" data-months="6">6M</button>
+                <button type="button" data-months="12" class="active">1A</button>
+                <button type="button" data-months="24">2A</button>
+            </div>
             <canvas id="{$canvasId}" height="110"></canvas>
         </div>
         <div class="chart-wrap">
@@ -159,19 +203,65 @@ class StockDetailPage
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
         <script>
         (function () {
-            var labels = {$labels};
+            var full = {
+                labels: {$labels},
+                closes: {$closes},
+                highs: {$highs},
+                lows: {$lows},
+                sma20: {$sma20},
+                sma50: {$sma50},
+                bbUpper: {$bbUpper},
+                bbLower: {$bbLower},
+                volumes: {$volumes}
+            };
+
+            function sliceByMonths(months) {
+                if (!full.labels.length) {
+                    return full;
+                }
+
+                var lastDate = new Date(full.labels[full.labels.length - 1] + 'T00:00:00');
+                var cutoff = new Date(lastDate);
+                cutoff.setMonth(cutoff.getMonth() - months);
+                var start = full.labels.findIndex(function (label) {
+                    return new Date(label + 'T00:00:00') >= cutoff;
+                });
+
+                if (start < 0) {
+                    start = 0;
+                }
+
+                return {
+                    labels: full.labels.slice(start),
+                    closes: full.closes.slice(start),
+                    highs: full.highs.slice(start),
+                    lows: full.lows.slice(start),
+                    sma20: full.sma20.slice(start),
+                    sma50: full.sma50.slice(start),
+                    bbUpper: full.bbUpper.slice(start),
+                    bbLower: full.bbLower.slice(start),
+                    volumes: full.volumes.slice(start)
+                };
+            }
+
+            var current = sliceByMonths(12);
             var priceCtx = document.getElementById('{$canvasId}');
+            var priceChart = null;
+            var volumeChart = null;
+
             if (priceCtx && window.Chart) {
-                new Chart(priceCtx, {
+                priceChart = new Chart(priceCtx, {
                     type: 'line',
                     data: {
-                        labels: labels,
+                        labels: current.labels,
                         datasets: [
-                            { label: 'Precio', data: {$closes}, borderColor: '#0f6b77', borderWidth: 2, pointRadius: 0, tension: 0.15 },
-                            { label: 'SMA20', data: {$sma20}, borderColor: '#9a6500', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                            { label: 'SMA50', data: {$sma50}, borderColor: '#a23b35', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                            { label: 'Bollinger sup.', data: {$bbUpper}, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 },
-                            { label: 'Bollinger inf.', data: {$bbLower}, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 }
+                            { label: 'Maximo', data: current.highs, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                            { label: 'Minimo', data: current.lows, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15, fill: '-1' },
+                            { label: 'Precio', data: current.closes, borderColor: '#0f6b77', borderWidth: 2, pointRadius: 0, tension: 0.15 },
+                            { label: 'SMA20', data: current.sma20, borderColor: '#9a6500', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                            { label: 'SMA50', data: current.sma50, borderColor: '#a23b35', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                            { label: 'Bollinger sup.', data: current.bbUpper, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 },
+                            { label: 'Bollinger inf.', data: current.bbLower, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 }
                         ]
                     },
                     options: {
@@ -184,11 +274,11 @@ class StockDetailPage
 
             var volumeCtx = document.getElementById('{$volumeCanvasId}');
             if (volumeCtx && window.Chart) {
-                new Chart(volumeCtx, {
+                volumeChart = new Chart(volumeCtx, {
                     type: 'bar',
                     data: {
-                        labels: labels,
-                        datasets: [{ label: 'Volumen', data: {$volumes}, backgroundColor: '#d8e0e6' }]
+                        labels: current.labels,
+                        datasets: [{ label: 'Volumen', data: current.volumes, backgroundColor: '#d8e0e6' }]
                     },
                     options: {
                         responsive: true,
@@ -197,6 +287,38 @@ class StockDetailPage
                     }
                 });
             }
+
+            function applyRange(months) {
+                var next = sliceByMonths(months);
+
+                if (priceChart) {
+                    priceChart.data.labels = next.labels;
+                    priceChart.data.datasets[0].data = next.highs;
+                    priceChart.data.datasets[1].data = next.lows;
+                    priceChart.data.datasets[2].data = next.closes;
+                    priceChart.data.datasets[3].data = next.sma20;
+                    priceChart.data.datasets[4].data = next.sma50;
+                    priceChart.data.datasets[5].data = next.bbUpper;
+                    priceChart.data.datasets[6].data = next.bbLower;
+                    priceChart.update();
+                }
+
+                if (volumeChart) {
+                    volumeChart.data.labels = next.labels;
+                    volumeChart.data.datasets[0].data = next.volumes;
+                    volumeChart.update();
+                }
+            }
+
+            document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (item) {
+                        item.classList.remove('active');
+                    });
+                    button.classList.add('active');
+                    applyRange(parseInt(button.getAttribute('data-months'), 10));
+                });
+            });
         })();
         </script>
 HTML;
@@ -250,7 +372,12 @@ HTML;
 
     private static function valueBox(string $label, string $value): string
     {
-        return sprintf('<div class="value-box"><span class="muted">%s</span><strong>%s</strong></div>', Layout::escape($label), Layout::escape($value));
+        return sprintf(
+            '<div class="value-box" title="%s"><span class="muted">%s</span><strong>%s</strong></div>',
+            Layout::escape(IndicatorGlossary::describe($label)),
+            Layout::escape($label),
+            Layout::escape($value)
+        );
     }
 
     private static function percentOrDash(?float $value): string

@@ -14,6 +14,8 @@ class PriceChartSeries
     /**
      * @param list<string> $labels Fechas en formato Y-m-d
      * @param list<float> $closes
+     * @param list<float> $highs
+     * @param list<float> $lows
      * @param list<float|null> $sma20
      * @param list<float|null> $sma50
      * @param list<float|null> $bollingerUpper
@@ -23,6 +25,8 @@ class PriceChartSeries
     public function __construct(
         private readonly array $labels,
         private readonly array $closes,
+        private readonly array $highs,
+        private readonly array $lows,
         private readonly array $sma20,
         private readonly array $sma50,
         private readonly array $bollingerUpper,
@@ -45,6 +49,22 @@ class PriceChartSeries
     public function getCloses(): array
     {
         return $this->closes;
+    }
+
+    /**
+     * @return list<float>
+     */
+    public function getHighs(): array
+    {
+        return $this->highs;
+    }
+
+    /**
+     * @return list<float>
+     */
+    public function getLows(): array
+    {
+        return $this->lows;
     }
 
     /**

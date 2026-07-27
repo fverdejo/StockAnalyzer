@@ -6,6 +6,8 @@ namespace StockAnalyzer\Utils;
 
 class TickerNormalizer
 {
+    private const MAX_TICKERS = 60;
+
     /**
      * @return list<string>
      */
@@ -22,6 +24,6 @@ class TickerNormalizer
             }
         }
 
-        return array_slice($normalized, 0, 10);
+        return array_slice($normalized, 0, self::MAX_TICKERS);
     }
 }

@@ -6,7 +6,7 @@ Stock Analyzer es una aplicación web desarrollada en PHP cuyo objetivo es ayuda
 
 No pretende ser un visor de cotizaciones ni una plataforma de trading.
 
-(Está planificado un simulador de cartera - ver `versions.md` v2.2 - para que cada usuario pueda comprobar la rentabilidad de sus decisiones. No mueve dinero real ni se conecta a ningún bróker: solo registra operaciones hipotéticas a precio de mercado. Sigue sin ser una plataforma de trading.)
+(Incluye un simulador de cartera - ver `versions.md` v2.2 - para que cada usuario pueda comprobar la rentabilidad de sus decisiones. No mueve dinero real ni se conecta a ningún bróker: solo registra operaciones hipotéticas a precio de mercado. Sigue sin ser una plataforma de trading.)
 
 Su objetivo principal es responder diariamente a la siguiente pregunta:
 
@@ -86,7 +86,7 @@ El proyecto estará dividido en capas.
 src/
 
 Analyzer/
-Auth/            (planeado, v2.1: registro, login, sesión)
+Auth/            (v2.1: registro, login, sesión)
 Config/
 DTO/
 Enums/
@@ -95,7 +95,7 @@ Infrastructure/
 Interfaces/
 Models/
 Providers/
-Repository/      (planeado, v2.1: UserRepository, TransactionRepository)
+Repository/      (v2.1/v2.2: UserRepository, TransactionRepository)
 Services/
 Utils/
 Web/
@@ -218,7 +218,7 @@ El algoritmo podrá modificarse sin cambiar la clase Score.
 
 ---
 
-## Dominio ampliado: usuarios y cartera (planeado, ver `versions.md` v2.1/v2.2)
+## Dominio ampliado: usuarios y cartera (implementado, ver `versions.md` v2.1/v2.2)
 
 Es un dominio aparte del análisis (Stock → Analyzer → Score → Recommendation no cambia). Se relaciona con él solo en que una `Transaction` referencia un ticker.
 

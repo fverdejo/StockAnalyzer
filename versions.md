@@ -4,28 +4,26 @@ Este documento resume el estado real del proyecto frente a `project.md` y `roadm
 
 ## Estado actual
 
-La aplicacion es una demo funcional avanzada. Permite consultar acciones reales en Yahoo Finance, calcular indicadores tecnicos completos (incluyendo EMA, MACD, Bollinger y ATR) y fundamentales reales (PER, PEG, ROE, margenes, deuda, dividendo...), combinarlos en un score con pesos configurables por categoria y explicado punto por punto, y mostrar tanto un ranking como una ficha de detalle por accion con graficos Chart.js.
+La aplicacion es una demo funcional avanzada, ahora con la fase de producto personal implementada hasta `v2.3`. Permite consultar acciones reales en Yahoo Finance, calcular indicadores tecnicos completos (incluyendo EMA, MACD, Bollinger y ATR) y fundamentales reales (PER, PEG, ROE, margenes, deuda, dividendo...), combinarlos en un score con pesos configurables por categoria y explicado punto por punto, y mostrar tanto un ranking como una ficha de detalle por accion con graficos Chart.js.
 
-No es todavia la version final descrita en `project.md`, porque faltan persistencia, universos amplios de acciones, automatizacion diaria y analisis de noticias. Ademas, la obtencion de fundamentales depende de un endpoint no oficial de Yahoo Finance (ver v1.3) cuya fiabilidad no se ha podido verificar en un entorno con acceso real a internet; si falla, la aplicacion sigue funcionando con el resto de indicadores.
+Tambien incluye cuentas de usuario con sesiones PHP, migraciones SQL para MariaDB, cartera simulada basada en operaciones inmutables, menu de navegacion, configuracion local de proveedor, tooltips/explicaciones de indicadores, graficos con temporalidad seleccionable y maximo/minimo diario, cache de datos de mercado, rankings diarios guardados, universos configurables, filtros/ordenaciones, API JSON, backtesting basico y noticias/sentimiento importables por CSV.
 
-A partir de aqui se ha planificado una nueva fase (cuentas de usuario, cartera simulada y varias mejoras de la interfaz), detallada en las versiones `v1.8` en adelante y `v2.1` en adelante. Todavia no se ha implementado nada de esa fase: son planes, no progreso.
+No es todavia una plataforma robusta de produccion porque faltan tests automatizados, alertas, watchlist personal, exportaciones y proveedores externos oficiales para noticias/datos. Ademas, la obtencion de fundamentales depende de un endpoint no oficial de Yahoo Finance (ver v1.3); si falla, la aplicacion sigue funcionando con el resto de indicadores.
 
 ---
 
 ## Orden recomendado de ejecucion
 
-Los numeros de version son etiquetas para identificar cada pieza, no dictan el orden en que hay que construirlas. Este es el orden practico recomendado, pensado para poder probar cada fase de forma aislada antes de pasar a la siguiente:
+Los numeros de version son etiquetas para identificar cada pieza, no dictan el orden en que hay que construirlas. La fase pendiente principal ya esta implementada hasta `v2.3` y se han cubierto tambien `v1.1`, `v1.2` parcial/configurable, `v1.6`, `v1.7`, `v0.5.4`, `v0.6.3` y `v0.6.4`.
 
-1. **`v2.1` - Cuentas de usuario.** Es el cambio de arquitectura mas grande (la aplicacion pasa a tener estado/persistencia real por primera vez), asi que conviene aislarlo y probarlo a fondo cuanto antes, antes de construir nada encima.
-2. **`v2.2` - Cartera simulada.** Depende directamente de `v2.1`.
-3. **`v1.8` - Indicadores explicados** y **`v1.9` - Graficos mejorados.** No dependen de nada de lo anterior; se pueden hacer en paralelo o incluso antes si se prefiere algo de progreso visible rapido.
-4. **`v1.10` - Fuente de datos configurable.** Independiente (usa un archivo, no base de datos), aunque tematicamente encaja justo antes del menu de navegacion.
-5. **`v2.3` - Menu de navegacion.** Necesita que existan ya "Mi cuenta", "Mi cartera" y la configuracion de fuente de datos para tener sentido enlazarlas.
-6. **`v1.11` - Universo ampliado y Home en tres bloques.** Se beneficia de `v1.1` (cache, todavia pendiente) para no forzar demasiado a Yahoo al analizar mas tickers en cada carga.
+1. **Tests automatizados.** Cubrir serializacion/cache, repositorios, scoring y rutas criticas.
+2. **Proveedor oficial de datos/noticias.** Yahoo sigue siendo mejor esfuerzo; las noticias ahora entran por CSV.
+3. **Watchlist, alertas y exportaciones CSV.**
+4. **Universos mantenidos automaticamente.** `config/universes.php` ya permite listas, pero no descarga componentes de indices.
 
-`v1.1` (persistencia y cache de cotizaciones) sigue pendiente de antes, pero conviene retomarla justo despues de `v2.1`: la conexion a base de datos que trae `v2.1` es la misma infraestructura que `v1.1` necesita, asi que la parte dificil ya estara resuelta.
+`v1.2` queda cubierto como universos configurables/manuales; no queda cubierto como descarga automatica de componentes de indices.
 
-`v1.2` (universo completo tipo S&P 500), `v1.6` (automatizacion diaria) y `v1.7` (noticias y sentimiento) quedan donde estaban: en el backlog, sin prisa, a la espera de que se pida retomarlas.
+La fecha de esta revision es 2026-07-27.
 
 ---
 
@@ -158,12 +156,11 @@ Cumple:
 No cumple todavia:
 
 - ROIC (Yahoo no lo expone de forma fiable en sus endpoints publicos; el campo existe en `Fundamentals` pero queda `null`).
-- Backtesting del algoritmo.
 - La fiabilidad real de la obtencion de fundamentales no se ha podido verificar contra Yahoo Finance en vivo (ver v1.3 mas abajo).
 
-Version posterior necesaria:
+Implementacion posterior anadida:
 
-- `v0.5.4`: validar el score con backtesting basico.
+- `v0.5.4`: `BacktestingService`, `Web/BacktestPage` y `bin/backtest.php` validan senales historicas con retorno posterior.
 
 ---
 
@@ -188,14 +185,13 @@ Cumple:
 No cumple todavia:
 
 - Watchlist.
-- Filtros por mercado, sector o recomendacion.
+- Filtros por mercado o sector.
 - Paginacion.
-- API JSON.
 
-Version posterior necesaria:
+Implementacion posterior anadida:
 
-- `v0.6.3`: anadir filtros y ordenaciones.
-- `v0.6.4`: crear endpoints JSON.
+- `v0.6.3`: filtro por recomendacion y ordenaciones por score, ticker y precio.
+- `v0.6.4`: API JSON en `?page=api`.
 
 ---
 
@@ -221,13 +217,11 @@ No cumple todavia:
 
 - Analisis automatico de cientos de empresas de forma eficiente.
 - Persistencia en MariaDB.
-- Ranking diario programado.
+- Ranking diario programado automaticamente en el sistema (el comando CLI ya existe).
 - Fiabilidad verificada de los fundamentales (dependen de un endpoint no oficial de Yahoo).
-- Noticias.
-- Sentimiento.
-- Backtesting.
-- Dashboard avanzado (filtros, paginacion, watchlist, API JSON).
-- Universos completos como S&P 500, Nasdaq 100, Dow Jones o IBEX 35.
+- Proveedor automatico de noticias.
+- Dashboard avanzado completo (paginacion, watchlist, exportacion CSV).
+- Universos completos mantenidos automaticamente como S&P 500 o Nasdaq 100.
 
 Conclusion:
 
@@ -238,6 +232,8 @@ La version actual deberia considerarse una `v0.6` avanzada o una `v1.0-demo`, no
 # Versiones posteriores recomendadas
 
 ## v1.1 - Persistencia y cache
+
+Estado: implementado.
 
 Objetivo:
 
@@ -253,6 +249,14 @@ Incluye:
 - Cache de cotizaciones.
 - Comando para actualizar datos.
 
+Implementacion actual:
+
+- `database/migrations/003_create_market_data_cache.sql` crea `market_data_cache`.
+- `Repository/MarketDataCacheRepository.php` guarda `Stock` e historicos serializados en JSON.
+- `Providers/CachedMarketDataProvider.php` envuelve a Yahoo y reutiliza cache con TTL.
+- `database/migrations/004_create_daily_rankings.sql` y `Repository/DailyRankingRepository.php` guardan rankings diarios.
+- `bin/analyze.php` calcula y guarda un ranking por universo o lista manual.
+
 Resultado esperado:
 
 La aplicacion puede analizar decenas o cientos de acciones sin consultar todo en tiempo real.
@@ -260,6 +264,8 @@ La aplicacion puede analizar decenas o cientos de acciones sin consultar todo en
 ---
 
 ## v1.2 - Universos de mercado
+
+Estado: implementado en modo configurable/manual.
 
 Objetivo:
 
@@ -274,6 +280,13 @@ Incluye:
 - S&P 500.
 - IBEX 35.
 - Importacion de tickers desde CSV.
+
+Implementacion actual:
+
+- `config/universes.php` define universos seleccionables.
+- `Config/UniverseConfig.php` carga esas listas.
+- El dashboard y backtesting permiten elegir universo.
+- No hay descarga automatica de componentes de S&P 500/Nasdaq 100; se mantienen como listas configurables.
 
 Resultado esperado:
 
@@ -338,7 +351,7 @@ El analisis tecnico esta alineado con el roadmap original.
 
 ## v1.5 - Dashboard avanzado
 
-Estado: parcialmente hecho (ver v0.6 mas arriba).
+Estado: mayormente implementado.
 
 Objetivo:
 
@@ -348,11 +361,11 @@ Incluye:
 
 - Detalle de accion. `Hecho.`
 - Graficos con Chart.js. `Hecho (precio + SMA20/50 + Bollinger, y volumen).`
-- Filtros. `Pendiente.`
-- Ordenaciones. `Pendiente (el ranking solo ordena por score total).`
+- Filtros. `Hecho: filtro por recomendacion.`
+- Ordenaciones. `Hecho: score, ticker y precio.`
 - Vista Top Compras. `Hecho (ya existia en v0.6 original).`
 - Vista Top Ventas. `Hecho (ya existia en v0.6 original).`
-- Vista Mercado. `Pendiente.`
+- Vista Mercado. `Parcial: selector de universos configurables.`
 - Exportacion CSV. `Pendiente.`
 
 Resultado esperado:
@@ -362,6 +375,8 @@ La aplicacion deja de ser una unica pantalla y pasa a tener secciones claras.
 ---
 
 ## v1.6 - Automatizacion diaria
+
+Estado: implementado en CLI basico.
 
 Objetivo:
 
@@ -375,6 +390,12 @@ Incluye:
 - Historico de recomendaciones.
 - Alertas basicas.
 
+Implementacion actual:
+
+- `bin/analyze.php --universe=default --name=default` calcula ranking diario y lo guarda en `daily_rankings`.
+- Puede programarse con cron/Task Scheduler. No se instala automaticamente ninguna tarea del sistema.
+- No hay alertas todavia.
+
 Resultado esperado:
 
 Cada dia existe un ranking calculado y consultable.
@@ -382,6 +403,8 @@ Cada dia existe un ranking calculado y consultable.
 ---
 
 ## v1.7 - Noticias y sentimiento
+
+Estado: implementado en modo importacion CSV.
 
 Objetivo:
 
@@ -394,6 +417,14 @@ Incluye:
 - Penalizacion por noticias negativas.
 - Categoria `NEWS` real.
 
+Implementacion actual:
+
+- `database/migrations/005_create_news_items.sql` crea `news_items`.
+- `bin/import-news.php archivo.csv` importa titulares con columnas `ticker,title,source,url,published_at`.
+- `NewsSentimentScorer` calcula sentimiento basico por palabras clave.
+- `NewsAnalyzer` incorpora el promedio reciente a la categoria `NEWS`.
+- No hay proveedor externo automatico de noticias todavia.
+
 Resultado esperado:
 
 El score de noticias deja de ser fijo.
@@ -402,7 +433,7 @@ El score de noticias deja de ser fijo.
 
 ## v1.8 - Indicadores explicados
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -412,6 +443,12 @@ Incluye:
 
 - Tooltips: un diccionario `indicador -> descripcion corta` (por ejemplo `Web/IndicatorGlossary.php`), aplicado con el atributo HTML `title` sobre cada valor de `values-grid` en `StockDetailPage` y sobre los chips del ranking en `DashboardPage`. Empezar con `title` (accesible, sin JS); un tooltip visual con CSS/JS puede venir despues si hace falta.
 - Explicacion ampliada de los indicadores mas determinantes (no todos): de las `Signal` que ya genera cada analizador, elegir las 3-4 que mas puntos aportan o restan en cada caso y mostrar un parrafo mas largo, no solo la frase corta actual. Para no tocar `TechnicalScoreAnalyzer` ni `FundamentalAnalyzer` (evitar arriesgar formulas ya probadas), lo mas seguro es una clase nueva de presentacion (por ejemplo `Web/IndicatorEducation.php`) que sepa "ampliar" un `Signal` por su `label`, en vez de anadir ese texto largo al propio DTO `Signal`.
+
+Implementacion actual:
+
+- `Web/IndicatorGlossary.php` aporta los tooltips de valores y chips.
+- `Web/IndicatorEducation.php` muestra hasta 4 indicadores determinantes reutilizando las `Signal` ya calculadas.
+- No se han tocado las formulas de `TechnicalScoreAnalyzer` ni `FundamentalAnalyzer`.
 
 Fuera de alcance:
 
@@ -425,7 +462,7 @@ Cualquier valor de la pantalla de detalle se explica solo, y los indicadores cla
 
 ## v1.9 - Graficos mejorados
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -433,8 +470,14 @@ Elegir la temporalidad del grafico de precio, y ver el maximo y el minimo de cad
 
 Incluye:
 
-- Selector de temporalidad (1M, 3M, 6M, 1A - las mas habituales). La forma mas sencilla de implementarlo sin pedir mas datos al servidor: pedir ya un historial mas largo (por ejemplo 2 años en vez de 1) y recortar en el propio JavaScript segun el boton elegido, ya que `PriceChartSeries` viaja entera al navegador.
-- Maximo y minimo por sesion: `HistoricalQuote` ya guarda `high`/`low`; solo falta anadirlos a `PriceChartSeries` y a un dataset nuevo en Chart.js. La opcion mas simple es una banda sombreada entre maximo y minimo detras de la linea de cierre. Pasar a velas (candlestick) es una alternativa mas adelante, pero necesita un plugin adicional de Chart.js (`chartjs-chart-financial`) y es un cambio mayor, no un ajuste.
+- Selector de temporalidad (1M, 3M, 6M, 1A y 2A). Se pide un historial de 2 años y se recorta en JavaScript segun el boton elegido, ya que `PriceChartSeries` viaja entera al navegador.
+- Maximo y minimo por sesion: `HistoricalQuote` ya guardaba `high`/`low`; ahora `PriceChartSeries` los expone y Chart.js los pinta como rango diario detras del cierre. Pasar a velas (candlestick) queda como alternativa posterior porque necesita un plugin adicional (`chartjs-chart-financial`).
+
+Implementacion actual:
+
+- `YahooFinanceProvider::getHistoricalQuotes()` pide historico de 2 anos (`range=2y`).
+- `PriceChartSeries` incluye `highs` y `lows`.
+- `StockDetailPage` pinta selector 1M/3M/6M/1A/2A y actualiza Chart.js en cliente.
 
 Resultado esperado:
 
@@ -444,7 +487,7 @@ El grafico de precio se acerca a lo que se ve en cualquier app de bolsa: rango d
 
 ## v1.10 - Fuente de datos configurable
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -460,6 +503,13 @@ Incluye:
 - Pantalla de configuracion: que proveedor esta activo (de momento solo Yahoo Finance) y los valores que necesite (API key, si en el futuro se anade Finnhub/Alpha Vantage/Twelve Data, ya contempladas en `project.md`).
 - `MarketDataProviderInterface` ya permite tener varios proveedores; aqui solo se decide cual se usa y con que configuracion, sin tocar el resto de la aplicacion.
 
+Implementacion actual:
+
+- `config/provider.php` queda versionado como plantilla.
+- `config/provider.local.php` se genera al guardar desde la UI y esta excluido en `.gitignore`.
+- `Config/ProviderConfig.php` carga plantilla + override local.
+- La pantalla `?page=provider` esta protegida por login. Yahoo Finance es el unico proveedor activable por ahora; los demas quedan preparados para API key futura.
+
 Resultado esperado:
 
 Cambiar de proveedor de datos, o corregir una API key, no requiere tocar codigo ni desplegar de nuevo.
@@ -468,7 +518,7 @@ Cambiar de proveedor de datos, o corregir una API key, no requiere tocar codigo 
 
 ## v1.11 - Universo ampliado y Home en tres bloques
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -487,6 +537,13 @@ Incluye:
 Riesgo a vigilar:
 
 Analizar mas tickers implica mas llamadas a Yahoo (cotizacion + historico + intento de fundamentales con el crumb) en cada carga de pagina. Sin cache (`v1.1`) esto puede notarse en el tiempo de carga y hacer que el crumb falle mas (mas peticiones, mas probabilidad de un limite de peticiones). Si al ampliar el universo la pagina se nota lenta o el crumb empieza a fallar mas de lo habitual, priorizar `v1.1` antes de ampliar mas.
+
+Implementacion actual:
+
+- `Application::DEFAULT_TICKERS` mantiene una lista inicial moderada para que la portada cargue sin cache.
+- `TickerNormalizer` permite hasta 60 tickers por peticion si se introducen manualmente.
+- `DashboardPage` separa Compras / Mantener / Ventas con hasta 10 resultados por bloque.
+- El bloque de ventas ordena primero las puntuaciones mas bajas.
 
 Resultado esperado:
 
@@ -526,7 +583,7 @@ La aplicacion puede responder diariamente:
 
 ## v2.1 - Cuentas de usuario
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -549,6 +606,16 @@ Incluye:
 - Paginas protegidas: sin sesion iniciada, redirigen a login.
 - Pagina "Mi cuenta" basica (email, fecha de alta, cerrar sesion).
 
+Implementacion actual:
+
+- `Infrastructure/Database/Connection.php` crea la conexion PDO desde `.env` / variables de entorno.
+- `.env.example` documenta `DB_DSN`, `DB_USER` y `DB_PASSWORD`.
+- `database/migrations/001_create_users.sql` crea `users`.
+- `bin/migrate.php` aplica migraciones numeradas y registra `schema_migrations`.
+- `Auth/AuthService.php` gestiona registro, login, logout, usuario actual en sesion, limite simple de intentos y `password_hash()` / `password_verify()`.
+- `Auth/CsrfToken.php` protege formularios POST.
+- `Web/RegisterPage.php`, `Web/LoginPage.php` y `Web/AccountPage.php` siguen el patron de paginas HTML del proyecto.
+
 Fuera de alcance (de momento):
 
 - Recuperacion de contraseña por email (necesitaria un servicio de envio de correo).
@@ -563,7 +630,7 @@ Cada persona que use la aplicacion tiene su propia cuenta, y la aplicacion sabe 
 
 ## v2.2 - Cartera simulada
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -590,6 +657,15 @@ Incluye:
 - Pagina "Mi cartera": tabla de posiciones (ticker, cantidad, precio medio, precio actual, beneficio en € y en %) y un resumen total.
 - Validacion basica: no se puede vender mas cantidad de la que se tiene.
 
+Implementacion actual:
+
+- `database/migrations/002_create_transactions.sql` crea `transactions`.
+- `Models/Transaction`, `Models/Holding`, `Models/Portfolio` y `Enums/TransactionType` modelan operaciones, posiciones y resumen.
+- `Repository/TransactionRepository.php` persiste operaciones.
+- `Services/PortfolioService.php` calcula posiciones desde el historial, precio medio, beneficio latente y beneficio realizado.
+- `Web/PortfolioPage.php` muestra resumen, posiciones abiertas, venta rapida e historial.
+- `StockDetailPage` incluye formulario de compra/venta simulado cuando hay sesion iniciada.
+
 Fuera de alcance (de momento):
 
 - Comisiones, impuestos, dividendos cobrados.
@@ -604,7 +680,7 @@ Un usuario puede comprobar si las recomendaciones de la aplicacion le habrian fu
 
 ## v2.3 - Menu de navegacion
 
-Estado: pendiente.
+Estado: implementado.
 
 Objetivo:
 
@@ -614,6 +690,11 @@ Incluye:
 
 - `Web/Navigation.php` (o un metodo dentro de `Layout`) que genera el menu segun si hay sesion iniciada o no.
 - Integrarlo en `Layout::render()` para que aparezca en todas las paginas sin duplicar HTML.
+
+Implementacion actual:
+
+- `Web/Navigation.php` genera Ranking, Mi cartera, Configuracion y Mi cuenta si hay sesion; Login y Registro si no la hay.
+- `Layout::render()` recibe usuario actual y seccion activa para pintar el menu en todas las paginas.
 
 Depende de:
 

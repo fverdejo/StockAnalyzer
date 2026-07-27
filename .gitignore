@@ -3,6 +3,7 @@
 
 # Entorno
 /.env
+/config/provider.local.php
 
 # IDEs
 .idea/

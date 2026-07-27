@@ -7,6 +7,7 @@ namespace StockAnalyzer\Web;
 use DateTimeImmutable;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\DTO\TechnicalSnapshot;
+use StockAnalyzer\Models\User;
 
 /**
  * Pantalla principal: formulario de universo, tarjetas resumen, top
@@ -19,34 +20,68 @@ class DashboardPage
      * @param list<StockAnalysis> $results
      * @param array<string,string> $errors
      */
-    public static function render(string $rawTickers, array $results, array $errors): string
+    /**
+     * @param array<string,array{label: string, tickers: list<string>}> $universes
+     */
+    public static function render(
+        string $rawTickers,
+        array $results,
+        array $errors,
+        ?User $currentUser = null,
+        string $selectedUniverse = 'default',
+        array $universes = [],
+        string $selectedRecommendation = '',
+        string $selectedSort = 'score_desc'
+    ): string
     {
         $tickerValue = Layout::escape($rawTickers);
+        $universeOptions = self::renderUniverseOptions($universes, $selectedUniverse);
+        $recommendationOptions = self::renderRecommendationOptions($selectedRecommendation);
+        $sortOptions = self::renderSortOptions($selectedSort);
+        $apiHref = '?page=api&universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation) . '&sort=' . urlencode($selectedSort);
         $errorsHtml = self::renderErrors($errors);
         $cards = self::renderCards($results);
         $topBuys = self::renderRecommendationList($results, ['STRONG BUY', 'BUY'], $rawTickers);
+        $holds = self::renderRecommendationList($results, ['HOLD'], $rawTickers);
         $topSells = self::renderRecommendationList($results, ['SELL', 'STRONG SELL'], $rawTickers);
         $rows = self::renderRows($results, $rawTickers);
         $updatedAt = Layout::escape((new DateTimeImmutable())->format('Y-m-d H:i'));
 
         $body = <<<HTML
         <section class="panel">
-            <form method="get">
+            <form method="get" class="trade-form">
                 <div>
                     <label for="tickers">Universo de analisis</label>
                     <input id="tickers" name="tickers" value="{$tickerValue}" placeholder="AAPL MSFT NVDA AMZN GOOGL" autocomplete="off">
                 </div>
+                <div>
+                    <label for="universe">Lista</label>
+                    <select id="universe" name="universe">{$universeOptions}</select>
+                </div>
+                <div>
+                    <label for="recommendation">Filtro</label>
+                    <select id="recommendation" name="recommendation">{$recommendationOptions}</select>
+                </div>
+                <div>
+                    <label for="sort">Orden</label>
+                    <select id="sort" name="sort">{$sortOptions}</select>
+                </div>
                 <button type="submit">Analizar</button>
             </form>
+            <p class="muted" style="margin:10px 0 0;font-size:12px"><a href="{$apiHref}">API JSON de este ranking</a></p>
         </section>
 
         {$errorsHtml}
         {$cards}
 
-        <section class="split">
+        <section class="home-grid">
             <div class="panel">
                 <h2>Top compras</h2>
                 {$topBuys}
+            </div>
+            <div class="panel">
+                <h2>Mantener</h2>
+                {$holds}
             </div>
             <div class="panel">
                 <h2>Riesgo / ventas</h2>
@@ -77,7 +112,7 @@ class DashboardPage
         </section>
 HTML;
 
-        return Layout::render('Stock Analyzer', "<div class=\"version\">v1.1 - {$updatedAt}</div>", $body);
+        return Layout::render('Stock Analyzer', "<div class=\"version\">v2.3 - {$updatedAt}</div>", $body, $currentUser, 'dashboard');
     }
 
     /**
@@ -172,34 +207,120 @@ HTML;
 
             $ticker = $analysis->getStock()->getCompany()->getTicker();
 
-            $items[] = sprintf(
-                '<a class="ticker-link" href="%s"><div class="list-row"><span><strong>%s</strong> <span class="muted">%s</span></span><span>%s%%</span></div></a>',
-                self::detailHref($ticker, $rawTickers),
-                Layout::escape($ticker),
-                Layout::escape($recommendation),
-                Layout::formatNumber($analysis->getScore()->getPercentage())
-            );
+            $items[] = [
+                'score' => $analysis->getScore()->getPercentage(),
+                'html' => sprintf(
+                    '<a class="ticker-link" href="%s"><div class="list-row"><span><strong>%s</strong> <span class="muted">%s</span></span><span>%s%%</span></div></a>',
+                    self::detailHref($ticker, $rawTickers),
+                    Layout::escape($ticker),
+                    Layout::escape($recommendation),
+                    Layout::formatNumber($analysis->getScore()->getPercentage())
+                ),
+            ];
         }
 
         if ($items === []) {
             return '<div class="muted">Sin resultados en esta categoria.</div>';
         }
 
-        return '<div class="list">' . implode('', array_slice($items, 0, 5)) . '</div>';
+        if (in_array('STRONG SELL', $recommendations, true)) {
+            usort($items, static fn (array $left, array $right): int => $left['score'] <=> $right['score']);
+        }
+
+        $html = array_map(static fn (array $item): string => (string) $item['html'], array_slice($items, 0, 10));
+
+        return '<div class="list">' . implode('', $html) . '</div>';
+    }
+
+    /**
+     * @param array<string,array{label: string, tickers: list<string>}> $universes
+     */
+    private static function renderUniverseOptions(array $universes, string $selected): string
+    {
+        $items = ['<option value="">Manual</option>'];
+
+        foreach ($universes as $key => $universe) {
+            $items[] = sprintf(
+                '<option value="%s"%s>%s</option>',
+                Layout::escape($key),
+                $key === $selected ? ' selected' : '',
+                Layout::escape($universe['label'])
+            );
+        }
+
+        return implode('', $items);
+    }
+
+    private static function renderRecommendationOptions(string $selected): string
+    {
+        $options = [
+            '' => 'Todas',
+            'STRONG BUY' => 'STRONG BUY',
+            'BUY' => 'BUY',
+            'HOLD' => 'HOLD',
+            'SELL' => 'SELL',
+            'STRONG SELL' => 'STRONG SELL',
+        ];
+
+        return self::options($options, $selected);
+    }
+
+    private static function renderSortOptions(string $selected): string
+    {
+        return self::options([
+            'score_desc' => 'Score desc.',
+            'score_asc' => 'Score asc.',
+            'ticker_asc' => 'Ticker A-Z',
+            'price_desc' => 'Precio desc.',
+            'price_asc' => 'Precio asc.',
+        ], $selected);
+    }
+
+    /**
+     * @param array<string,string> $options
+     */
+    private static function options(array $options, string $selected): string
+    {
+        $items = [];
+
+        foreach ($options as $value => $label) {
+            $items[] = sprintf(
+                '<option value="%s"%s>%s</option>',
+                Layout::escape($value),
+                $value === $selected ? ' selected' : '',
+                Layout::escape($label)
+            );
+        }
+
+        return implode('', $items);
     }
 
     private static function renderTechnicalChips(TechnicalSnapshot $technical): string
     {
+        return implode('', [
+            self::chip('SMA 20', Layout::formatNullable($technical->getSma20())),
+            self::chip('SMA 50', Layout::formatNullable($technical->getSma50())),
+            self::chip('RSI (14)', Layout::formatNullable($technical->getRsi14())),
+            self::chip('MACD', Layout::formatNullable($technical->getMacd())),
+            self::chip('Momentum 30d', self::percentOrDash($technical->getMomentum30())),
+            self::chip('Volatilidad 20d', self::percentOrDash($technical->getVolatility20())),
+            self::chip('Sesiones analizadas', (string) $technical->getHistoryCount()),
+        ]);
+    }
+
+    private static function chip(string $label, string $value): string
+    {
         return sprintf(
-            '<span>SMA20 %s</span><span>SMA50 %s</span><span>RSI %s</span><span>MACD %s</span><span>Mom30 %s%%</span><span>Vol20 %s%%</span><span>%d velas</span>',
-            Layout::formatNullable($technical->getSma20()),
-            Layout::formatNullable($technical->getSma50()),
-            Layout::formatNullable($technical->getRsi14()),
-            Layout::formatNullable($technical->getMacd()),
-            Layout::formatNullable($technical->getMomentum30()),
-            Layout::formatNullable($technical->getVolatility20()),
-            $technical->getHistoryCount()
+            '<span title="%s">%s %s</span>',
+            Layout::escape(IndicatorGlossary::describe($label)),
+            Layout::escape($label),
+            Layout::escape($value)
         );
+    }
+
+    private static function percentOrDash(?float $value): string
+    {
+        return $value === null ? '-' : Layout::formatNumber($value) . '%';
     }
 
     /**

@@ -61,7 +61,7 @@ class YahooFinanceProvider implements MarketDataProviderInterface
         }
 
         $url = sprintf(
-            'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=1y',
+            'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=2y',
             rawurlencode($ticker)
         );
 

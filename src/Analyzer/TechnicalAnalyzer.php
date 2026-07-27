@@ -66,6 +66,8 @@ class TechnicalAnalyzer
     public function buildChartSeries(array $quotes): PriceChartSeries
     {
         $closes = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getClose());
+        $highs = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getHigh());
+        $lows = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getLow());
         $labels = $this->column($quotes, static fn (HistoricalQuote $q): string => $q->getDate()->format('Y-m-d'));
         $volumes = $this->column($quotes, static fn (HistoricalQuote $q): int => $q->getVolume());
         $bollinger = $this->bollingerSeries($closes, 20);
@@ -73,6 +75,8 @@ class TechnicalAnalyzer
         return new PriceChartSeries(
             labels: $labels,
             closes: $closes,
+            highs: $highs,
+            lows: $lows,
             sma20: $this->smaSeries($closes, 20),
             sma50: $this->smaSeries($closes, 50),
             bollingerUpper: $bollinger['upper'],

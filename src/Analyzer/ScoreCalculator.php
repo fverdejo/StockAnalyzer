@@ -7,10 +7,7 @@ namespace StockAnalyzer\Analyzer;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\DTO\CategoryResult;
 use StockAnalyzer\DTO\ScoreResult;
-use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\TechnicalSnapshot;
-use StockAnalyzer\Enums\ScoreCategory;
-use StockAnalyzer\Enums\SignalVerdict;
 use StockAnalyzer\Models\Score;
 use StockAnalyzer\Models\Stock;
 
@@ -23,20 +20,23 @@ use StockAnalyzer\Models\Stock;
  * analizadores como al Score final, para que los tres usen siempre el
  * mismo maximo por categoria y no puedan desincronizarse.
  *
- * NEWS sigue siendo un valor fijo: no hay todavia un proveedor de noticias
- * (ver roadmap v1.7), asi que se deja como neutro en lugar de simularlo.
+ * NEWS se delega en NewsAnalyzer cuando esta disponible. Si no se inyecta,
+ * la categoria queda neutra para mantener la aplicacion usable sin tabla de
+ * noticias ni importacion previa.
  */
 class ScoreCalculator
 {
     private readonly ScoreWeights $weights;
     private readonly TechnicalScoreAnalyzer $technicalScoreAnalyzer;
     private readonly FundamentalAnalyzer $fundamentalAnalyzer;
+    private readonly ?NewsAnalyzer $newsAnalyzer;
 
-    public function __construct(?ScoreWeights $weights = null)
+    public function __construct(?ScoreWeights $weights = null, ?NewsAnalyzer $newsAnalyzer = null)
     {
         $this->weights = $weights ?? new ScoreWeights();
         $this->technicalScoreAnalyzer = new TechnicalScoreAnalyzer($this->weights);
         $this->fundamentalAnalyzer = new FundamentalAnalyzer($this->weights);
+        $this->newsAnalyzer = $newsAnalyzer;
     }
 
     public function calculate(Stock $stock, TechnicalSnapshot $technical): ScoreResult
@@ -44,7 +44,7 @@ class ScoreCalculator
         $categoryResults = [
             ...$this->technicalScoreAnalyzer->analyze($stock, $technical),
             ...$this->fundamentalAnalyzer->analyze($stock->getFundamentals()),
-            $this->newsPlaceholder(),
+            $this->newsAnalyzer?->analyze($stock) ?? $this->newsPlaceholder(),
         ];
 
         $score = new Score($this->weights);
@@ -64,12 +64,12 @@ class ScoreCalculator
     private function newsPlaceholder(): CategoryResult
     {
         return new CategoryResult(
-            ScoreCategory::NEWS,
-            $this->weights->getMax(ScoreCategory::NEWS) / 2,
-            [new Signal(
+            \StockAnalyzer\Enums\ScoreCategory::NEWS,
+            $this->weights->getMax(\StockAnalyzer\Enums\ScoreCategory::NEWS) / 2,
+            [new \StockAnalyzer\DTO\Signal(
                 'Noticias',
-                SignalVerdict::NEUTRAL,
-                'El analisis de noticias todavia no esta implementado; esta categoria se mantiene neutra y no influye en la recomendacion.'
+                \StockAnalyzer\Enums\SignalVerdict::NEUTRAL,
+                'No hay analizador de noticias configurado; esta categoria se mantiene neutra.'
             )]
         );
     }
