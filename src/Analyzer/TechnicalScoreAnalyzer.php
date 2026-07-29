@@ -74,7 +74,8 @@ class TechnicalScoreAnalyzer
                     'El precio cotiza %s su media movil de 20 sesiones (%s).',
                     $above ? 'por encima de' : 'por debajo de',
                     $this->fmt($sma20)
-                )
+                ),
+                ScoreCategory::TECHNICAL
             );
         } else {
             $score += 3.0;
@@ -93,7 +94,8 @@ class TechnicalScoreAnalyzer
                     $this->fmt($sma50),
                     'medio',
                     $above ? 'alcista' : 'bajista'
-                )
+                ),
+                ScoreCategory::TECHNICAL
             );
         } else {
             $score += 3.0;
@@ -107,7 +109,8 @@ class TechnicalScoreAnalyzer
                 $goldenCross ? SignalVerdict::POSITIVE : SignalVerdict::NEGATIVE,
                 $goldenCross
                     ? 'La media de 20 sesiones esta por encima de la de 50 (cruce alcista).'
-                    : 'La media de 20 sesiones esta por debajo de la de 50 (cruce bajista).'
+                    : 'La media de 20 sesiones esta por debajo de la de 50 (cruce bajista).',
+                ScoreCategory::TECHNICAL
             );
         } else {
             $score += 2.0;
@@ -130,7 +133,8 @@ class TechnicalScoreAnalyzer
                     'El histograma MACD es %s, lo que indica impulso %s.',
                     $histPercent > 0 ? 'positivo' : 'negativo',
                     $histPercent > 0.5 ? 'alcista fuerte' : ($histPercent > 0 ? 'alcista moderado' : ($histPercent > -0.5 ? 'bajista moderado' : 'bajista fuerte'))
-                )
+                ),
+                ScoreCategory::TECHNICAL
             );
         } else {
             $score += 3.0;
@@ -153,7 +157,8 @@ class TechnicalScoreAnalyzer
                     $position <= 0.25 => 'El precio esta cerca de la banda inferior, una zona que historicamente ha actuado como soporte (aunque tambien puede reflejar debilidad continuada).',
                     $position >= 0.85 => 'El precio esta cerca de la banda superior, zona de sobrecompra a corto plazo.',
                     default => 'El precio se mueve en la zona media de las bandas, sin señal extrema.',
-                }
+                },
+                ScoreCategory::TECHNICAL
             );
         } else {
             $score += 2.0;
@@ -175,7 +180,8 @@ class TechnicalScoreAnalyzer
                     'El volumen de la ultima sesion es %sx la media de 20 sesiones, %s.',
                     $this->fmt($volumeRatio),
                     $volumeRatio >= 1.5 ? 'lo que da conviccion al movimiento reciente' : ($volumeRatio >= 0.6 ? 'un nivel de participacion normal' : 'una participacion escasa')
-                )
+                ),
+                ScoreCategory::TECHNICAL
             );
         } else {
             $score += 2.0;
@@ -200,7 +206,8 @@ class TechnicalScoreAnalyzer
                 sprintf(
                     'El precio se ha movido un %s%% en los ultimos 30 dias.',
                     $this->fmt($momentum)
-                )
+                ),
+                ScoreCategory::MOMENTUM
             );
         }
 
@@ -234,7 +241,8 @@ class TechnicalScoreAnalyzer
                         $rsi >= 30 => 'perdiendo fuerza, cerca de sobreventa',
                         default => 'zona de sobreventa marcada, posible agotamiento del movimiento bajista',
                     }
-                )
+                ),
+                ScoreCategory::MOMENTUM
             );
         }
 
@@ -256,7 +264,8 @@ class TechnicalScoreAnalyzer
                     'La volatilidad diaria de los ultimos 20 dias es del %s%%, %s.',
                     $this->fmt($volatility),
                     $volatility < 2 ? 'un nivel contenido' : ($volatility < 4 ? 'un nivel moderado' : 'un nivel elevado')
-                )
+                ),
+                ScoreCategory::RISK
             );
         }
 
@@ -271,7 +280,8 @@ class TechnicalScoreAnalyzer
                 sprintf(
                     'El rango medio de las ultimas 14 sesiones equivale al %s%% del precio.',
                     $this->fmt($atrPercent)
-                )
+                ),
+                ScoreCategory::RISK
             );
         }
 

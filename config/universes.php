@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+// 'general' es el universo por defecto del Home. Desde v2.12,
+// Application::resolveGeneralUniverseTickers() lo construye en vivo con
+// las 20 acciones que mas suben y las 20 que mas bajan hoy segun el
+// screener de Yahoo Finance (ver Providers\YahooMarketMoversProvider).
+// La lista fija de aqui abajo solo se usa como respaldo si ese screener
+// falla (endpoint no oficial, puede cambiar sin aviso).
 return [
     'general' => [
         'label' => 'Busqueda general (por defecto)',

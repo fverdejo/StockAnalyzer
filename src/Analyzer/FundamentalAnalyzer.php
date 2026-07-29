@@ -95,7 +95,8 @@ class FundamentalAnalyzer
                         $roe >= 5 => 'un nivel modesto',
                         default => 'un nivel debil',
                     }
-                )
+                ),
+                ScoreCategory::FUNDAMENTAL
             );
         } else {
             $score += 6.0;
@@ -122,7 +123,8 @@ class FundamentalAnalyzer
                         $debtToEquity < 1.5 => 'un apalancamiento moderado',
                         default => 'un apalancamiento elevado que añade riesgo financiero',
                     }
-                )
+                ),
+                ScoreCategory::FUNDAMENTAL
             );
         } else {
             $score += 5.0;
@@ -149,7 +151,8 @@ class FundamentalAnalyzer
                         $fcfYield >= 0 => 'generando caja de forma ajustada',
                         default => 'con flujo de caja negativo, una señal de alerta',
                     }
-                )
+                ),
+                ScoreCategory::FUNDAMENTAL
             );
         } else {
             $score += 4.0;
@@ -170,7 +173,8 @@ class FundamentalAnalyzer
                 $signals[] = new Signal(
                     'PER',
                     SignalVerdict::NEGATIVE,
-                    'El PER no es representativo porque la empresa registra perdidas.'
+                    'El PER no es representativo porque la empresa registra perdidas.',
+                    ScoreCategory::VALUATION
                 );
             } else {
                 $points = match (true) {
@@ -192,7 +196,8 @@ class FundamentalAnalyzer
                             $per < 30 => 'un multiplo exigente pero no extremo',
                             default => 'un multiplo elevado que descuenta mucho crecimiento futuro',
                         }
-                    )
+                    ),
+                    ScoreCategory::VALUATION
                 );
             }
         } else {
@@ -218,7 +223,8 @@ class FundamentalAnalyzer
                     $peg > 0 && $peg < 1
                         ? 'lo que sugiere que el precio no refleja todo el crecimiento esperado'
                         : 'un nivel que ya incorpora buena parte del crecimiento esperado'
-                )
+                ),
+                ScoreCategory::VALUATION
             );
         } else {
             $score += 2.5;
@@ -237,7 +243,8 @@ class FundamentalAnalyzer
             $signals[] = new Signal(
                 'EV/EBITDA',
                 $evToEbitda > 0 && $evToEbitda < 12 ? SignalVerdict::POSITIVE : SignalVerdict::NEUTRAL,
-                sprintf('El EV/EBITDA es %s.', $this->fmt($evToEbitda))
+                sprintf('El EV/EBITDA es %s.', $this->fmt($evToEbitda)),
+                ScoreCategory::VALUATION
             );
         } else {
             $score += 2.5;
@@ -256,7 +263,8 @@ class FundamentalAnalyzer
             $signals[] = new Signal(
                 'Precio/Valor contable',
                 $priceToBook > 0 && $priceToBook < 3 ? SignalVerdict::POSITIVE : SignalVerdict::NEUTRAL,
-                sprintf('Cotiza a %sx su valor contable.', $this->fmt($priceToBook))
+                sprintf('Cotiza a %sx su valor contable.', $this->fmt($priceToBook)),
+                ScoreCategory::VALUATION
             );
         } else {
             $score += 2.0;
@@ -283,7 +291,8 @@ class FundamentalAnalyzer
             $signals[] = new Signal(
                 'Margen neto',
                 $netMargin >= 10 ? SignalVerdict::POSITIVE : ($netMargin >= 0 ? SignalVerdict::NEUTRAL : SignalVerdict::NEGATIVE),
-                sprintf('El margen neto es del %s%%.', $this->fmt($netMargin))
+                sprintf('El margen neto es del %s%%.', $this->fmt($netMargin)),
+                ScoreCategory::QUALITY
             );
         } else {
             $score += 3.0;
@@ -302,7 +311,8 @@ class FundamentalAnalyzer
             $signals[] = new Signal(
                 'Margen operativo',
                 $operatingMargin >= 15 ? SignalVerdict::POSITIVE : ($operatingMargin >= 0 ? SignalVerdict::NEUTRAL : SignalVerdict::NEGATIVE),
-                sprintf('El margen operativo es del %s%%.', $this->fmt($operatingMargin))
+                sprintf('El margen operativo es del %s%%.', $this->fmt($operatingMargin)),
+                ScoreCategory::QUALITY
             );
         } else {
             $score += 2.0;
@@ -322,7 +332,8 @@ class FundamentalAnalyzer
                 [new Signal(
                     'Dividendo',
                     SignalVerdict::NEUTRAL,
-                    'La empresa no reparte dividendo (o el dato no esta disponible); no es necesariamente negativo si reinvierte el capital en crecimiento.'
+                    'La empresa no reparte dividendo (o el dato no esta disponible); no es necesariamente negativo si reinvierte el capital en crecimiento.',
+                    ScoreCategory::DIVIDEND
                 )]
             );
         }
@@ -342,7 +353,8 @@ class FundamentalAnalyzer
                 'La rentabilidad por dividendo es del %s%%%s.',
                 $this->fmt($yield),
                 $yield > 8 ? ', un nivel inusualmente alto que conviene revisar (puede reflejar riesgo de recorte)' : ''
-            )
+            ),
+            ScoreCategory::DIVIDEND
         );
 
         $payout = $fundamentals->getPayoutRatio();
@@ -358,7 +370,8 @@ class FundamentalAnalyzer
             $signals[] = new Signal(
                 'Payout ratio',
                 $payout > 0 && $payout < 70 ? SignalVerdict::POSITIVE : SignalVerdict::NEUTRAL,
-                sprintf('Destina el %s%% del beneficio a dividendos.', $this->fmt($payout))
+                sprintf('Destina el %s%% del beneficio a dividendos.', $this->fmt($payout)),
+                ScoreCategory::DIVIDEND
             );
         }
 

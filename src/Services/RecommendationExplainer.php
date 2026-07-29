@@ -79,12 +79,28 @@ class RecommendationExplainer
             default => [],
         };
 
+        // Se separan a proposito los motivos tecnicos de los fundamentales
+        // (ver versions.md v2.17): el analisis tecnico genera mas Signal por
+        // accion que el fundamental, asi que tomar simplemente "las 3
+        // primeras" del array combinado dejaba casi siempre fuera el motivo
+        // fundamental, aunque si contaba para la puntuacion.
         if ($highlighted !== []) {
-            $reasons = array_map(
-                static fn (Signal $signal): string => $signal->getMessage(),
-                array_slice($highlighted, 0, 3)
-            );
-            $sentences[] = 'Entre los motivos principales: ' . implode(' ', $reasons);
+            $technicalReasons = array_values(array_filter($highlighted, static fn (Signal $signal): bool => $signal->isTechnical()));
+            $fundamentalReasons = array_values(array_filter($highlighted, static fn (Signal $signal): bool => !$signal->isTechnical()));
+
+            if ($technicalReasons !== []) {
+                $sentences[] = 'En el analisis tecnico: ' . implode(' ', array_map(
+                    static fn (Signal $signal): string => $signal->getMessage(),
+                    array_slice($technicalReasons, 0, 2)
+                ));
+            }
+
+            if ($fundamentalReasons !== []) {
+                $sentences[] = 'En el analisis fundamental: ' . implode(' ', array_map(
+                    static fn (Signal $signal): string => $signal->getMessage(),
+                    array_slice($fundamentalReasons, 0, 2)
+                ));
+            }
         }
 
         if ($recommendation === 'HOLD') {

@@ -11,9 +11,9 @@ Esta seccion (y la tabla de progreso de debajo) llevaba sin tocarse desde el `20
 - `versions.md` es el documento con el estado real, detallado, categoria por categoria.
 - `roadmap.md` (este documento) se centra en que falta por hacer y en que orden, no en repetir el estado exacto de cada pieza.
 
-Resumen muy rapido a fecha de esta revision (2026-07-29): la app esta avanzada hasta `v2.11` y cubre tambien cache/persistencia de mercado, universos configurables, filtros/busqueda por nombre, API JSON, backtesting basico, ranking diario por CLI y noticias/sentimiento por CSV. El detalle exacto esta en `versions.md`.
+Resumen muy rapido a fecha de esta revision (2026-07-29): la app esta avanzada hasta `v2.17` y cubre tambien cache/persistencia de mercado, universos configurables, filtros/busqueda por nombre, universo por defecto dinamico (mayores subidas/bajadas del dia), watchlist personal (con estrella-toggle en las tablas), alertas basicas, evolucion de la cartera en el tiempo, explicaciones que combinan analisis tecnico y fundamental, API JSON, backtesting basico, ranking diario por CLI y noticias/sentimiento por CSV. El detalle exacto esta en `versions.md`.
 
-La fase pedida directamente por el usuario el mismo dia (`v2.4` a `v2.11`: diseno visual, filtros del Home, cartera con importe en dinero, rentabilidad por operacion, el bug visual de "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro) ya esta implementada. El detalle tecnico completo, incluidas las limitaciones honestas de cada pieza, esta en `versions.md`.
+La fase pedida directamente por el usuario el mismo dia (`v2.4` a `v2.11`: diseno visual, filtros del Home, cartera con importe en dinero, rentabilidad por operacion, el bug visual de "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro), las correcciones/mejoras posteriores (`v2.5.2`, `v2.11.1`, `v2.12`), las tres ideas implementadas a continuacion (`v2.13` evolucion de cartera, `v2.14` watchlist, `v2.15` alertas) y la ronda final de ajustes (`v2.16` numeracion de version y estrella de watchlist, `v2.17` fundamentales explicitos en la explicacion) ya estan implementadas. El detalle tecnico completo, incluidas las limitaciones honestas de cada pieza, esta en `versions.md`.
 
 ---
 
@@ -25,21 +25,20 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 # Proxima tarea
 
-## Tests, alertas y proveedores oficiales
+## Tests y proveedores oficiales
 
 Objetivo
 
-Con la fase `v2.4` a `v2.11` ya implementada (ver `versions.md`), el siguiente trabajo de valor vuelve a ser el mismo que quedo pendiente tras la segunda fase del 2026-07-27: convertir la demo avanzada en una herramienta mas robusta con tests automatizados, alertas/watchlist/exportacion y proveedores oficiales para datos/noticias.
+Con la fase `v2.4` a `v2.17` ya implementada (ver `versions.md`, incluye watchlist con estrella-toggle, alertas basicas y explicaciones tecnico+fundamental equilibradas), el siguiente trabajo de valor vuelve a ser el que quedo pendiente tras la segunda fase del 2026-07-27: convertir la demo avanzada en una herramienta mas robusta con tests automatizados, exportacion y proveedores oficiales para datos/noticias.
 
 Orden recomendado (detalle tecnico completo en `versions.md`):
 
 1. Tests automatizados de servicios/repositorios/rutas.
-2. Watchlist personal y alertas basicas.
-3. Exportacion CSV.
-4. Proveedor oficial de noticias o datos fundamentales.
-5. Universos mantenidos automaticamente.
+2. Exportacion CSV (cartera e historial de operaciones).
+3. Proveedor oficial de noticias o datos fundamentales.
+4. Universos mantenidos automaticamente.
 
-Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/`.
+Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/` (y en Mailpit en local, ver `v2.11.1`).
 
 ---
 
@@ -48,7 +47,6 @@ Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la 
 ## Prioridad alta
 
 - Tests automatizados
-- Watchlist personal y alertas basicas
 
 ---
 
@@ -286,7 +284,7 @@ Comparar dos empresas.
 
 ---
 
-Otras ideas sugeridas que todavía no tienen versión asignada (evolución de la cartera en el tiempo, watchlist personal, alertas, exportar cartera a CSV) están anotadas en `versions.md`, al final, junto a la fase de cuentas de usuario con la que encajan.
+De las ideas que se anotaban aqui sin version asignada, tres ya se implementaron: evolución de la cartera en el tiempo (`v2.13`), watchlist personal (`v2.14`) y alertas basicas (`v2.15`). Solo queda pendiente exportar la cartera a CSV, anotada en `versions.md`, al final.
 
 ---
 
@@ -373,3 +371,50 @@ Al probar lo anterior, el usuario reporta tres problemas concretos, que se corri
 - El universo por defecto lanzaba un ticker invalido (`.MC`) contra Yahoo Finance. Causa: el emparejamiento de nombre de empresa de `v2.5` (`Utils\TickerNormalizer`) usaba limites de palabra que trataban "." como frontera valida, asi que el alias "Aena" coincidia dentro del propio ticker "AENA.MC" (y "BBVA" dentro de "BBVA.MC"), cortandolo a ".MC". Se corrige exigiendo que no haya letra/numero/"."/"-" alrededor de la coincidencia. Documentado como `v2.5.2` en `versions.md`.
 - El campo de busqueda del Home mostraba siempre el universo completo (60 tickers) en vez de aparecer vacio, y no se limpiaba tras pulsar "Analizar". Se corrige para que el campo se muestre siempre vacio (los enlaces internos siguen funcionando igual). Tambien documentado en `v2.5.2`.
 - El usuario no tiene todavia un servidor de correo real y pidio poder ver el correo de verificacion de `v2.11` en Mailpit, ya que el proyecto esta montado con DDEV. Se descubre que DDEV ya captura `mail()` hacia Mailpit sin configuracion adicional (`sendmail_path` apunta a `mailpit sendmail` en el contenedor web); solo faltaba anadir la cabecera `From` a `LogMailer` para que se vea bien. Verificado enviando un correo real y comprobandolo en la API de Mailpit. Documentado como `v2.11.1` en `versions.md`.
+
+---
+
+## 2026-07-29 (tercera fase: universo "general" dinamico)
+
+El usuario pide que la "busqueda general" (con la que se accede a la aplicacion por defecto) analice las 20 empresas que mas suben y las 20 que mas bajan hoy, en vez de una lista fija de empresas grandes, indicando en la propia pantalla de donde vienen esos datos, y que ese universo se analice igual que cualquier otro para decidir que comprar/vender/mantener.
+
+Se implementa `v2.12`: nueva interfaz `MarketMoversProviderInterface` + `YahooMarketMoversProvider` (screener "Day Gainers"/"Day Losers" de Yahoo Finance, mercado EEUU, sin necesitar crumb), con su propia cache (`market_movers_cache`, TTL 30 minutos) siguiendo el mismo patron que `CachedMarketDataProvider`. El universo `general` de `config/universes.php` pasa a ser solo la lista de respaldo si el screener en vivo falla. El Home muestra una nota con la fuente de los datos cuando ese universo esta activo.
+
+Verificado en ddev: primera carga (sin cache) analiza los 40 tickers en ~22s sin errores; segunda carga con cache, ~0,18s; prueba directa del proveedor confirma 20+20 tickers; prueba de fallback confirma que un fallo del screener no rompe la pagina.
+
+Detalle tecnico completo en `versions.md` (`v2.12`).
+
+---
+
+## 2026-07-29 (cuarta fase: tres ideas pendientes del backlog de "Ideas adicionales")
+
+El usuario pide implementar tres ideas que estaban anotadas en `versions.md` sin version asignada ni fecha comprometida: evolucion de la cartera en el tiempo, watchlist personal y alertas basicas.
+
+Se implementan como `v2.13`, `v2.14` y `v2.15`:
+
+- `v2.13`: `PortfolioService::getValueHistory()` calcula el valor de la cartera dia a dia a partir del historico de precios ya cacheado y las `Transaction` existentes; nuevo grafico en "Mi cartera".
+- `v2.14`: tabla `watchlist_items`, `Web/WatchlistPage.php` y un boton "Seguir"/"Dejar de seguir" en la ficha de detalle.
+- `v2.15`: en vez de depender de la automatizacion diaria de `v1.6` como preveia la idea original, se implementa de forma reactiva (se comprueba al visitar "Mi cartera"/"Mi watchlist"): tablas `ticker_alert_state` y `alerts`, `Services\AlertService`, pagina `?page=alerts`, y avisos de alertas sin leer en cartera/watchlist. De paso, "Mi cartera" gana una columna de recomendacion por posicion que no existia antes.
+
+Verificado en ddev con un usuario real registrado y verificado por email: compra por importe en AAPL, seguimiento y dejar de seguir en la watchlist, grafico de evolucion de cartera (probado tanto el caso sin suficiente historial como con varios dias reales), y una alerta forzada manualmente que aparecio correctamente en "Mi cartera" y en `?page=alerts`, incluyendo marcarla como leida.
+
+Detalle tecnico completo en `versions.md` (`v2.13`, `v2.14`, `v2.15`).
+
+---
+
+## 2026-07-29 (quinta fase: version del Home, estrella de watchlist y fundamentales en la explicacion)
+
+Tras probar la fase anterior, el usuario pide tres ajustes:
+
+- El numero de version del Home no era el real (se habia quedado en `v2.11` mientras se implementaban `v2.12` a `v2.15`, por estar escrito a mano dentro de un heredoc). Se extrae a una constante (`DashboardPage::APP_VERSION`) con un comentario que recuerda sincronizarla.
+- Para la watchlist (`v2.14`), anadir una columna con una estrella-toggle en las tablas donde ya sale informacion de una accion, en vez de depender solo del boton de la ficha de detalle o de la pagina dedicada.
+- En la ficha de detalle, tanto el resumen como "Indicadores determinantes" parecian basarse casi solo en datos tecnicos, aunque el analisis fundamental (`v0.5`) tambien calcula señales y puntua.
+
+Se implementan como `v2.16` y `v2.17`:
+
+- `v2.16`: `Web/WatchlistStar.php` (icono-boton reutilizable) anadido a la tabla de ranking del Home, a las posiciones abiertas de "Mi cartera" y a la propia tabla de "Mi watchlist"; version del Home corregida.
+- `v2.17`: se encuentra la causa raiz de que el analisis fundamental casi no apareciera en el texto: `RecommendationExplainer` e `IndicatorEducation` tomaban "las primeras N" señales de un array donde las tecnicas siempre iban primero (por como las construye `ScoreCalculator`) y son mas numerosas. Se anade categoria a cada `Signal` y se reescribe la seleccion para que el resumen tenga una frase separada "En el analisis tecnico" / "En el analisis fundamental", y "Indicadores determinantes" alterne entre ambos grupos.
+
+Verificado en ddev con un usuario real: version correcta tras el cambio; estrella funcionando como toggle en las tres tablas (probado añadir y quitar, y que se refleja igual en cartera y watchlist); para TSLA (STRONG SELL) el resumen ya distingue motivos tecnicos y fundamentales, y para AAPL (HOLD) "Indicadores determinantes" muestra 2 tecnicos y 2 fundamentales en vez de 4 tecnicos.
+
+Detalle tecnico completo en `versions.md` (`v2.16`, `v2.17`).

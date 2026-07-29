@@ -69,7 +69,8 @@ class ScoreCalculator
             [new \StockAnalyzer\DTO\Signal(
                 'Noticias',
                 \StockAnalyzer\Enums\SignalVerdict::NEUTRAL,
-                'No hay analizador de noticias configurado; esta categoria se mantiene neutra.'
+                'No hay analizador de noticias configurado; esta categoria se mantiene neutra.',
+                \StockAnalyzer\Enums\ScoreCategory::NEWS
             )]
         );
     }

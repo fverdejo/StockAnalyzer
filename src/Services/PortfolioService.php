@@ -129,6 +129,105 @@ class PortfolioService
     }
 
     /**
+     * Evolucion del valor de la cartera dia a dia (ver versions.md v2.13).
+     * Cada `Transaction` ya guarda fecha y cantidad (v2.2), asi que solo
+     * falta multiplicar la cantidad en cartera cada dia por el cierre de
+     * ese dia, sumado entre todos los tickers que se hayan tenido alguna
+     * vez.
+     *
+     * Simplificacion asumida: se usa el calendario de sesiones de cada
+     * ticker tal cual lo devuelve el proveedor; si un dia una accion no
+     * tiene vela (festivo de su mercado, ticker de otro pais...) esa
+     * accion simplemente no aporta valor ese dia. Con carteras que mezclan
+     * EEUU e IBEX esto puede introducir un desajuste pequeño en dias
+     * festivos de un solo mercado, no en la tendencia general.
+     *
+     * @return array{labels: list<string>, values: list<float>}
+     */
+    public function getValueHistory(User $user): array
+    {
+        $transactions = $this->transactions->findByUser($user);
+
+        if ($transactions === []) {
+            return ['labels' => [], 'values' => []];
+        }
+
+        $closesByDate = [];
+
+        foreach (array_unique(array_map(static fn (Transaction $t): string => $t->getTicker(), $transactions)) as $ticker) {
+            try {
+                $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+            } catch (Throwable) {
+                continue;
+            }
+
+            foreach ($history as $quote) {
+                $closesByDate[$quote->getDate()->format('Y-m-d')][$ticker] = $quote->getClose();
+            }
+        }
+
+        $firstDate = $transactions[0]->getExecutedAt()->format('Y-m-d');
+        $dates = array_values(array_filter(array_keys($closesByDate), static fn (string $date): bool => $date >= $firstDate));
+        sort($dates);
+
+        $labels = [];
+        $values = [];
+
+        foreach ($dates as $date) {
+            $quantities = $this->quantitiesHeldOn($transactions, $date);
+            $value = 0.0;
+            $hasPosition = false;
+
+            foreach ($quantities as $ticker => $quantity) {
+                if ($quantity <= 0.000001) {
+                    continue;
+                }
+
+                $close = $closesByDate[$date][$ticker] ?? null;
+
+                if ($close === null) {
+                    continue;
+                }
+
+                $value += $quantity * $close;
+                $hasPosition = true;
+            }
+
+            if (!$hasPosition) {
+                continue;
+            }
+
+            $labels[] = $date;
+            $values[] = round($value, 2);
+        }
+
+        return ['labels' => $labels, 'values' => $values];
+    }
+
+    /**
+     * @param list<Transaction> $transactions
+     * @return array<string,float>
+     */
+    private function quantitiesHeldOn(array $transactions, string $date): array
+    {
+        $quantities = [];
+
+        foreach ($transactions as $transaction) {
+            if ($transaction->getExecutedAt()->format('Y-m-d') > $date) {
+                continue;
+            }
+
+            $ticker = $transaction->getTicker();
+            $quantities[$ticker] ??= 0.0;
+            $quantities[$ticker] += $transaction->getType() === TransactionType::BUY
+                ? $transaction->getQuantity()
+                : -$transaction->getQuantity();
+        }
+
+        return $quantities;
+    }
+
+    /**
      * @param list<Transaction> $transactions
      */
     private function getOpenQuantity(array $transactions): float

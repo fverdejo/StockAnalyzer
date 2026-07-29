@@ -242,6 +242,8 @@ Portfolio (conjunto de Holding de un usuario)
 
 `Transaction.cantidad` admite valores decimales (acciones fraccionarias), no solo enteros: ver `versions.md` v2.6. El formulario de compra/venta puede recibir un importe en dinero en vez de una cantidad de acciones; la `Transaction` siempre guarda cantidad y precio, nunca el importe como campo aparte.
 
+Junto a este dominio, y con la misma base de usuarios, viven dos piezas mas pequeñas (ver `versions.md` v2.14/v2.15): `WatchlistItem` (ticker seguido por un usuario, sin relación con `Transaction`) y `Alert` (aviso generado cuando la recomendación de un ticker de la cartera o la watchlist cambia respecto a la última vez que se vio, guardada junto a `ticker_alert_state` como base de comparación).
+
 ---
 
 # Flujo de la aplicación

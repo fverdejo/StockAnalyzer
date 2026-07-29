@@ -33,7 +33,8 @@ class NewsAnalyzer
                 [new Signal(
                     'Noticias',
                     SignalVerdict::NEUTRAL,
-                    'No hay noticias recientes importadas para este ticker; la categoria se mantiene neutra.'
+                    'No hay noticias recientes importadas para este ticker; la categoria se mantiene neutra.',
+                    ScoreCategory::NEWS
                 )]
             );
         }
@@ -57,7 +58,8 @@ class NewsAnalyzer
                     number_format($sentiment->getAverageScore(), 2, ',', '.'),
                     $sentiment->getHeadline() ?? 'sin titular',
                     $sentiment->getSource() ? ' (' . $sentiment->getSource() . ').' : '.'
-                )
+                ),
+                ScoreCategory::NEWS
             )]
         );
     }

@@ -21,7 +21,8 @@ class StockDetailPage
         Explanation $explanation,
         string $backHref,
         ?User $currentUser = null,
-        string $csrfToken = ''
+        string $csrfToken = '',
+        bool $isWatched = false
     ): string
     {
         $stock = $analysis->getStock();
@@ -42,15 +43,18 @@ class StockDetailPage
             Layout::escape($company->getCurrency())
         );
 
+        $watchlistButton = self::renderWatchlistButton($company->getTicker(), $currentUser, $isWatched, $csrfToken);
+
         $topbarRight = sprintf(
-            '<div class="header-actions"><a class="back-link" href="%s">&larr; Volver al ranking</a><div class="score-pill"><span class="recommendation recommendation-large %s">%s</span> <strong class="score-percent">%s%%</strong></div></div>',
+            '<div class="header-actions"><a class="back-link" href="%s">&larr; Volver al ranking</a>%s<div class="score-pill"><span class="recommendation recommendation-large %s">%s</span> <strong class="score-percent">%s%%</strong></div></div>',
             Layout::escape($backHref),
+            $watchlistButton,
             Layout::recommendationClass($recommendation),
             Layout::escape($recommendation),
             Layout::formatNumber($score->getPercentage())
         );
 
-        $summary = sprintf('<section class="panel"><h2>Por que %s esta pantalla dice %s</h2><div class="summary-box">%s</div></section>',
+        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div></section>',
             Layout::escape($company->getTicker()),
             Layout::escape($recommendation),
             Layout::escape($explanation->getSummary())
@@ -146,6 +150,32 @@ class StockDetailPage
             $body,
             $currentUser,
             'dashboard'
+        );
+    }
+
+    /**
+     * Boton "Seguir"/"Dejar de seguir" (ver versions.md v2.14): forma
+     * mas directa de anadir un ticker a la watchlist personal, sin tener
+     * que ir primero a la pagina de la watchlist.
+     */
+    private static function renderWatchlistButton(string $ticker, ?User $currentUser, bool $isWatched, string $csrfToken): string
+    {
+        if (!$currentUser instanceof User) {
+            return '';
+        }
+
+        $action = $isWatched ? 'remove' : 'add';
+        $label = $isWatched ? 'Dejar de seguir' : 'Seguir';
+        $class = $isWatched ? 'secondary-button' : '';
+
+        return sprintf(
+            '<form method="post" action="?page=watchlist" class="inline-form watchlist-toggle"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><input type="hidden" name="redirect_to" value="%s"><button type="submit" name="watchlist_action" value="%s" class="%s">%s</button></form>',
+            Layout::escape($csrfToken),
+            Layout::escape($ticker),
+            Layout::escape('?ticker=' . $ticker),
+            $action,
+            $class,
+            Layout::escape($label)
         );
     }
 

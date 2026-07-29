@@ -17,13 +17,22 @@ use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Infrastructure\Mail\LogMailer;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
+use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
+use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
+use StockAnalyzer\Providers\CachedMarketMoversProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
+use StockAnalyzer\Providers\YahooMarketMoversProvider;
+use StockAnalyzer\Repository\AlertRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
+use StockAnalyzer\Repository\MarketMoversCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
+use StockAnalyzer\Repository\TickerAlertStateRepository;
 use StockAnalyzer\Repository\TransactionRepository;
 use StockAnalyzer\Repository\UserRepository;
+use StockAnalyzer\Repository\WatchlistRepository;
 use StockAnalyzer\Web\AccountPage;
+use StockAnalyzer\Web\AlertsPage;
 use StockAnalyzer\Web\BacktestPage;
 use StockAnalyzer\Utils\TickerNormalizer;
 use StockAnalyzer\Web\DashboardPage;
@@ -33,6 +42,7 @@ use StockAnalyzer\Web\PortfolioPage;
 use StockAnalyzer\Web\ProviderConfigPage;
 use StockAnalyzer\Web\RegisterPage;
 use StockAnalyzer\Web\StockDetailPage;
+use StockAnalyzer\Web\WatchlistPage;
 use Throwable;
 
 /**
@@ -48,17 +58,30 @@ class Application
     private const DEFAULT_UNIVERSE = 'general';
     private const DEFAULT_TICKERS = 'AAPL MSFT NVDA AMZN GOOGL META TSLA AVGO BRK-B JPM LLY V XOM UNH MA COST NFLX WMT PG JNJ HD ABBV BAC KO CRM ORCL CVX MRK AMD PEP LIN TMO ACN MCD CSCO ADBE IBM QCOM WFC CAT TXN INTU AMGN DIS GS ISRG VZ NOW PFE NKE SAN.MC BBVA.MC IBE.MC ITX.MC REP.MC TEF.MC FER.MC AMS.MC CABK.MC ELE.MC';
 
+    /**
+     * Cuantos tickers pedir a cada lado (subidas/bajadas) del screener de
+     * Yahoo para construir el universo dinamico de "general" (ver
+     * versions.md v2.12). 20 + 20 = 40 tickers, por debajo del limite de
+     * TickerNormalizer::MAX_TICKERS.
+     */
+    private const GENERAL_MOVERS_COUNT = 20;
+
     private Connection $connection;
     private MarketDataProviderInterface $marketDataProvider;
+    private MarketMoversProviderInterface $marketMoversProvider;
     private StockAnalysisService $analysisService;
     private ScoreCalculator $scoreCalculator;
     private TickerNormalizer $tickerNormalizer;
     private RecommendationExplainer $explainer;
     private AuthService $auth;
     private PortfolioService $portfolioService;
+    private WatchlistRepository $watchlistRepository;
+    private AlertRepository $alertRepository;
+    private AlertService $alertService;
     private ProviderConfig $providerConfig;
     private UniverseConfig $universeConfig;
     private AnalysisJsonPresenter $jsonPresenter;
+    private bool $generalUniverseIsLive = false;
 
     public function __construct()
     {
@@ -66,6 +89,10 @@ class Application
         $this->providerConfig = new ProviderConfig();
         $this->universeConfig = new UniverseConfig();
         $this->marketDataProvider = $this->createMarketDataProvider($this->providerConfig, $this->connection);
+        $this->marketMoversProvider = new CachedMarketMoversProvider(
+            new YahooMarketMoversProvider(),
+            new MarketMoversCacheRepository($this->connection)
+        );
         $weights = new ScoreWeights();
         $this->scoreCalculator = new ScoreCalculator($weights, new NewsAnalyzer(new NewsRepository($this->connection), $weights));
         $this->analysisService = new StockAnalysisService(
@@ -78,6 +105,9 @@ class Application
         $this->jsonPresenter = new AnalysisJsonPresenter();
 
         $this->auth = new AuthService(new UserRepository($this->connection), new LogMailer());
+        $this->watchlistRepository = new WatchlistRepository($this->connection);
+        $this->alertRepository = new AlertRepository($this->connection);
+        $this->alertService = new AlertService($this->alertRepository, new TickerAlertStateRepository($this->connection));
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
             $this->marketDataProvider
@@ -120,6 +150,18 @@ class Application
 
         if ($page === 'portfolio') {
             echo $this->renderPortfolio($this->queryString('message'), $this->queryString('error'));
+
+            return;
+        }
+
+        if ($page === 'watchlist') {
+            echo $this->renderWatchlist($this->queryString('message'), $this->queryString('error'));
+
+            return;
+        }
+
+        if ($page === 'alerts') {
+            echo $this->renderAlerts($this->queryString('message'), null);
 
             return;
         }
@@ -167,6 +209,8 @@ class Application
             'resend-verification' => $this->handleResendVerification(),
             'logout' => $this->handleLogout(),
             'portfolio', 'trade' => $this->handleTrade(),
+            'watchlist' => $this->handleWatchlistAction(),
+            'alerts' => $this->handleAlertsAction(),
             'provider' => $this->handleProviderSave(),
             default => $this->renderMessage('Accion no soportada', 'No se reconoce el formulario enviado.', 'dashboard'),
         };
@@ -178,15 +222,34 @@ class Application
         $recommendation = $this->queryString('recommendation');
         [$results, $errors] = $this->analyzeTickers($tickers);
         $results = $this->filterAndSort($results, $recommendation, 'score_desc');
+        $currentUser = $this->auth->currentUser();
 
         return DashboardPage::render(
             $rawTickers,
             $results,
             $errors,
-            $this->auth->currentUser(),
+            $currentUser,
             $universe,
             $this->universeConfig->all(),
-            $recommendation
+            $recommendation,
+            $this->generalUniverseIsLive,
+            CsrfToken::get(),
+            $this->watchedTickers($currentUser)
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function watchedTickers(?User $user): array
+    {
+        if ($user === null) {
+            return [];
+        }
+
+        return array_map(
+            static fn ($item): string => $item->getTicker(),
+            $this->watchlistRepository->findByUser($user)
         );
     }
 
@@ -222,8 +285,10 @@ class Application
         }
 
         $explanation = $this->explainer->explain($analysis);
+        $currentUser = $this->auth->currentUser();
+        $isWatched = $currentUser !== null && $this->watchlistRepository->isWatched($currentUser, $ticker);
 
-        return StockDetailPage::render($analysis, $explanation, $backHref, $this->auth->currentUser(), CsrfToken::get());
+        return StockDetailPage::render($analysis, $explanation, $backHref, $currentUser, CsrfToken::get(), $isWatched);
     }
 
     private function renderDetailError(string $ticker, string $message, string $backHref): string
@@ -259,10 +324,47 @@ class Application
         }
 
         $universe = $this->isValidUniverseKey($requestedUniverse) ? $requestedUniverse : self::DEFAULT_UNIVERSE;
+
+        if ($universe === self::DEFAULT_UNIVERSE) {
+            $raw = $this->resolveGeneralUniverseTickers();
+
+            return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
+        }
+
         $fromUniverse = $this->universeConfig->tickers($universe);
         $raw = $fromUniverse !== [] ? implode(' ', $fromUniverse) : self::DEFAULT_TICKERS;
 
         return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
+    }
+
+    /**
+     * Universo dinamico de "busqueda general" (ver versions.md v2.12): las
+     * `GENERAL_MOVERS_COUNT` acciones que mas suben y las que mas bajan
+     * hoy en EEUU, segun el screener de Yahoo Finance. Si el screener
+     * falla (endpoint no oficial, puede cambiar sin aviso), se cae en la
+     * lista estatica de respaldo de `config/universes.php` y se marca
+     * `generalUniverseIsLive = false` para que el Home lo indique.
+     */
+    private function resolveGeneralUniverseTickers(): string
+    {
+        try {
+            $gainers = $this->marketMoversProvider->getTopGainers(self::GENERAL_MOVERS_COUNT);
+            $losers = $this->marketMoversProvider->getTopLosers(self::GENERAL_MOVERS_COUNT);
+            $tickers = array_values(array_unique(array_merge($gainers, $losers)));
+
+            if ($tickers === []) {
+                throw new \RuntimeException('El screener de Yahoo Finance no devolvio ningun ticker.');
+            }
+
+            $this->generalUniverseIsLive = true;
+
+            return implode(' ', $tickers);
+        } catch (Throwable) {
+            $this->generalUniverseIsLive = false;
+            $fromUniverse = $this->universeConfig->tickers(self::DEFAULT_UNIVERSE);
+
+            return $fromUniverse !== [] ? implode(' ', $fromUniverse) : self::DEFAULT_TICKERS;
+        }
     }
 
     private function isValidUniverseKey(string $key): bool
@@ -370,6 +472,109 @@ class Application
         }
     }
 
+    /**
+     * Anadir/quitar un ticker de la watchlist (ver versions.md v2.14). Se
+     * usa tanto desde WatchlistPage como desde el boton "Seguir"/"Dejar de
+     * seguir" de StockDetailPage; por eso acepta un `redirect_to` opcional
+     * para volver a donde se pulso el boton en vez de siempre a
+     * `?page=watchlist`.
+     */
+    private function handleWatchlistAction(): string
+    {
+        try {
+            $this->assertValidCsrf();
+            $user = $this->auth->requireUser();
+            $ticker = $this->resolveTradeTicker($this->postString('ticker'));
+            $action = $this->postString('watchlist_action');
+
+            $message = match ($action) {
+                'add' => $this->addToWatchlist($user, $ticker),
+                'remove' => $this->removeFromWatchlist($user, $ticker),
+                default => throw new \RuntimeException('Accion de watchlist no soportada.'),
+            };
+
+            $redirectTo = $this->postString('redirect_to');
+            $target = $redirectTo !== '' ? $redirectTo : '?page=watchlist';
+            $separator = str_contains($target, '?') ? '&' : '?';
+            $this->redirect($target . $separator . 'message=' . urlencode($message));
+        } catch (Throwable $exception) {
+            return $this->renderWatchlist(null, $exception->getMessage());
+        }
+    }
+
+    private function addToWatchlist(User $user, string $ticker): string
+    {
+        $this->watchlistRepository->add($user, $ticker);
+
+        return sprintf('%s anadido a tu watchlist.', strtoupper($ticker));
+    }
+
+    private function removeFromWatchlist(User $user, string $ticker): string
+    {
+        $this->watchlistRepository->remove($user, $ticker);
+
+        return sprintf('%s eliminado de tu watchlist.', strtoupper($ticker));
+    }
+
+    private function renderWatchlist(?string $message, ?string $error): string
+    {
+        try {
+            $user = $this->auth->requireUser();
+            $items = $this->watchlistRepository->findByUser($user);
+            $analyses = [];
+            $errors = [];
+
+            foreach ($items as $item) {
+                try {
+                    $analysis = $this->analysisService->analyze($item->getTicker());
+                    $analyses[$item->getTicker()] = $analysis;
+                    $this->alertService->checkRecommendationChange($user, $item->getTicker(), $analysis->getScore()->getRecommendation());
+                } catch (Throwable $exception) {
+                    $errors[$item->getTicker()] = $exception->getMessage();
+                }
+            }
+
+            return WatchlistPage::render($user, $items, $analyses, $errors, CsrfToken::get(), $message, $error, $this->alertRepository->countUnread($user));
+        } catch (Throwable $exception) {
+            if ($this->auth->currentUser() === null) {
+                $this->redirect('?page=login');
+            }
+
+            return $this->renderMessage('No se pudo abrir la watchlist', $exception->getMessage(), 'watchlist');
+        }
+    }
+
+    private function renderAlerts(?string $message, ?string $error): string
+    {
+        try {
+            $user = $this->auth->requireUser();
+
+            return AlertsPage::render($user, $this->alertRepository->findRecentByUser($user), CsrfToken::get(), $message, $error);
+        } catch (Throwable $exception) {
+            if ($this->auth->currentUser() === null) {
+                $this->redirect('?page=login');
+            }
+
+            return $this->renderMessage('No se pudieron cargar las alertas', $exception->getMessage(), 'alerts');
+        }
+    }
+
+    private function handleAlertsAction(): string
+    {
+        try {
+            $this->assertValidCsrf();
+            $user = $this->auth->requireUser();
+
+            if ($this->postString('alerts_action') === 'mark_read') {
+                $this->alertRepository->markAllRead($user);
+            }
+
+            $this->redirect('?page=alerts&message=' . urlencode('Alertas marcadas como leidas.'));
+        } catch (Throwable $exception) {
+            return $this->renderAlerts(null, $exception->getMessage());
+        }
+    }
+
     private function handleProviderSave(): string
     {
         try {
@@ -404,13 +609,18 @@ class Application
     {
         try {
             $user = $this->auth->requireUser();
+            $portfolio = $this->portfolioService->getPortfolio($user);
 
             return PortfolioPage::render(
                 $user,
-                $this->portfolioService->getPortfolio($user),
+                $portfolio,
                 CsrfToken::get(),
                 $message,
-                $error
+                $error,
+                $this->portfolioService->getValueHistory($user),
+                $this->analyzeHoldingsForAlerts($user, $portfolio->getHoldings()),
+                $this->alertRepository->countUnread($user),
+                $this->watchedTickers($user)
             );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
@@ -419,6 +629,39 @@ class Application
 
             return $this->renderMessage('No se pudo abrir la cartera', $exception->getMessage(), 'portfolio');
         }
+    }
+
+    /**
+     * Analiza cada posicion abierta para saber su recomendacion actual
+     * (se muestra en "Mi cartera" y ademas alimenta las alertas de v2.15).
+     * Un fallo al analizar un ticker concreto no rompe el resto de la
+     * cartera: simplemente no se muestra recomendacion ni se actualiza su
+     * estado de alerta esa vez.
+     *
+     * @param list<\StockAnalyzer\Models\Holding> $holdings
+     * @return array<string,string> ticker => recomendacion actual
+     */
+    private function analyzeHoldingsForAlerts(User $user, array $holdings): array
+    {
+        $recommendations = [];
+
+        foreach ($holdings as $holding) {
+            $ticker = $holding->getTicker();
+
+            try {
+                $analysis = $this->analysisService->analyze($ticker);
+                $recommendation = $analysis->getScore()->getRecommendation();
+                $recommendations[$ticker] = $recommendation;
+                $this->alertService->checkRecommendationChange($user, $ticker, $recommendation);
+            } catch (Throwable) {
+                // Fallo puntual del proveedor para este ticker: no se
+                // muestra recomendacion ni se actualiza su estado de
+                // alerta esta vez, pero el resto de la cartera sigue
+                // funcionando.
+            }
+        }
+
+        return $recommendations;
     }
 
     private function renderProviderConfig(?string $message, ?string $error): string

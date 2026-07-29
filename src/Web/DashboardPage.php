@@ -17,11 +17,18 @@ use StockAnalyzer\Models\User;
 class DashboardPage
 {
     /**
+     * Version mostrada arriba a la derecha del Home. Sincronizar a mano
+     * con la ultima version implementada en versions.md (se ha quedado
+     * desactualizada mas de una vez porque es facil olvidarla al cerrar
+     * una version nueva).
+     */
+    private const APP_VERSION = 'v2.17';
+
+    /**
      * @param list<StockAnalysis> $results
      * @param array<string,string> $errors
-     */
-    /**
      * @param array<string,array{label: string, tickers: list<string>}> $universes
+     * @param list<string> $watchedTickers tickers que el usuario ya sigue (ver versions.md v2.16)
      */
     public static function render(
         string $rawTickers,
@@ -30,7 +37,10 @@ class DashboardPage
         ?User $currentUser = null,
         string $selectedUniverse = 'general',
         array $universes = [],
-        string $selectedRecommendation = ''
+        string $selectedRecommendation = '',
+        bool $generalUniverseIsLive = false,
+        string $csrfToken = '',
+        array $watchedTickers = []
     ): string
     {
         // El campo de busqueda se muestra siempre vacio (ver versions.md v2.5.1):
@@ -40,12 +50,16 @@ class DashboardPage
         $universeOptions = self::renderUniverseOptions($universes, $selectedUniverse);
         $recommendationOptions = self::renderRecommendationOptions($selectedRecommendation);
         $apiHref = '?page=api&universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
+        $redirectTo = '?universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
+        $generalUniverseNote = self::renderGeneralUniverseNote($selectedUniverse, $generalUniverseIsLive);
         $errorsHtml = self::renderErrors($errors);
         $cards = self::renderCards($results, $rawTickers);
         $topBuys = self::renderRecommendationList($results, ['STRONG BUY', 'BUY'], $rawTickers);
         $holds = self::renderRecommendationList($results, ['HOLD'], $rawTickers);
         $topSells = self::renderRecommendationList($results, ['SELL', 'STRONG SELL'], $rawTickers);
-        $rows = self::renderRows($results, $rawTickers);
+        $watched = array_fill_keys($watchedTickers, true);
+        $starHeader = $currentUser instanceof User ? '<th>&#9733;</th>' : '';
+        $rows = self::renderRows($results, $rawTickers, $currentUser, $csrfToken, $watched, $redirectTo);
         $updatedAt = Layout::escape((new DateTimeImmutable())->format('Y-m-d H:i'));
 
         $body = <<<HTML
@@ -68,6 +82,7 @@ class DashboardPage
             <p class="muted panel-note"><a href="{$apiHref}">API JSON de este ranking</a></p>
         </section>
 
+        {$generalUniverseNote}
         {$errorsHtml}
         {$cards}
 
@@ -93,6 +108,7 @@ class DashboardPage
                     <thead>
                         <tr>
                             <th>#</th>
+                            {$starHeader}
                             <th>Accion</th>
                             <th>Precio</th>
                             <th>Score</th>
@@ -109,16 +125,19 @@ class DashboardPage
         </section>
 HTML;
 
-        return Layout::render('Stock Analyzer', "<div class=\"version\">v2.11 - {$updatedAt}</div>", $body, $currentUser, 'dashboard');
+        return Layout::render('Stock Analyzer', '<div class="version">' . self::APP_VERSION . " - {$updatedAt}</div>", $body, $currentUser, 'dashboard');
     }
 
     /**
      * @param list<StockAnalysis> $results
+     * @param array<string,bool> $watched
      */
-    private static function renderRows(array $results, string $rawTickers): string
+    private static function renderRows(array $results, string $rawTickers, ?User $currentUser, string $csrfToken, array $watched, string $redirectTo): string
     {
         if ($results === []) {
-            return '<tr><td colspan="7">No hay resultados para mostrar.</td></tr>';
+            $colspan = $currentUser instanceof User ? 8 : 7;
+
+            return sprintf('<tr><td colspan="%d">No hay resultados para mostrar.</td></tr>', $colspan);
         }
 
         $rows = [];
@@ -131,10 +150,14 @@ HTML;
             $technical = $analysis->getTechnicalSnapshot();
             $recommendation = $score->getRecommendation();
             $detailHref = self::detailHref($company->getTicker(), $rawTickers);
+            $starCell = $currentUser instanceof User
+                ? sprintf('<td>%s</td>', WatchlistStar::render($company->getTicker(), $currentUser, isset($watched[$company->getTicker()]), $csrfToken, $redirectTo))
+                : '';
 
             $rows[] = sprintf(
-                '<tr><td class="rank-cell">%d</td><td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s %s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td><div class="chips">%s</div></td><td><div class="chips">%s</div></td></tr>',
+                '<tr><td class="rank-cell">%d</td>%s<td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s %s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td><div class="chips">%s</div></td><td><div class="chips">%s</div></td></tr>',
                 $position + 1,
+                $starCell,
                 $detailHref,
                 Layout::escape($company->getTicker()),
                 Layout::escape($company->getName()),
@@ -355,5 +378,23 @@ HTML;
         }
 
         return sprintf('<section class="panel errors"><strong>No se pudieron analizar algunos tickers.</strong><ul>%s</ul></section>', implode('', $items));
+    }
+
+    /**
+     * Nota de atribucion para el universo dinamico "Busqueda general" (ver
+     * versions.md v2.12): de donde salen los 20+20 tickers que se analizan
+     * por defecto. Solo se muestra cuando ese universo esta activo.
+     */
+    private static function renderGeneralUniverseNote(string $selectedUniverse, bool $isLive): string
+    {
+        if ($selectedUniverse !== 'general') {
+            return '';
+        }
+
+        if ($isLive) {
+            return '<p class="muted panel-note">Universo "Busqueda general": las 20 acciones que mas suben y las 20 que mas bajan hoy en el mercado de EEUU, segun el listado "Day Gainers" / "Day Losers" de <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank" rel="noopener">Yahoo Finance</a>. Se analizan igual que cualquier otro universo para decidir que comprar, vender o mantener.</p>';
+        }
+
+        return '<p class="muted panel-note">No se ha podido consultar en vivo el listado de subidas/bajadas de Yahoo Finance; se muestra una lista de respaldo diversificada en su lugar.</p>';
     }
 }

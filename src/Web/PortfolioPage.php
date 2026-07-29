@@ -11,24 +11,38 @@ use StockAnalyzer\Models\User;
 
 class PortfolioPage
 {
+    /**
+     * @param array{labels: list<string>, values: list<float>} $valueHistory
+     * @param array<string,string> $recommendations ticker => recomendacion actual (ver versions.md v2.15)
+     * @param list<string> $watchedTickers tickers que el usuario ya sigue (ver versions.md v2.16)
+     */
     public static function render(
         User $user,
         Portfolio $portfolio,
         string $csrfToken,
         ?string $message,
-        ?string $error
+        ?string $error,
+        array $valueHistory = ['labels' => [], 'values' => []],
+        array $recommendations = [],
+        int $unreadAlerts = 0,
+        array $watchedTickers = []
     ): string {
         $token = Layout::escape($csrfToken);
         $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
         $errorHtml = $error !== null && $error !== '' ? sprintf('<div class="form-error">%s</div>', Layout::escape($error)) : '';
+        $alertsNote = self::renderUnreadAlertsNote($unreadAlerts);
         $cards = self::renderCards($portfolio);
-        $holdings = self::renderHoldings($portfolio->getHoldings(), $token);
+        $valueChart = self::renderValueHistoryChart($valueHistory);
+        $watched = array_fill_keys($watchedTickers, true);
+        $holdings = self::renderHoldings($portfolio->getHoldings(), $token, $recommendations, $user, $watched);
         $transactions = self::renderTransactions($portfolio);
 
         $body = <<<HTML
         {$messageHtml}
         {$errorHtml}
+        {$alertsNote}
         {$cards}
+        {$valueChart}
 
         <section class="panel">
             <h2>Nueva operacion</h2>
@@ -83,8 +97,10 @@ HTML;
 
     /**
      * @param list<Holding> $holdings
+     * @param array<string,string> $recommendations ticker => recomendacion actual
+     * @param array<string,bool> $watched
      */
-    private static function renderHoldings(array $holdings, string $csrfToken): string
+    private static function renderHoldings(array $holdings, string $csrfToken, array $recommendations, User $user, array $watched): string
     {
         if ($holdings === []) {
             return '<div class="muted">Todavia no hay posiciones abiertas.</div>';
@@ -97,8 +113,11 @@ HTML;
             $marketNote = $holding->getMarketError() !== null
                 ? '<div class="muted">Precio no disponible</div>'
                 : '';
+            $recommendation = $recommendations[$holding->getTicker()] ?? null;
+            $star = WatchlistStar::render($holding->getTicker(), $user, isset($watched[$holding->getTicker()]), $csrfToken, '?page=portfolio');
             $rows[] = sprintf(
-                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td></tr>',
+                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td></tr>',
+                $star,
                 urlencode($holding->getTicker()),
                 $ticker,
                 self::number($holding->getQuantity()),
@@ -108,11 +127,43 @@ HTML;
                 self::money($holding->getInvestedAmount()),
                 self::profitClass($holding->getUnrealizedProfit()),
                 self::nullableProfit($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent()),
+                self::recommendationBadge($recommendation),
                 self::sellForm($holding, $csrfToken)
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+    }
+
+    /**
+     * Aviso de alertas sin leer (ver versions.md v2.15), visible en las
+     * paginas donde se generan (cartera y watchlist), con enlace a la
+     * pagina de alertas completa.
+     */
+    private static function renderUnreadAlertsNote(int $unreadAlerts): string
+    {
+        if ($unreadAlerts <= 0) {
+            return '';
+        }
+
+        return sprintf(
+            '<section class="panel errors"><strong>Tienes %d alerta%s sin leer.</strong> <a href="?page=alerts">Ver alertas</a></section>',
+            $unreadAlerts,
+            $unreadAlerts === 1 ? '' : 's'
+        );
+    }
+
+    private static function recommendationBadge(?string $recommendation): string
+    {
+        if ($recommendation === null) {
+            return '<span class="muted">-</span>';
+        }
+
+        return sprintf(
+            '<span class="recommendation %s">%s</span>',
+            Layout::recommendationClass($recommendation),
+            Layout::escape($recommendation)
+        );
     }
 
     private static function sellForm(Holding $holding, string $csrfToken): string
@@ -157,6 +208,64 @@ HTML;
         }
 
         return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio</th><th>Beneficio vs. precio actual</th><th>%</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas.</p>';
+    }
+
+    /**
+     * Grafico de evolucion del valor de la cartera dia a dia (ver
+     * versions.md v2.13). Mismo patron que el grafico de precio de
+     * StockDetailPage: Chart.js via CDN, datos ya calculados incrustados
+     * como JSON.
+     *
+     * @param array{labels: list<string>, values: list<float>} $valueHistory
+     */
+    private static function renderValueHistoryChart(array $valueHistory): string
+    {
+        if (count($valueHistory['labels']) < 2) {
+            return '<section class="panel"><h2>Evolucion de la cartera</h2><div class="muted">Todavia no hay suficiente historial para dibujar la evolucion (hace falta al menos un dia completo tras la primera operacion).</div></section>';
+        }
+
+        $labels = json_encode($valueHistory['labels'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?: '[]';
+        $values = json_encode($valueHistory['values'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?: '[]';
+
+        return <<<HTML
+        <div class="chart-wrap">
+            <h2>Evolucion de la cartera</h2>
+            <div class="chart-canvas-medium">
+                <canvas id="portfolioValueChart"></canvas>
+            </div>
+        </div>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+        <script>
+        (function () {
+            var ctx = document.getElementById('portfolioValueChart');
+
+            if (ctx && window.Chart) {
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: {$labels},
+                        datasets: [{
+                            label: 'Valor de la cartera',
+                            data: {$values},
+                            borderColor: '#0f6b77',
+                            backgroundColor: 'rgba(15,107,119,0.08)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.15,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: { x: { ticks: { maxTicksLimit: 10 } } }
+                    }
+                });
+            }
+        })();
+        </script>
+HTML;
     }
 
     private static function nullablePercent(?float $value): string

@@ -572,6 +572,25 @@ class Layout
             margin-bottom: 4px;
         }
 
+        .watch-star {
+            background: transparent;
+            border: 0;
+            color: var(--line-strong);
+            font-size: 20px;
+            line-height: 1;
+            min-height: auto;
+            padding: 2px 4px;
+            cursor: pointer;
+        }
+
+        .watch-star:hover {
+            color: var(--warn);
+        }
+
+        .watch-star-active {
+            color: var(--warn);
+        }
+
         .info-icon {
             display: inline-flex;
             align-items: center;

@@ -16,6 +16,8 @@ class Navigation
 
         if ($user instanceof User) {
             $items[] = self::link('portfolio', 'Mi cartera', '?page=portfolio', $active);
+            $items[] = self::link('watchlist', 'Mi watchlist', '?page=watchlist', $active);
+            $items[] = self::link('alerts', 'Alertas', '?page=alerts', $active);
             $items[] = self::link('backtest', 'Backtesting', '?page=backtest', $active);
             $items[] = self::link('provider', 'Configuracion', '?page=provider', $active);
             $items[] = self::link('account', 'Mi cuenta', '?page=account', $active);
