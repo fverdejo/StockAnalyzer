@@ -11,7 +11,8 @@ class User
     public function __construct(
         private readonly int $id,
         private readonly string $email,
-        private readonly DateTimeImmutable $createdAt
+        private readonly DateTimeImmutable $createdAt,
+        private readonly ?DateTimeImmutable $emailVerifiedAt = null
     ) {
     }
 
@@ -28,5 +29,15 @@ class User
     public function getCreatedAt(): DateTimeImmutable
     {
         return $this->createdAt;
+    }
+
+    public function getEmailVerifiedAt(): ?DateTimeImmutable
+    {
+        return $this->emailVerifiedAt;
+    }
+
+    public function isEmailVerified(): bool
+    {
+        return $this->emailVerifiedAt !== null;
     }
 }

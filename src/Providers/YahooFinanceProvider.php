@@ -81,6 +81,44 @@ class YahooFinanceProvider implements MarketDataProviderInterface
         return $this->parser->parseHistoricalQuotes($payload);
     }
 
+    public function getIntradayQuotes(string $ticker, string $interval): array
+    {
+        $ticker = strtoupper(trim($ticker));
+
+        if ($ticker === '') {
+            throw new MarketDataException('Ticker cannot be empty.');
+        }
+
+        $range = match ($interval) {
+            '1m' => '1d',
+            '5m', '15m' => '5d',
+            '1h' => '1mo',
+            default => '5d',
+        };
+
+        $url = sprintf(
+            'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=%s&range=%s',
+            rawurlencode($ticker),
+            rawurlencode($interval),
+            rawurlencode($range)
+        );
+
+        $response = $this->httpClient->get($url);
+        $body = (string) $response->getBody();
+
+        try {
+            $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new MarketDataException('Yahoo intraday response is not valid JSON.', 0, $exception);
+        }
+
+        if (!is_array($payload)) {
+            throw new MarketDataException('Yahoo intraday response is not an object.');
+        }
+
+        return $this->parser->parseHistoricalQuotes($payload);
+    }
+
     /**
      * Los fundamentales viajan por un endpoint no oficial y mas fragil que
      * el de cotizacion/historico (ver YahooFundamentalsFetcher). Un fallo

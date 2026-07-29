@@ -83,6 +83,22 @@ class PortfolioService
             }
         }
 
+        $currentPrices = [];
+
+        foreach ($transactions as $transaction) {
+            $ticker = $transaction->getTicker();
+
+            if (array_key_exists($ticker, $currentPrices)) {
+                continue;
+            }
+
+            try {
+                $currentPrices[$ticker] = $this->marketDataProvider->getStock($ticker)->getQuote()->getPrice();
+            } catch (Throwable) {
+                $currentPrices[$ticker] = null;
+            }
+        }
+
         $holdings = [];
 
         foreach ($positions as $ticker => $position) {
@@ -93,14 +109,8 @@ class PortfolioService
             }
 
             $averagePrice = ((float) $position['cost']) / $quantity;
-            $currentPrice = null;
-            $marketError = null;
-
-            try {
-                $currentPrice = $this->marketDataProvider->getStock($ticker)->getQuote()->getPrice();
-            } catch (Throwable $exception) {
-                $marketError = $exception->getMessage();
-            }
+            $currentPrice = $currentPrices[$ticker] ?? null;
+            $marketError = $currentPrice === null ? 'Precio no disponible' : null;
 
             $holdings[] = new Holding($ticker, $quantity, $averagePrice, $currentPrice, $marketError);
         }
@@ -110,7 +120,7 @@ class PortfolioService
             static fn (Holding $left, Holding $right): int => strcmp($left->getTicker(), $right->getTicker())
         );
 
-        return new Portfolio($holdings, array_reverse($transactions), round($realizedProfit, 2));
+        return new Portfolio($holdings, array_reverse($transactions), round($realizedProfit, 2), $currentPrices);
     }
 
     public function getCurrentMarketPrice(string $ticker): float

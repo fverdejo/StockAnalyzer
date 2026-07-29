@@ -161,7 +161,7 @@ class StockDetailPage
         }
 
         return sprintf(
-            '<section class="panel"><h2>Operacion simulada</h2><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001" required></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form></section>',
+            '<section class="panel"><h2>Operacion simulada</h2><p class="muted panel-note">Indica cantidad de acciones (admite decimales) o un importe en dinero; el importe tiene prioridad si rellenas ambos.</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en dinero</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form></section>',
             Layout::escape($csrfToken),
             Layout::escape($ticker)
         );
@@ -181,6 +181,7 @@ class StockDetailPage
         $bbUpper = self::jsonFor($series->getBollingerUpper());
         $bbLower = self::jsonFor($series->getBollingerLower());
         $volumes = self::jsonFor($series->getVolumes());
+        $rawTicker = Layout::escape(rawurlencode($analysis->getStock()->getCompany()->getTicker()));
         $canvasId = 'priceChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
         $volumeCanvasId = 'volumeChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
 
@@ -188,17 +189,29 @@ class StockDetailPage
         <div class="chart-wrap">
             <h2>Evolucion del precio - {$ticker}</h2>
             <div class="chart-toolbar" data-target="{$canvasId}">
+                <button type="button" data-days="7">1S</button>
                 <button type="button" data-months="1">1M</button>
                 <button type="button" data-months="3">3M</button>
                 <button type="button" data-months="6">6M</button>
                 <button type="button" data-months="12" class="active">1A</button>
                 <button type="button" data-months="24">2A</button>
             </div>
-            <canvas id="{$canvasId}" height="110"></canvas>
+            <p class="muted panel-note">Intradia: velas mas finas que una sesion diaria, pensadas para operar a corto plazo. Se piden a Yahoo Finance al pulsar el boton, no viajan con el resto de la pagina.</p>
+            <div class="chart-toolbar" data-intraday-target="{$canvasId}" data-ticker="{$rawTicker}">
+                <button type="button" data-interval="1h">Velas 1h</button>
+                <button type="button" data-interval="15m">Velas 15m</button>
+                <button type="button" data-interval="5m">Velas 5m</button>
+                <button type="button" data-interval="1m">Velas 1m (ultimo dia)</button>
+            </div>
+            <div class="chart-canvas-tall">
+                <canvas id="{$canvasId}"></canvas>
+            </div>
         </div>
         <div class="chart-wrap">
             <h2>Volumen</h2>
-            <canvas id="{$volumeCanvasId}" height="55"></canvas>
+            <div class="chart-canvas-medium">
+                <canvas id="{$volumeCanvasId}"></canvas>
+            </div>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
         <script>
@@ -215,14 +228,7 @@ class StockDetailPage
                 volumes: {$volumes}
             };
 
-            function sliceByMonths(months) {
-                if (!full.labels.length) {
-                    return full;
-                }
-
-                var lastDate = new Date(full.labels[full.labels.length - 1] + 'T00:00:00');
-                var cutoff = new Date(lastDate);
-                cutoff.setMonth(cutoff.getMonth() - months);
+            function sliceSince(cutoff) {
                 var start = full.labels.findIndex(function (label) {
                     return new Date(label + 'T00:00:00') >= cutoff;
                 });
@@ -242,6 +248,28 @@ class StockDetailPage
                     bbLower: full.bbLower.slice(start),
                     volumes: full.volumes.slice(start)
                 };
+            }
+
+            function sliceByDays(days) {
+                if (!full.labels.length) {
+                    return full;
+                }
+
+                var cutoff = new Date(full.labels[full.labels.length - 1] + 'T00:00:00');
+                cutoff.setDate(cutoff.getDate() - days);
+
+                return sliceSince(cutoff);
+            }
+
+            function sliceByMonths(months) {
+                if (!full.labels.length) {
+                    return full;
+                }
+
+                var cutoff = new Date(full.labels[full.labels.length - 1] + 'T00:00:00');
+                cutoff.setMonth(cutoff.getMonth() - months);
+
+                return sliceSince(cutoff);
             }
 
             var current = sliceByMonths(12);
@@ -266,8 +294,9 @@ class StockDetailPage
                     },
                     options: {
                         responsive: true,
+                        maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
-                        scales: { x: { ticks: { maxTicksLimit: 10 } } }
+                        scales: { x: { ticks: { maxTicksLimit: 12 } } }
                     }
                 });
             }
@@ -282,32 +311,46 @@ class StockDetailPage
                     },
                     options: {
                         responsive: true,
+                        maintainAspectRatio: false,
                         plugins: { legend: { display: false } },
-                        scales: { x: { ticks: { maxTicksLimit: 10 } } }
+                        scales: { x: { ticks: { maxTicksLimit: 12 } } }
                     }
                 });
             }
 
-            function applyRange(months) {
-                var next = sliceByMonths(months);
-
-                if (priceChart) {
-                    priceChart.data.labels = next.labels;
-                    priceChart.data.datasets[0].data = next.highs;
-                    priceChart.data.datasets[1].data = next.lows;
-                    priceChart.data.datasets[2].data = next.closes;
-                    priceChart.data.datasets[3].data = next.sma20;
-                    priceChart.data.datasets[4].data = next.sma50;
-                    priceChart.data.datasets[5].data = next.bbUpper;
-                    priceChart.data.datasets[6].data = next.bbLower;
-                    priceChart.update();
+            function setPriceDatasets(next) {
+                if (!priceChart) {
+                    return;
                 }
 
-                if (volumeChart) {
-                    volumeChart.data.labels = next.labels;
-                    volumeChart.data.datasets[0].data = next.volumes;
-                    volumeChart.update();
+                priceChart.data.labels = next.labels;
+                priceChart.data.datasets[0].data = next.highs;
+                priceChart.data.datasets[1].data = next.lows;
+                priceChart.data.datasets[2].data = next.closes;
+                priceChart.data.datasets[3].data = next.sma20;
+                priceChart.data.datasets[4].data = next.sma50;
+                priceChart.data.datasets[5].data = next.bbUpper;
+                priceChart.data.datasets[6].data = next.bbLower;
+                priceChart.update();
+            }
+
+            function setVolumeDataset(labels, volumes) {
+                if (!volumeChart) {
+                    return;
                 }
+
+                volumeChart.data.labels = labels;
+                volumeChart.data.datasets[0].data = volumes;
+                volumeChart.update();
+            }
+
+            function applyDailyRange(button) {
+                var next = button.hasAttribute('data-days')
+                    ? sliceByDays(parseInt(button.getAttribute('data-days'), 10))
+                    : sliceByMonths(parseInt(button.getAttribute('data-months'), 10));
+
+                setPriceDatasets(next);
+                setVolumeDataset(next.labels, next.volumes);
             }
 
             document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (button) {
@@ -315,10 +358,58 @@ class StockDetailPage
                     document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (item) {
                         item.classList.remove('active');
                     });
+                    document.querySelectorAll('.chart-toolbar[data-intraday-target="{$canvasId}"] button').forEach(function (item) {
+                        item.classList.remove('active');
+                    });
                     button.classList.add('active');
-                    applyRange(parseInt(button.getAttribute('data-months'), 10));
+                    applyDailyRange(button);
                 });
             });
+
+            var intradayToolbar = document.querySelector('.chart-toolbar[data-intraday-target="{$canvasId}"]');
+
+            if (intradayToolbar) {
+                intradayToolbar.querySelectorAll('button').forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        var interval = button.getAttribute('data-interval');
+                        var ticker = intradayToolbar.getAttribute('data-ticker');
+
+                        button.disabled = true;
+
+                        fetch('?page=intraday&ticker=' + ticker + '&interval=' + interval)
+                            .then(function (response) { return response.json(); })
+                            .then(function (data) {
+                                if (!data || !data.closes || !data.closes.length) {
+                                    return;
+                                }
+
+                                document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (item) {
+                                    item.classList.remove('active');
+                                });
+                                intradayToolbar.querySelectorAll('button').forEach(function (item) {
+                                    item.classList.remove('active');
+                                });
+                                button.classList.add('active');
+
+                                setPriceDatasets({
+                                    labels: data.labels,
+                                    highs: [],
+                                    lows: [],
+                                    closes: data.closes,
+                                    sma20: [],
+                                    sma50: [],
+                                    bbUpper: [],
+                                    bbLower: []
+                                });
+                                setVolumeDataset(data.labels, data.volumes);
+                            })
+                            .catch(function () {})
+                            .finally(function () {
+                                button.disabled = false;
+                            });
+                    });
+                });
+            }
         })();
         </script>
 HTML;
@@ -373,10 +464,26 @@ HTML;
     private static function valueBox(string $label, string $value): string
     {
         return sprintf(
-            '<div class="value-box" title="%s"><span class="muted">%s</span><strong>%s</strong></div>',
+            '<div class="value-box" title="%s"><span class="muted">%s %s</span><strong>%s</strong></div>',
             Layout::escape(IndicatorGlossary::describe($label)),
             Layout::escape($label),
+            self::infoIcon($label),
             Layout::escape($value)
+        );
+    }
+
+    /**
+     * Icono de ayuda junto al indicador (ver versions.md v2.10): al
+     * posicionarse encima o enfocarlo con teclado, muestra la explicacion
+     * larga de IndicatorGlossary. Usa un tooltip propio en CSS (no el
+     * atributo title del navegador) porque title no soporta el texto
+     * largo con saltos de linea de forma fiable entre navegadores.
+     */
+    private static function infoIcon(string $label): string
+    {
+        return sprintf(
+            '<span class="info-icon" tabindex="0" data-tooltip="%s">i</span>',
+            Layout::escape(IndicatorGlossary::explainLong($label))
         );
     }
 

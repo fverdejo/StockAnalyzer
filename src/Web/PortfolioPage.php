@@ -7,7 +7,6 @@ namespace StockAnalyzer\Web;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
-use StockAnalyzer\Models\Transaction;
 use StockAnalyzer\Models\User;
 
 class PortfolioPage
@@ -20,11 +19,11 @@ class PortfolioPage
         ?string $error
     ): string {
         $token = Layout::escape($csrfToken);
-        $messageHtml = $message !== null ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
-        $errorHtml = $error !== null ? sprintf('<div class="form-error">%s</div>', Layout::escape($error)) : '';
+        $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
+        $errorHtml = $error !== null && $error !== '' ? sprintf('<div class="form-error">%s</div>', Layout::escape($error)) : '';
         $cards = self::renderCards($portfolio);
         $holdings = self::renderHoldings($portfolio->getHoldings(), $token);
-        $transactions = self::renderTransactions($portfolio->getTransactions());
+        $transactions = self::renderTransactions($portfolio);
 
         $body = <<<HTML
         {$messageHtml}
@@ -33,15 +32,20 @@ class PortfolioPage
 
         <section class="panel">
             <h2>Nueva operacion</h2>
+            <p class="muted panel-note">Indica la cantidad de acciones (pueden ser decimales, por ejemplo 2,5) o, si lo prefieres, un importe en dinero y se calculara la cantidad equivalente al precio actual.</p>
             <form method="post" action="?page=portfolio" class="trade-form">
                 <input type="hidden" name="csrf_token" value="{$token}">
                 <div>
-                    <label for="ticker">Ticker</label>
-                    <input id="ticker" name="ticker" placeholder="AAPL" required>
+                    <label for="ticker">Ticker o nombre</label>
+                    <input id="ticker" name="ticker" placeholder="AAPL o Endesa" required>
                 </div>
                 <div>
-                    <label for="quantity">Cantidad</label>
-                    <input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001" required>
+                    <label for="quantity">Cantidad (acciones)</label>
+                    <input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001">
+                </div>
+                <div>
+                    <label for="amount">o importe en dinero</label>
+                    <input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150">
                 </div>
                 <button type="submit" name="trade_action" value="buy">Comprar a mercado</button>
                 <button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button>
@@ -65,13 +69,15 @@ HTML;
     private static function renderCards(Portfolio $portfolio): string
     {
         return sprintf(
-            '<section class="cards"><div class="metric"><span class="muted">Invertido abierto</span><strong>%s</strong></div><div class="metric"><span class="muted">Valor actual</span><strong>%s</strong></div><div class="metric"><span class="muted">Beneficio latente</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Beneficio realizado</span><strong class="%s">%s</strong></div></section>',
+            '<section class="cards"><div class="metric"><span class="muted">Invertido abierto</span><strong>%s</strong></div><div class="metric"><span class="muted">Valor actual</span><strong>%s</strong></div><div class="metric"><span class="muted">Beneficio latente</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Beneficio realizado</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Rendimiento general (todo el historico)</span><strong class="%s">%s</strong></div></section>',
             self::money($portfolio->getInvestedAmount()),
             self::nullableMoney($portfolio->getMarketValue()),
             self::profitClass($portfolio->getUnrealizedProfit()),
             self::nullableProfit($portfolio->getUnrealizedProfit(), $portfolio->getUnrealizedProfitPercent()),
             self::profitClass($portfolio->getRealizedProfit()),
-            self::money($portfolio->getRealizedProfit())
+            self::money($portfolio->getRealizedProfit()),
+            self::profitClass($portfolio->getOverallProfit()),
+            self::nullableProfit($portfolio->getOverallProfit(), $portfolio->getOverallProfitPercent())
         );
     }
 
@@ -120,11 +126,10 @@ HTML;
         );
     }
 
-    /**
-     * @param list<Transaction> $transactions
-     */
-    private static function renderTransactions(array $transactions): string
+    private static function renderTransactions(Portfolio $portfolio): string
     {
+        $transactions = $portfolio->getTransactions();
+
         if ($transactions === []) {
             return '<div class="muted">Sin operaciones registradas.</div>';
         }
@@ -133,18 +138,30 @@ HTML;
 
         foreach ($transactions as $transaction) {
             $type = $transaction->getType();
+            $profit = $portfolio->getTransactionProfit($transaction);
+            $percent = $portfolio->getTransactionProfitPercent($transaction);
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td class="%s">%s</td><td class="%s">%s</td></tr>',
                 Layout::escape($transaction->getExecutedAt()->format('Y-m-d H:i')),
                 $type === TransactionType::BUY ? 'buy' : 'sell',
                 Layout::escape($type->label()),
+                urlencode($transaction->getTicker()),
                 Layout::escape($transaction->getTicker()),
                 self::number($transaction->getQuantity()),
-                self::money($transaction->getPrice())
+                self::money($transaction->getPrice()),
+                self::profitClass($profit),
+                self::nullableMoney($profit),
+                self::profitClass($profit),
+                self::nullablePercent($percent)
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio</th><th>Beneficio vs. precio actual</th><th>%</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas.</p>';
+    }
+
+    private static function nullablePercent(?float $value): string
+    {
+        return $value === null ? '-' : Layout::formatNumber($value) . '%';
     }
 
     private static function nullableProfit(?float $profit, ?float $percent): string

@@ -12,6 +12,11 @@
 # Logs
 *.log
 
+# Correos registrados por LogMailer (ver versions.md v2.11): pueden
+# contener tokens de verificacion, no deben versionarse.
+/storage/mails/*
+!/storage/mails/.gitkeep
+
 # Archivos temporales
 *.tmp
 *.swp

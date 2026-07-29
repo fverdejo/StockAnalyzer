@@ -82,9 +82,11 @@ HTML;
                 continue;
             }
 
+            $ticker = (string) ($item['ticker'] ?? '');
             $rows[] = sprintf(
-                '<tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>',
-                Layout::escape((string) ($item['ticker'] ?? '')),
+                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%d</td><td>%d</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>',
+                urlencode($ticker),
+                Layout::escape($ticker),
                 (int) ($item['samples'] ?? 0),
                 (int) ($item['buy_signals'] ?? 0),
                 self::nullablePercent($item['avg_buy_forward_return'] ?? null),

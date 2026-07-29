@@ -11,7 +11,9 @@ Esta seccion (y la tabla de progreso de debajo) llevaba sin tocarse desde el `20
 - `versions.md` es el documento con el estado real, detallado, categoria por categoria.
 - `roadmap.md` (este documento) se centra en que falta por hacer y en que orden, no en repetir el estado exacto de cada pieza.
 
-Resumen muy rapido a fecha de esta revision (2026-07-27): la app esta avanzada hasta `v2.3` y cubre tambien cache/persistencia de mercado, universos configurables, filtros/ordenaciones, API JSON, backtesting basico, ranking diario por CLI y noticias/sentimiento por CSV. El detalle exacto esta en `versions.md`.
+Resumen muy rapido a fecha de esta revision (2026-07-29): la app esta avanzada hasta `v2.11` y cubre tambien cache/persistencia de mercado, universos configurables, filtros/busqueda por nombre, API JSON, backtesting basico, ranking diario por CLI y noticias/sentimiento por CSV. El detalle exacto esta en `versions.md`.
+
+La fase pedida directamente por el usuario el mismo dia (`v2.4` a `v2.11`: diseno visual, filtros del Home, cartera con importe en dinero, rentabilidad por operacion, el bug visual de "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro) ya esta implementada. El detalle tecnico completo, incluidas las limitaciones honestas de cada pieza, esta en `versions.md`.
 
 ---
 
@@ -27,7 +29,7 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 Objetivo
 
-Convertir la demo avanzada en una herramienta mas robusta: tests automatizados, alertas/watchlist/exportacion y proveedores oficiales para datos/noticias.
+Con la fase `v2.4` a `v2.11` ya implementada (ver `versions.md`), el siguiente trabajo de valor vuelve a ser el mismo que quedo pendiente tras la segunda fase del 2026-07-27: convertir la demo avanzada en una herramienta mas robusta con tests automatizados, alertas/watchlist/exportacion y proveedores oficiales para datos/noticias.
 
 Orden recomendado (detalle tecnico completo en `versions.md`):
 
@@ -37,7 +39,7 @@ Orden recomendado (detalle tecnico completo en `versions.md`):
 4. Proveedor oficial de noticias o datos fundamentales.
 5. Universos mantenidos automaticamente.
 
-La conexion a base de datos, cache y comandos CLI ya existen.
+Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/`.
 
 ---
 
@@ -345,3 +347,29 @@ Se implementan `v1.1`, `v0.6.3`, `v0.6.4`, `v0.5.4`, `v1.6` y `v1.7` en version 
 - importacion CSV de noticias con sentimiento por palabras clave.
 
 El siguiente trabajo de valor ya no es anadir mas pantallas grandes, sino endurecer calidad: tests, watchlist/alertas, exportacion CSV y proveedores oficiales.
+
+---
+
+## 2026-07-29
+
+El usuario pide una nueva fase de mejoras sobre lo ya implementado (no forma parte del backlog anterior): diseno visual (con Bootstrap como opcion a evaluar), filtros y busqueda del Home, cartera con importe en dinero, rentabilidad por operacion en el historico, un bug visual en "Mi cartera" (mensajes vacios siempre visibles), enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos de detalle mas altos con temporalidades intradia, tooltips educativos ampliados con icono indicador, y verificacion de email obligatoria en el registro. Se planifica como `v2.4` a `v2.11` en `versions.md`.
+
+El mismo dia se implementa toda la fase. Hallazgos durante la implementacion, no previstos en la planificacion inicial:
+
+- El bug de numeracion del ranking (`v2.4`) resulto ser una celda de tabla sin `white-space: nowrap` combinada con `overflow-wrap: anywhere` global, no un problema de fondo del sistema de diseño; se decide no adoptar Bootstrap y arreglarlo con CSS propio.
+- El universo "por defecto" (`v2.5`) en realidad nunca era configurable de verdad: un fallback interno en `Config\UniverseConfig` forzaba siempre `largecap60` aunque se pidiera otro universo o ninguno. Se corrige junto con el nuevo universo `general` y la busqueda por nombre (`Config\CompanyDirectory`).
+- Las acciones fraccionarias (`v2.6`) ya estaban soportadas desde `v2.2` (columna `DECIMAL` y modelos en `float`); solo faltaba la conversion importe -> cantidad y el desglose de rentabilidad por operacion.
+- Los tooltips educativos (`v2.10`) se limitan a la ficha de detalle: el mismo tooltip enriquecido en los chips del ranking del Home quedaria recortado por el `overflow-x: auto` de la tabla.
+- La verificacion de email (`v2.11`) queda funcionalmente completa (migracion, tokens, `AuthService`, rutas, reenvio), pero el envio real de correo depende de configurar un MTA o un mailer SMTP en el servidor; de momento `LogMailer` deja los correos en `storage/mails/`.
+
+Detalle tecnico completo, decisiones de arquitectura y limitaciones de cada version en `versions.md`.
+
+---
+
+## 2026-07-29 (segunda fase: correcciones tras probar v2.5 y v2.11)
+
+Al probar lo anterior, el usuario reporta tres problemas concretos, que se corrigen el mismo dia:
+
+- El universo por defecto lanzaba un ticker invalido (`.MC`) contra Yahoo Finance. Causa: el emparejamiento de nombre de empresa de `v2.5` (`Utils\TickerNormalizer`) usaba limites de palabra que trataban "." como frontera valida, asi que el alias "Aena" coincidia dentro del propio ticker "AENA.MC" (y "BBVA" dentro de "BBVA.MC"), cortandolo a ".MC". Se corrige exigiendo que no haya letra/numero/"."/"-" alrededor de la coincidencia. Documentado como `v2.5.2` en `versions.md`.
+- El campo de busqueda del Home mostraba siempre el universo completo (60 tickers) en vez de aparecer vacio, y no se limpiaba tras pulsar "Analizar". Se corrige para que el campo se muestre siempre vacio (los enlaces internos siguen funcionando igual). Tambien documentado en `v2.5.2`.
+- El usuario no tiene todavia un servidor de correo real y pidio poder ver el correo de verificacion de `v2.11` en Mailpit, ya que el proyecto esta montado con DDEV. Se descubre que DDEV ya captura `mail()` hacia Mailpit sin configuracion adicional (`sendmail_path` apunta a `mailpit sendmail` en el contenedor web); solo faltaba anadir la cabecera `From` a `LogMailer` para que se vea bien. Verificado enviando un correo real y comprobandolo en la API de Mailpit. Documentado como `v2.11.1` en `versions.md`.

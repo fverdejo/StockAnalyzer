@@ -13,9 +13,10 @@ class AccountPage
         $token = Layout::escape($csrfToken);
 
         $body = sprintf(
-            '<section class="panel"><h2>Mi cuenta</h2><div class="values-grid">%s%s</div><form method="post" action="?page=logout" class="inline-form account-actions"><input type="hidden" name="csrf_token" value="%s"><button type="submit" class="danger-button">Cerrar sesion</button></form></section>',
+            '<section class="panel"><h2>Mi cuenta</h2><div class="values-grid">%s%s%s</div><form method="post" action="?page=logout" class="inline-form account-actions"><input type="hidden" name="csrf_token" value="%s"><button type="submit" class="danger-button">Cerrar sesion</button></form></section>',
             self::value('Email', $user->getEmail()),
             self::value('Fecha de alta', $user->getCreatedAt()->format('Y-m-d H:i')),
+            self::value('Email verificado', $user->isEmailVerified() ? 'Si' : 'No'),
             $token
         );
 

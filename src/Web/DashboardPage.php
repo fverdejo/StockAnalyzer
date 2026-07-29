@@ -28,19 +28,20 @@ class DashboardPage
         array $results,
         array $errors,
         ?User $currentUser = null,
-        string $selectedUniverse = 'largecap60',
+        string $selectedUniverse = 'general',
         array $universes = [],
-        string $selectedRecommendation = '',
-        string $selectedSort = 'score_desc'
+        string $selectedRecommendation = ''
     ): string
     {
-        $tickerValue = Layout::escape($rawTickers);
+        // El campo de busqueda se muestra siempre vacio (ver versions.md v2.5.1):
+        // es un campo de "busqueda puntual", no de "lo que estoy viendo ahora".
+        // $rawTickers se sigue usando para construir los enlaces de la pagina
+        // (detalle, API, paginacion), solo no se vuelca en el input visible.
         $universeOptions = self::renderUniverseOptions($universes, $selectedUniverse);
         $recommendationOptions = self::renderRecommendationOptions($selectedRecommendation);
-        $sortOptions = self::renderSortOptions($selectedSort);
-        $apiHref = '?page=api&universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation) . '&sort=' . urlencode($selectedSort);
+        $apiHref = '?page=api&universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
         $errorsHtml = self::renderErrors($errors);
-        $cards = self::renderCards($results);
+        $cards = self::renderCards($results, $rawTickers);
         $topBuys = self::renderRecommendationList($results, ['STRONG BUY', 'BUY'], $rawTickers);
         $holds = self::renderRecommendationList($results, ['HOLD'], $rawTickers);
         $topSells = self::renderRecommendationList($results, ['SELL', 'STRONG SELL'], $rawTickers);
@@ -51,8 +52,8 @@ class DashboardPage
         <section class="panel">
             <form method="get" class="trade-form">
                 <div>
-                    <label for="tickers">Universo de analisis</label>
-                    <input id="tickers" name="tickers" value="{$tickerValue}" placeholder="AAPL MSFT NVDA AMZN GOOGL" autocomplete="off">
+                    <label for="tickers">Ticker o nombre de empresa</label>
+                    <input id="tickers" name="tickers" value="" placeholder="AAPL, NVDA, Endesa, Santander..." autocomplete="off">
                 </div>
                 <div>
                     <label for="universe">Lista</label>
@@ -61,10 +62,6 @@ class DashboardPage
                 <div>
                     <label for="recommendation">Filtro</label>
                     <select id="recommendation" name="recommendation">{$recommendationOptions}</select>
-                </div>
-                <div>
-                    <label for="sort">Orden</label>
-                    <select id="sort" name="sort">{$sortOptions}</select>
                 </div>
                 <button type="submit">Analizar</button>
             </form>
@@ -112,7 +109,7 @@ class DashboardPage
         </section>
 HTML;
 
-        return Layout::render('Stock Analyzer', "<div class=\"version\">v2.3 - {$updatedAt}</div>", $body, $currentUser, 'dashboard');
+        return Layout::render('Stock Analyzer', "<div class=\"version\">v2.11 - {$updatedAt}</div>", $body, $currentUser, 'dashboard');
     }
 
     /**
@@ -136,7 +133,7 @@ HTML;
             $detailHref = self::detailHref($company->getTicker(), $rawTickers);
 
             $rows[] = sprintf(
-                '<tr><td>%d</td><td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s %s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td><div class="chips">%s</div></td><td><div class="chips">%s</div></td></tr>',
+                '<tr><td class="rank-cell">%d</td><td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s %s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td><div class="chips">%s</div></td><td><div class="chips">%s</div></td></tr>',
                 $position + 1,
                 $detailHref,
                 Layout::escape($company->getTicker()),
@@ -168,7 +165,7 @@ HTML;
     /**
      * @param list<StockAnalysis> $results
      */
-    private static function renderCards(array $results): string
+    private static function renderCards(array $results, string $rawTickers): string
     {
         $count = count($results);
         $averagePercentage = $count > 0 ? array_sum(array_map(
@@ -180,13 +177,20 @@ HTML;
             $results,
             static fn (StockAnalysis $analysis): bool => in_array($analysis->getScore()->getRecommendation(), ['STRONG BUY', 'BUY'], true)
         ));
+        $bestTicker = $best instanceof StockAnalysis
+            ? sprintf(
+                '<a class="ticker-link" href="%s">%s</a>',
+                self::detailHref($best->getStock()->getCompany()->getTicker(), $rawTickers),
+                Layout::escape($best->getStock()->getCompany()->getTicker())
+            )
+            : '-';
 
         return sprintf(
             '<section class="cards"><div class="metric"><span class="muted">Analizadas</span><strong>%d</strong></div><div class="metric"><span class="muted">Score medio</span><strong>%s%%</strong></div><div class="metric"><span class="muted">Candidatas compra</span><strong>%d</strong></div><div class="metric"><span class="muted">Mejor accion</span><strong>%s</strong></div></section>',
             $count,
             Layout::formatNumber($averagePercentage),
             $buyCount,
-            $best instanceof StockAnalysis ? Layout::escape($best->getStock()->getCompany()->getTicker()) : '-'
+            $bestTicker
         );
     }
 
@@ -263,17 +267,6 @@ HTML;
         ];
 
         return self::options($options, $selected);
-    }
-
-    private static function renderSortOptions(string $selected): string
-    {
-        return self::options([
-            'score_desc' => 'Score desc.',
-            'score_asc' => 'Score asc.',
-            'ticker_asc' => 'Ticker A-Z',
-            'price_desc' => 'Precio desc.',
-            'price_asc' => 'Precio asc.',
-        ], $selected);
     }
 
     /**

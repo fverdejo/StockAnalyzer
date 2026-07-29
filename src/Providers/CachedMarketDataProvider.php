@@ -68,4 +68,15 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         return $quotes;
     }
+
+    /**
+     * Sin cache: las velas intradia (v2.9) pierden su valor si se sirven
+     * con retraso, y su volumen de peticiones es mucho menor que el
+     * ranking diario (solo se piden cuando alguien abre la temporalidad
+     * intradia en la ficha de detalle).
+     */
+    public function getIntradayQuotes(string $ticker, string $interval): array
+    {
+        return $this->inner->getIntradayQuotes(strtoupper(trim($ticker)), $interval);
+    }
 }

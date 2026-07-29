@@ -7,7 +7,7 @@ namespace StockAnalyzer\Config;
 class UniverseConfig
 {
     private const CONFIG_PATH = __DIR__ . '/../../config/universes.php';
-    private const FALLBACK_KEY = 'largecap60';
+    private const FALLBACK_KEY = 'general';
 
     /**
      * @return array<string,array{label: string, tickers: list<string>}>
@@ -59,6 +59,6 @@ class UniverseConfig
     {
         $universes = $this->all();
 
-        return $universes[$key]['label'] ?? $universes[self::FALLBACK_KEY]['label'] ?? 'EEUU liquidas 60';
+        return $universes[$key]['label'] ?? $universes[self::FALLBACK_KEY]['label'] ?? 'Busqueda general (por defecto)';
     }
 }

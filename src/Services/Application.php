@@ -9,11 +9,13 @@ use StockAnalyzer\Analyzer\NewsAnalyzer;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\Auth\AuthService;
 use StockAnalyzer\Auth\CsrfToken;
+use StockAnalyzer\Config\CompanyDirectory;
 use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Infrastructure\Database\Connection;
+use StockAnalyzer\Infrastructure\Mail\LogMailer;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
@@ -43,8 +45,8 @@ use Throwable;
  */
 class Application
 {
-    private const DEFAULT_UNIVERSE = 'largecap60';
-    private const DEFAULT_TICKERS = 'AAPL MSFT NVDA AMZN GOOGL META TSLA AVGO BRK-B JPM LLY V XOM UNH MA COST NFLX WMT PG JNJ HD ABBV BAC KO CRM ORCL CVX MRK AMD PEP LIN TMO ACN MCD CSCO ADBE IBM GE QCOM WFC CAT TXN PM INTU AMGN DIS GS ISRG VZ NOW RTX BKNG SPGI PFE NKE HON LOW UPS BA SBUX';
+    private const DEFAULT_UNIVERSE = 'general';
+    private const DEFAULT_TICKERS = 'AAPL MSFT NVDA AMZN GOOGL META TSLA AVGO BRK-B JPM LLY V XOM UNH MA COST NFLX WMT PG JNJ HD ABBV BAC KO CRM ORCL CVX MRK AMD PEP LIN TMO ACN MCD CSCO ADBE IBM QCOM WFC CAT TXN INTU AMGN DIS GS ISRG VZ NOW PFE NKE SAN.MC BBVA.MC IBE.MC ITX.MC REP.MC TEF.MC FER.MC AMS.MC CABK.MC ELE.MC';
 
     private Connection $connection;
     private MarketDataProviderInterface $marketDataProvider;
@@ -71,11 +73,11 @@ class Application
             $this->scoreCalculator,
             new TechnicalAnalyzer()
         );
-        $this->tickerNormalizer = new TickerNormalizer();
+        $this->tickerNormalizer = new TickerNormalizer(CompanyDirectory::names());
         $this->explainer = new RecommendationExplainer();
         $this->jsonPresenter = new AnalysisJsonPresenter();
 
-        $this->auth = new AuthService(new UserRepository($this->connection));
+        $this->auth = new AuthService(new UserRepository($this->connection), new LogMailer());
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
             $this->marketDataProvider
@@ -93,13 +95,19 @@ class Application
         }
 
         if ($page === 'login') {
-            echo LoginPage::render(null, '', CsrfToken::get());
+            echo LoginPage::render(null, '', CsrfToken::get(), $this->queryString('message') ?: null);
 
             return;
         }
 
         if ($page === 'register') {
             echo RegisterPage::render(null, '', CsrfToken::get());
+
+            return;
+        }
+
+        if ($page === 'verify-email') {
+            echo $this->renderVerifyEmail();
 
             return;
         }
@@ -134,6 +142,12 @@ class Application
             return;
         }
 
+        if ($page === 'intraday') {
+            echo $this->renderIntraday();
+
+            return;
+        }
+
         $requestedTicker = $_GET['ticker'] ?? null;
 
         if (is_string($requestedTicker) && trim($requestedTicker) !== '') {
@@ -150,6 +164,7 @@ class Application
         return match ($page) {
             'login' => $this->handleLogin(),
             'register' => $this->handleRegister(),
+            'resend-verification' => $this->handleResendVerification(),
             'logout' => $this->handleLogout(),
             'portfolio', 'trade' => $this->handleTrade(),
             'provider' => $this->handleProviderSave(),
@@ -161,9 +176,8 @@ class Application
     {
         [$rawTickers, $tickers, $universe] = $this->resolveTickerRequest();
         $recommendation = $this->queryString('recommendation');
-        $sort = $this->queryString('sort') ?: 'score_desc';
         [$results, $errors] = $this->analyzeTickers($tickers);
-        $results = $this->filterAndSort($results, $recommendation, $sort);
+        $results = $this->filterAndSort($results, $recommendation, 'score_desc');
 
         return DashboardPage::render(
             $rawTickers,
@@ -172,8 +186,7 @@ class Application
             $this->auth->currentUser(),
             $universe,
             $this->universeConfig->all(),
-            $recommendation,
-            $sort
+            $recommendation
         );
     }
 
@@ -231,27 +244,30 @@ class Application
     private function resolveTickerRequest(): array
     {
         $requestedUniverse = $this->queryString('universe');
-        $universe = $this->universeConfig->tickers($requestedUniverse) !== []
-            ? $requestedUniverse
-            : self::DEFAULT_UNIVERSE;
         $tickers = $_GET['tickers'] ?? '';
+        $hasManualTickers = is_string($tickers) && trim($tickers) !== '';
 
-        if (is_string($tickers) && trim($tickers) !== '') {
-            if ($this->isKnownUniverseRaw($tickers) && $universe !== '') {
-                $fromUniverse = $this->universeConfig->tickers($universe);
+        if ($hasManualTickers) {
+            if ($this->isKnownUniverseRaw($tickers) && $this->isValidUniverseKey($requestedUniverse)) {
+                $fromUniverse = $this->universeConfig->tickers($requestedUniverse);
                 $raw = $fromUniverse !== [] ? implode(' ', $fromUniverse) : $tickers;
 
-                return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
+                return [$raw, $this->tickerNormalizer->normalize($raw), $requestedUniverse];
             }
 
-            $raw = $tickers;
-            return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
+            return [$tickers, $this->tickerNormalizer->normalize($tickers), ''];
         }
 
+        $universe = $this->isValidUniverseKey($requestedUniverse) ? $requestedUniverse : self::DEFAULT_UNIVERSE;
         $fromUniverse = $this->universeConfig->tickers($universe);
         $raw = $fromUniverse !== [] ? implode(' ', $fromUniverse) : self::DEFAULT_TICKERS;
 
         return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
+    }
+
+    private function isValidUniverseKey(string $key): bool
+    {
+        return $key !== '' && array_key_exists($key, $this->universeConfig->all());
     }
 
     private function isKnownUniverseRaw(string $rawTickers): bool
@@ -287,9 +303,33 @@ class Application
         try {
             $this->assertValidCsrf();
             $this->auth->register($email, $this->postString('password'));
-            $this->redirect('?page=account');
+            $this->redirect('?page=login&message=' . urlencode('Cuenta creada. Revisa tu correo (' . $email . ') y pulsa el enlace de confirmacion antes de iniciar sesion.'));
         } catch (Throwable $exception) {
             return RegisterPage::render($exception->getMessage(), $email, CsrfToken::get());
+        }
+    }
+
+    private function handleResendVerification(): string
+    {
+        $email = $this->postString('email');
+
+        try {
+            $this->assertValidCsrf();
+            $this->auth->resendVerification($email);
+        } catch (Throwable) {
+            // Silencioso a proposito: no revelar si el email existe o no.
+        }
+
+        $this->redirect('?page=login&message=' . urlencode('Si la cuenta existe y no esta verificada, se ha reenviado el correo de confirmacion.'));
+    }
+
+    private function renderVerifyEmail(): string
+    {
+        try {
+            $this->auth->verifyEmail($this->queryString('token'));
+            $this->redirect('?page=login&message=' . urlencode('Email confirmado. Ya puedes iniciar sesion.'));
+        } catch (Throwable $exception) {
+            return LoginPage::render($exception->getMessage(), '', CsrfToken::get());
         }
     }
 
@@ -309,19 +349,19 @@ class Application
         try {
             $this->assertValidCsrf();
             $user = $this->auth->requireUser();
-            $ticker = $this->postString('ticker');
-            $quantity = $this->postFloat('quantity');
+            $ticker = $this->resolveTradeTicker($this->postString('ticker'));
             $price = $this->portfolioService->getCurrentMarketPrice($ticker);
+            $quantity = $this->resolveTradeQuantity($price);
             $action = $this->postString('trade_action');
 
             if ($action === 'buy') {
                 $this->portfolioService->buy($user, $ticker, $quantity, $price);
-                $this->redirect('?page=portfolio&message=' . urlencode(sprintf('Compra registrada: %s x %s.', $this->fmt($quantity), strtoupper($ticker))));
+                $this->redirect('?page=portfolio&message=' . urlencode(sprintf('Compra registrada: %s x %s (%s invertidos).', $this->fmt($quantity), strtoupper($ticker), $this->fmt($quantity * $price))));
             }
 
             if ($action === 'sell') {
                 $this->portfolioService->sell($user, $ticker, $quantity, $price);
-                $this->redirect('?page=portfolio&message=' . urlencode(sprintf('Venta registrada: %s x %s.', $this->fmt($quantity), strtoupper($ticker))));
+                $this->redirect('?page=portfolio&message=' . urlencode(sprintf('Venta registrada: %s x %s (%s recibidos).', $this->fmt($quantity), strtoupper($ticker), $this->fmt($quantity * $price))));
             }
 
             throw new \RuntimeException('Operacion no soportada.');
@@ -458,6 +498,51 @@ class Application
     }
 
     /**
+     * Endpoint AJAX ligero (ver versions.md v2.9) usado por el selector de
+     * temporalidad intradia de StockDetailPage: no pasa por
+     * CachedMarketDataProvider (los intervalos intradia no se cachean) y
+     * devuelve solo lo que el grafico necesita, no un StockAnalysis
+     * completo.
+     */
+    private function renderIntraday(): string
+    {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $ticker = $this->queryString('ticker');
+        $interval = $this->queryString('interval') ?: '5m';
+
+        if (!in_array($interval, ['1m', '5m', '15m', '1h'], true)) {
+            $interval = '5m';
+        }
+
+        try {
+            $quotes = $this->marketDataProvider->getIntradayQuotes($ticker, $interval);
+        } catch (Throwable $exception) {
+            http_response_code(502);
+
+            return json_encode(['error' => $exception->getMessage()], JSON_UNESCAPED_SLASHES) ?: '{}';
+        }
+
+        $multiDay = count(array_unique(array_map(
+            static fn ($quote) => $quote->getDate()->format('Y-m-d'),
+            $quotes
+        ))) > 1;
+
+        $payload = [
+            'ticker' => strtoupper($ticker),
+            'interval' => $interval,
+            'labels' => array_map(
+                static fn ($quote) => $quote->getDate()->format($multiDay ? 'd/m H:i' : 'H:i'),
+                $quotes
+            ),
+            'closes' => array_map(static fn ($quote) => $quote->getClose(), $quotes),
+            'volumes' => array_map(static fn ($quote) => $quote->getVolume(), $quotes),
+        ];
+
+        return json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '{}';
+    }
+
+    /**
      * @param list<StockAnalysis> $results
      * @return list<StockAnalysis>
      */
@@ -523,6 +608,36 @@ class Application
         $value = str_replace(',', '.', $this->postString($key));
 
         return (float) $value;
+    }
+
+    /**
+     * El formulario de compra/venta acepta ticker o nombre de empresa
+     * (ver Utils\TickerNormalizer / Config\CompanyDirectory, v2.5); aqui se
+     * reutiliza para que "Endesa" tambien funcione al operar, no solo al
+     * buscar en el Home.
+     */
+    private function resolveTradeTicker(string $rawTicker): string
+    {
+        $resolved = $this->tickerNormalizer->normalize($rawTicker)[0] ?? '';
+
+        return $resolved !== '' ? $resolved : strtoupper(trim($rawTicker));
+    }
+
+    /**
+     * Si se indica un importe en dinero, se calcula la cantidad de
+     * acciones equivalente al precio actual (permite comprar fracciones,
+     * ver versions.md v2.6). El importe tiene prioridad sobre la cantidad
+     * si ambos campos llegan rellenos.
+     */
+    private function resolveTradeQuantity(float $price): float
+    {
+        $amount = $this->postFloat('amount');
+
+        if ($amount > 0) {
+            return round($amount / $price, 6);
+        }
+
+        return $this->postFloat('quantity');
     }
 
     private function fmt(float $value): string

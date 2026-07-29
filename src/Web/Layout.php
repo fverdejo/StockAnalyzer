@@ -475,9 +475,25 @@ class Layout
             white-space: nowrap;
         }
 
+        tbody tr {
+            transition: background-color 0.12s ease;
+        }
+
+        tbody tr:hover {
+            background: var(--surface-alt);
+        }
+
         .ticker,
         .score {
             font-weight: 800;
+        }
+
+        .rank-cell {
+            white-space: nowrap;
+            text-align: right;
+            width: 1%;
+            color: var(--muted);
+            font-weight: 700;
         }
 
         a.ticker-link {
@@ -556,6 +572,49 @@ class Layout
             margin-bottom: 4px;
         }
 
+        .info-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+            font-size: 10px;
+            font-weight: 800;
+            font-style: italic;
+            font-family: Georgia, 'Times New Roman', serif;
+            text-transform: none;
+            cursor: help;
+            position: relative;
+            vertical-align: middle;
+        }
+
+        .info-icon:hover::after,
+        .info-icon:focus-visible::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 50%;
+            bottom: 130%;
+            transform: translateX(-50%);
+            background: #17202a;
+            color: #ffffff;
+            padding: 9px 11px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 400;
+            font-style: normal;
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.45;
+            white-space: normal;
+            width: 280px;
+            max-width: min(320px, 80vw);
+            z-index: 40;
+            box-shadow: var(--shadow);
+            text-transform: none;
+        }
+
         .value-box strong {
             font-size: 18px;
             line-height: 1.25;
@@ -627,6 +686,21 @@ class Layout
             background: var(--accent);
             border-color: var(--accent);
             color: #ffffff;
+        }
+
+        .chart-toolbar button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        .chart-canvas-tall {
+            position: relative;
+            height: 420px;
+        }
+
+        .chart-canvas-medium {
+            position: relative;
+            height: 200px;
         }
 
         .panel-note {
@@ -800,6 +874,14 @@ class Layout
 
             table {
                 min-width: 720px;
+            }
+
+            .chart-canvas-tall {
+                height: 300px;
+            }
+
+            .chart-canvas-medium {
+                height: 160px;
             }
         }
     </style>

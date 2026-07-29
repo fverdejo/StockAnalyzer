@@ -73,7 +73,7 @@ Construir un motor que analice automáticamente cientos de acciones y genere dia
 
 ## Frontend
 
-- CSS propio (sin Bootstrap: `Web/Layout.php` define una hoja de estilos compartida por todas las páginas; se decidió así al implementar `v0.6`/`v1.5` para no añadir una dependencia de frontend a un proyecto sin build step).
+- CSS propio (sin Bootstrap: `Web/Layout.php` define una hoja de estilos compartida por todas las páginas; se decidió así al implementar `v0.6`/`v1.5` para no añadir una dependencia de frontend a un proyecto sin build step). Esta decisión se revisó en `v2.4` (ver `versions.md`) a raíz de un bug visual en la tabla de ranking, y se mantiene: el bug no era un problema de fondo del sistema de diseño sino una celda sin `white-space: nowrap`, así que no compensaba el riesgo de sustituir un sistema propio ya coherente por Bootstrap en todas las pantallas.
 - Chart.js (vía CDN, no como dependencia de Composer).
 
 ---
@@ -86,7 +86,7 @@ El proyecto estará dividido en capas.
 src/
 
 Analyzer/
-Auth/            (v2.1: registro, login, sesión)
+Auth/            (v2.1: registro, login, sesión; v2.11: verificación de email)
 Config/
 DTO/
 Enums/
@@ -239,6 +239,8 @@ Portfolio (conjunto de Holding de un usuario)
 ```
 
 `Transaction` es el dato real guardado; `Holding` y `Portfolio` se calculan a partir de él, no se guardan como estado aparte. Así el historial de operaciones no se pierde nunca.
+
+`Transaction.cantidad` admite valores decimales (acciones fraccionarias), no solo enteros: ver `versions.md` v2.6. El formulario de compra/venta puede recibir un importe en dinero en vez de una cantidad de acciones; la `Transaction` siempre guarda cantidad y precio, nunca el importe como campo aparte.
 
 ---
 

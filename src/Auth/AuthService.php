@@ -6,9 +6,16 @@ namespace StockAnalyzer\Auth;
 
 use InvalidArgumentException;
 use RuntimeException;
+use StockAnalyzer\Interfaces\MailerInterface;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Repository\UserRepository;
 
+/**
+ * Desde v2.11, register() ya no inicia sesion automaticamente: crea la
+ * cuenta sin verificar, envia un correo de confirmacion con un token, y
+ * login() rechaza el acceso hasta que ese token se confirme via
+ * verifyEmail(). Antes de v2.11, registrarse abria sesion al instante.
+ */
 class AuthService
 {
     private const SESSION_KEY = 'stock_analyzer_user';
@@ -16,11 +23,18 @@ class AuthService
     private const MAX_ATTEMPTS = 8;
 
     public function __construct(
-        private readonly UserRepository $users
+        private readonly UserRepository $users,
+        private readonly MailerInterface $mailer,
+        private readonly string $verificationBaseUrl = '?page=verify-email'
     ) {
         $this->ensureSessionStarted();
     }
 
+    /**
+     * Crea la cuenta pendiente de verificar y envia el correo de
+     * confirmacion. No inicia sesion: el usuario debe confirmar el email
+     * antes de poder entrar (ver login()).
+     */
     public function register(string $email, string $password): User
     {
         $email = $this->normalizeEmail($email);
@@ -37,8 +51,9 @@ class AuthService
             throw new InvalidArgumentException('Ya existe una cuenta con ese email.');
         }
 
-        $user = $this->users->create($email, password_hash($password, PASSWORD_DEFAULT));
-        $this->setCurrentUser($user);
+        $token = $this->generateToken();
+        $user = $this->users->create($email, password_hash($password, PASSWORD_DEFAULT), $token);
+        $this->sendVerificationEmail($email, $token);
 
         return $user;
     }
@@ -57,10 +72,72 @@ class AuthService
             throw new InvalidArgumentException('Email o contrasena incorrectos.');
         }
 
+        if (!$credentials['user']->isEmailVerified()) {
+            throw new RuntimeException('Todavia no has confirmado tu email. Revisa tu correo (o pide reenviarlo) antes de iniciar sesion.');
+        }
+
         $_SESSION[self::ATTEMPTS_KEY] = 0;
         $this->setCurrentUser($credentials['user']);
 
         return $credentials['user'];
+    }
+
+    /**
+     * Confirma la cuenta a partir del token del enlace de verificacion.
+     */
+    public function verifyEmail(string $token): void
+    {
+        $token = trim($token);
+
+        if ($token === '') {
+            throw new InvalidArgumentException('Enlace de verificacion invalido.');
+        }
+
+        $pending = $this->users->findPendingVerification($token);
+
+        if ($pending === null) {
+            throw new InvalidArgumentException('El enlace de verificacion no es valido o ya se ha usado.');
+        }
+
+        if ($pending['expires_at'] < new \DateTimeImmutable()) {
+            throw new InvalidArgumentException('El enlace de verificacion ha caducado. Pide que se reenvie el correo.');
+        }
+
+        $this->users->markEmailVerified($pending['id']);
+    }
+
+    /**
+     * Reenvia el correo de confirmacion. No revela si el email existe o
+     * no (siempre "silencioso") para no filtrar que cuentas estan
+     * registradas a quien no las conoce.
+     */
+    public function resendVerification(string $email): void
+    {
+        $email = $this->normalizeEmail($email);
+        $token = $this->generateToken();
+        $user = $this->users->regenerateVerificationToken($email, $token);
+
+        if ($user instanceof User) {
+            $this->sendVerificationEmail($email, $token);
+        }
+    }
+
+    private function sendVerificationEmail(string $email, string $token): void
+    {
+        $link = $this->verificationBaseUrl . '&token=' . urlencode($token);
+        $body = "Hola,\n\nConfirma tu cuenta de Stock Analyzer pulsando este enlace (caduca en 24 horas):\n\n{$link}\n\nSi no has creado esta cuenta, ignora este correo.";
+
+        try {
+            $this->mailer->send($email, 'Confirma tu cuenta de Stock Analyzer', $body);
+        } catch (\Throwable) {
+            // El registro no debe fallar solo porque el envio de correo falle;
+            // el usuario siempre puede pedir un reenvio mas tarde.
+        }
+    }
+
+    private function generateToken(): string
+    {
+        return bin2hex(random_bytes(32));
     }
 
     public function logout(): void
@@ -79,7 +156,8 @@ class AuthService
         return new User(
             (int) ($stored['id'] ?? 0),
             (string) ($stored['email'] ?? ''),
-            new \DateTimeImmutable((string) ($stored['created_at'] ?? 'now'))
+            new \DateTimeImmutable((string) ($stored['created_at'] ?? 'now')),
+            isset($stored['email_verified_at']) ? new \DateTimeImmutable((string) $stored['email_verified_at']) : null
         );
     }
 
@@ -100,6 +178,7 @@ class AuthService
             'id' => $user->getId(),
             'email' => $user->getEmail(),
             'created_at' => $user->getCreatedAt()->format(DATE_ATOM),
+            'email_verified_at' => $user->getEmailVerifiedAt()?->format(DATE_ATOM),
         ];
     }
 
