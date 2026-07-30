@@ -17,7 +17,8 @@ class StockAnalysis
         private readonly Score $score,
         private readonly TechnicalSnapshot $technicalSnapshot,
         private readonly array $categoryResults,
-        private readonly PriceChartSeries $chartSeries
+        private readonly PriceChartSeries $chartSeries,
+        private readonly ?RiskLevels $riskLevels = null
     ) {
     }
 
@@ -47,5 +48,16 @@ class StockAnalysis
     public function getChartSeries(): PriceChartSeries
     {
         return $this->chartSeries;
+    }
+
+    /**
+     * Stop-loss/objetivo sugeridos basados en ATR14 (ver
+     * Services\RiskLevelsCalculator). Null cuando no hay datos suficientes
+     * para calcularlo de forma fiable (historico insuficiente, ATR14 no
+     * disponible o despreciable frente al precio).
+     */
+    public function getRiskLevels(): ?RiskLevels
+    {
+        return $this->riskLevels;
     }
 }

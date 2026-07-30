@@ -14,7 +14,8 @@ class StockAnalysisService
     public function __construct(
         private readonly MarketDataProviderInterface $marketDataProvider,
         private readonly ScoreCalculator $scoreCalculator,
-        private readonly TechnicalAnalyzer $technicalAnalyzer
+        private readonly TechnicalAnalyzer $technicalAnalyzer,
+        private readonly RiskLevelsCalculator $riskLevelsCalculator
     ) {
     }
 
@@ -25,13 +26,15 @@ class StockAnalysisService
         $technicalSnapshot = $this->technicalAnalyzer->analyze($history);
         $chartSeries = $this->technicalAnalyzer->buildChartSeries($history);
         $scoreResult = $this->scoreCalculator->calculate($stock, $technicalSnapshot);
+        $riskLevels = $this->riskLevelsCalculator->compute($technicalSnapshot, $stock->getQuote()->getPrice());
 
         return new StockAnalysis(
             $stock,
             $scoreResult->getScore(),
             $technicalSnapshot,
             $scoreResult->getCategoryResults(),
-            $chartSeries
+            $chartSeries,
+            $riskLevels
         );
     }
 }

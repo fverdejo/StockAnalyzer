@@ -80,9 +80,19 @@ class StockDetailPage
             $explanation->getNeutrals()
         );
 
+        $riskLevels = $analysis->getRiskLevels();
+        $riskLevelsBoxes = $riskLevels !== null ? [
+            self::valueBox('Stop sugerido', Layout::formatNumber($riskLevels->getStopLoss()), 'value-box-risk'),
+            self::valueBox('Objetivo sugerido', Layout::formatNumber($riskLevels->getTarget()), 'value-box-target'),
+        ] : [];
+
+        $riskLevelsNote = $riskLevels !== null
+            ? '<p class="muted panel-note">Stop y objetivo sugeridos: referencia informativa de gestion de riesgo calculada a partir de la volatilidad historica (ATR14), no una recomendacion de inversion. No indican que el precio vaya a alcanzarlos.</p>'
+            : '';
+
         $technicalValues = sprintf(
-            '<section class="panel"><h2>Indicadores tecnicos</h2><div class="values-grid">%s</div></section>',
-            implode('', [
+            '<section class="panel"><h2>Indicadores tecnicos</h2><div class="values-grid">%s</div>%s</section>',
+            implode('', array_merge([
                 self::valueBox('Precio', Layout::formatNumber($quote->getPrice())),
                 self::valueBox('SMA 20', Layout::formatNullable($technical->getSma20())),
                 self::valueBox('SMA 50', Layout::formatNullable($technical->getSma50())),
@@ -95,6 +105,7 @@ class StockDetailPage
                 self::valueBox('Bollinger superior', Layout::formatNullable($technical->getBollingerUpper())),
                 self::valueBox('Bollinger inferior', Layout::formatNullable($technical->getBollingerLower())),
                 self::valueBox('ATR (14)', Layout::formatNullable($technical->getAtr14())),
+            ], $riskLevelsBoxes, [
                 self::valueBox('Momentum 30d', self::percentOrDash($technical->getMomentum30())),
                 self::valueBox('Volatilidad 20d', self::percentOrDash($technical->getVolatility20())),
                 self::valueBox('Volumen ultima sesion', $technical->getLastVolume() !== null ? number_format($technical->getLastVolume(), 0, ',', '.') : '-'),
@@ -102,7 +113,8 @@ class StockDetailPage
                 self::valueBox('Maximo (periodo)', Layout::formatNullable($technical->getHigh52w())),
                 self::valueBox('Minimo (periodo)', Layout::formatNullable($technical->getLow52w())),
                 self::valueBox('Sesiones analizadas', (string) $technical->getHistoryCount()),
-            ])
+            ])),
+            $riskLevelsNote
         );
 
         $fundamentalValues = sprintf(
@@ -211,6 +223,15 @@ class StockDetailPage
         $bbUpper = self::jsonFor($series->getBollingerUpper());
         $bbLower = self::jsonFor($series->getBollingerLower());
         $volumes = self::jsonFor($series->getVolumes());
+
+        // Lineas horizontales de stop-loss/objetivo (ver DTO\RiskLevels):
+        // valores constantes, no series por fecha, asi que se pasan como
+        // escalares y se repiten para cada etiqueta visible en JS, en vez
+        // de generar un array del tamano del historico completo aqui.
+        $riskLevels = $analysis->getRiskLevels();
+        $stopLossJson = $riskLevels !== null ? json_encode($riskLevels->getStopLoss()) : 'null';
+        $targetJson = $riskLevels !== null ? json_encode($riskLevels->getTarget()) : 'null';
+
         $rawTicker = Layout::escape(rawurlencode($analysis->getStock()->getCompany()->getTicker()));
         $canvasId = 'priceChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
         $volumeCanvasId = 'volumeChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
@@ -255,7 +276,9 @@ class StockDetailPage
                 sma50: {$sma50},
                 bbUpper: {$bbUpper},
                 bbLower: {$bbLower},
-                volumes: {$volumes}
+                volumes: {$volumes},
+                stopLoss: {$stopLossJson},
+                target: {$targetJson}
             };
 
             function sliceSince(cutoff) {
@@ -307,20 +330,43 @@ class StockDetailPage
             var priceChart = null;
             var volumeChart = null;
 
+            // Stop-loss/objetivo: solo se añaden como dataset del grafico
+            // cuando el servicio ha devuelto niveles (ver
+            // Services\RiskLevelsCalculator); si no hay datos suficientes,
+            // simplemente no existen ni en el grafico ni en su leyenda.
+            var stopDatasetIndex = -1;
+            var targetDatasetIndex = -1;
+
+            function flatLine(labels, value) {
+                return labels.map(function () { return value; });
+            }
+
             if (priceCtx && window.Chart) {
+                var priceDatasets = [
+                    { label: 'Maximo', data: current.highs, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                    { label: 'Minimo', data: current.lows, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15, fill: '-1' },
+                    { label: 'Precio', data: current.closes, borderColor: '#0f6b77', borderWidth: 2, pointRadius: 0, tension: 0.15 },
+                    { label: 'SMA20', data: current.sma20, borderColor: '#9a6500', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                    { label: 'SMA50', data: current.sma50, borderColor: '#a23b35', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                    { label: 'Bollinger sup.', data: current.bbUpper, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 },
+                    { label: 'Bollinger inf.', data: current.bbLower, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 }
+                ];
+
+                if (full.stopLoss !== null) {
+                    stopDatasetIndex = priceDatasets.length;
+                    priceDatasets.push({ label: 'Stop sugerido', data: flatLine(current.labels, full.stopLoss), borderColor: '#b42318', borderWidth: 1.5, pointRadius: 0, borderDash: [6, 4], tension: 0 });
+                }
+
+                if (full.target !== null) {
+                    targetDatasetIndex = priceDatasets.length;
+                    priceDatasets.push({ label: 'Objetivo sugerido', data: flatLine(current.labels, full.target), borderColor: '#147a46', borderWidth: 1.5, pointRadius: 0, borderDash: [6, 4], tension: 0 });
+                }
+
                 priceChart = new Chart(priceCtx, {
                     type: 'line',
                     data: {
                         labels: current.labels,
-                        datasets: [
-                            { label: 'Maximo', data: current.highs, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                            { label: 'Minimo', data: current.lows, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15, fill: '-1' },
-                            { label: 'Precio', data: current.closes, borderColor: '#0f6b77', borderWidth: 2, pointRadius: 0, tension: 0.15 },
-                            { label: 'SMA20', data: current.sma20, borderColor: '#9a6500', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                            { label: 'SMA50', data: current.sma50, borderColor: '#a23b35', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                            { label: 'Bollinger sup.', data: current.bbUpper, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 },
-                            { label: 'Bollinger inf.', data: current.bbLower, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 }
-                        ]
+                        datasets: priceDatasets
                     },
                     options: {
                         responsive: true,
@@ -361,6 +407,15 @@ class StockDetailPage
                 priceChart.data.datasets[4].data = next.sma50;
                 priceChart.data.datasets[5].data = next.bbUpper;
                 priceChart.data.datasets[6].data = next.bbLower;
+
+                if (stopDatasetIndex >= 0) {
+                    priceChart.data.datasets[stopDatasetIndex].data = flatLine(next.labels, full.stopLoss);
+                }
+
+                if (targetDatasetIndex >= 0) {
+                    priceChart.data.datasets[targetDatasetIndex].data = flatLine(next.labels, full.target);
+                }
+
                 priceChart.update();
             }
 
@@ -502,10 +557,13 @@ HTML;
         return '<div class="score-bars">' . implode('', $items) . '</div>';
     }
 
-    private static function valueBox(string $label, string $value): string
+    private static function valueBox(string $label, string $value, string $extraClass = ''): string
     {
+        $class = $extraClass === '' ? 'value-box' : 'value-box ' . $extraClass;
+
         return sprintf(
-            '<div class="value-box" title="%s"><span class="muted">%s %s</span><strong>%s</strong></div>',
+            '<div class="%s" title="%s"><span class="muted">%s %s</span><strong>%s</strong></div>',
+            Layout::escape($class),
             Layout::escape(IndicatorGlossary::describe($label)),
             Layout::escape($label),
             self::infoIcon($label),

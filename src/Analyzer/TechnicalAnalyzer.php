@@ -206,9 +206,20 @@ class TechnicalAnalyzer
     }
 
     /**
-     * Average True Range con media simple (no suavizado de Wilder). Es una
-     * simplificacion deliberada: mas facil de razonar y suficientemente
-     * precisa para puntuar riesgo relativo entre acciones.
+     * Average True Range con suavizado de Wilder (equivalente a una EMA de
+     * alpha=1/periodo), no media simple. Cambio deliberado (ver
+     * versions.md): es el estandar de facto cuando el ATR se usa como
+     * nivel de precio accionable (stop-loss/objetivo, ver RiskLevels),
+     * porque evita el salto discontinuo que sufre una SMA cuando un dia
+     * con gap grande sale de la ventana de N sesiones. Afecta al valor
+     * numerico de ATR14 para todos los consumidores existentes
+     * (TechnicalScoreAnalyzer, StockDetailPage, DashboardPage), no solo al
+     * nuevo calculo de niveles de riesgo.
+     *
+     * La serie se "siembra" con la media simple de los primeros $period
+     * true ranges (la formula clasica de Wilder) y a partir de ahi cada
+     * valor se suaviza con el anterior: atr[i] = (atr[i-1] * (period-1) +
+     * trueRange[i]) / period.
      *
      * @param list<float> $highs
      * @param list<float> $lows
@@ -232,9 +243,13 @@ class TechnicalAnalyzer
             );
         }
 
-        $recent = array_slice($trueRanges, -$period);
+        $atr = array_sum(array_slice($trueRanges, 0, $period)) / $period;
 
-        return array_sum($recent) / count($recent);
+        for ($index = $period; $index < count($trueRanges); $index++) {
+            $atr = (($atr * ($period - 1)) + $trueRanges[$index]) / $period;
+        }
+
+        return $atr;
     }
 
     /**

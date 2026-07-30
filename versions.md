@@ -1277,11 +1277,58 @@ En una tendencia alcista confirmada por SMA20 > SMA50, la señal de Bandas de Bo
 
 ---
 
+## v2.19 - Stop-loss y objetivo sugeridos basados en ATR14
+
+Estado: implementado, pendiente de verificar en ddev (ver mas abajo).
+
+Objetivo:
+
+La ficha de detalle mostraba el ATR14 como un dato mas entre los indicadores tecnicos, pero no traducia esa volatilidad en algo accionable para gestionar una posicion (abierta o potencial): a que precio limitar perdidas, a que precio plantearse tomar beneficios. Funcionalidad propuesta y validada por `analista-mercado`, `diseno-usabilidad` y `fiabilidad-datos-mercado` en sesion previa: un stop-loss y un objetivo de precio sugeridos, calculados a partir del ATR14 del propio valor.
+
+Decisiones de arquitectura:
+
+- **Cambio de ATR14 de SMA a suavizado de Wilder** (`Analyzer/TechnicalAnalyzer::atr()`, guardarraya obligatoria de `fiabilidad-datos-mercado`): antes era la media simple de los ultimos 14 true ranges; ahora es el suavizado clasico de Wilder (equivalente a una EMA de alpha=1/14: se siembra con la SMA de los primeros 14 true ranges y despues cada valor se suaviza con el anterior). Es el estandar de facto cuando el ATR se usa como nivel de precio accionable, y evita el salto discontinuo que sufre una SMA cuando un dia con gap grande sale de la ventana de 14 sesiones. **Cambia el valor numerico de ATR14 para todos los consumidores existentes** (`TechnicalScoreAnalyzer::risk()`, el valuebox "ATR (14)" de `StockDetailPage`), no solo para el calculo nuevo: es deliberado y coordinado, documentado en el propio docblock de `atr()`. No afecta a `BacktestingService`, que no usa ATR.
+- **`DTO\RiskLevels`**: DTO inmutable con `stopLoss`/`target` y un constructor privado; se instancia solo mediante el named factory `RiskLevels::compute(float $price, float $atr14, float $multiplier, float $rewardRatio)`, una formula pura (`stopLoss = price - multiplier*atr14`, `target = price + rewardRatio*multiplier*atr14`) sin ninguna comprobacion de "cuando aplicarla". Es una capa aparte que no toca `Score`/`ScoreCalculator`/`ScoreWeights` ni recalcula ninguna puntuacion, igual que `RecommendationExplainer` no recalcula el score.
+- **`Services\RiskLevelsCalculator`**: decide si hay datos suficientes para llamar a `RiskLevels::compute()` y devuelve `null` si no los hay (guardarrayas acordados con `fiabilidad-datos-mercado`): `TechnicalSnapshot::getAtr14()` null, menos de 40 sesiones de historico (umbral mas exigente que el implicito de `atr()`, que ya exige >14), o `atr14/precio < 0,05%` (serie con demasiados huecos/valores planos). La validacion de continuidad de fechas en `YahooParser::parseHistoricalQuotes` queda fuera de alcance, tal y como se acordo.
+- **`Config\RiskLevelsConfig`** + `config/risk_levels.php`: mismo patron que `ScoreWeights`/`config/weights.php` (archivo ausente, con errores, o con valores invalidos cae en los valores por defecto). Valores iniciales: multiplicador de ATR 2,5, ratio riesgo/beneficio 2:1.
+- **`DTO\StockAnalysis`** gana un campo nuevo opcional, `?RiskLevels $riskLevels = null`, calculado en `Services\StockAnalysisService::analyze()` (no en `StockDetailPage`, que solo renderiza) a partir de datos ya presentes en `StockAnalysis` (el `TechnicalSnapshot` y el precio), sin añadir campos a `TechnicalSnapshot` ni a `Score`. `StockAnalysisService` era el unico sitio del codigo que instanciaba `StockAnalysis`, asi que no hizo falta tocar ningun otro consumidor.
+- **UI (`Web/StockDetailPage.php`)**: dos `valueBox()` nuevas ("Stop sugerido"/"Objetivo sugerido") justo despues de "ATR (14)", solo cuando `getRiskLevels()` no es null; `valueBox()` gana un parametro opcional `$extraClass` (`.value-box-risk`/`.value-box-target`, nuevas reglas en `Layout.php` reusando los mismos colores `--bad`/`--good` que ya usa la app en `.buy`/`.sell` y `.signal-positive`/`.signal-negative`). Disclaimer (`<p class="muted panel-note">`) tras `.values-grid`, coherente con el lenguaje ya usado en el footer de `Layout.php` ("Demo educativa..."): dejando claro que es una referencia informativa de gestion de riesgo, no una recomendacion de inversion. El grafico de precio (`renderCharts`) añade dos datasets de linea horizontal constante ("Stop sugerido" en rojo, "Objetivo sugerido" en verde, con `borderDash` para diferenciarlas de la linea de precio); se construyen en JavaScript (`flatLine()`, repite el valor escalar por cada fecha visible) para no tener que generar en PHP un array del tamano del historico completo, y solo se añaden al array de datasets del grafico (y por tanto a su leyenda) cuando el valor no es `null`, incluidas las actualizaciones al cambiar de rango o a velas intradia.
+- **`Web/IndicatorGlossary.php`**: entradas cortas y largas para "Stop sugerido"/"Objetivo sugerido", coherentes con el resto del glosario (que mide, para que sirve, cuando no aparece).
+
+Incluye:
+
+- `Analyzer/TechnicalAnalyzer.php`: `atr()` reescrito con suavizado de Wilder.
+- `config/risk_levels.php`, `Config/RiskLevelsConfig.php`, `DTO/RiskLevels.php`, `Services/RiskLevelsCalculator.php`.
+- `DTO/StockAnalysis.php`: campo `riskLevels` + `getRiskLevels()`.
+- `Services/StockAnalysisService.php`: nueva dependencia `RiskLevelsCalculator`, calculo en `analyze()`.
+- `Services/Application.php`: wiring de `RiskLevelsCalculator`/`RiskLevelsConfig` en la raiz de composicion.
+- `Web/StockDetailPage.php`: `valueBox()` con `$extraClass` opcional, dos valueboxes nuevas condicionales, disclaimer condicional, dos datasets nuevos condicionales en el grafico de precio.
+- `Web/Layout.php`: reglas CSS `.value-box-risk`/`.value-box-target`.
+- `Web/IndicatorGlossary.php`: entradas 'Stop sugerido'/'Objetivo sugerido' (cortas y largas).
+- `tests/Analyzer/TechnicalAnalyzerAtrTest.php`, `tests/DTO/RiskLevelsTest.php`, `tests/Services/RiskLevelsCalculatorTest.php`.
+
+Verificado en ddev con...:
+
+No se pudo levantar ddev ni ejecutar la suite PHPUnit en este entorno (el PHP CLI del sandbox no tiene las extensiones `dom`/`xmlwriter` que exige PHPUnit 11, y no hay permisos para instalarlas). Se verifico en su lugar:
+
+- `php -l` sin errores en todos los ficheros tocados.
+- Calculo de ATR14 (Wilder) reproducido a mano con un historico de 20 sesiones con un "gap" de un solo dia (9 sesiones con true range 2, un dia con true range 31, 9 sesiones mas con true range 2): Wilder da 3,4300345997..., SMA de los ultimos 14 daria 4,0714285714... (serian iguales solo se cambiara la formula, asi que confirma que el cambio es real); mismo calculo reproducido tanto a mano como ejecutando `TechnicalAnalyzer::analyze()` directamente por CLI, con el mismo resultado.
+- `RiskLevels::compute(100.0, 4.0, 2.5, 2.0)` reproducido a mano y por CLI: stop=90, objetivo=120 (multiplicador 2,5 x ATR=4 -> riesgo=10; stop=precio-riesgo; objetivo=precio+2*riesgo).
+- `RiskLevelsCalculator` probado por CLI con los 5 casos limite (datos suficientes, ATR14 null, historico<40, ratio ATR/precio por debajo y por encima del 0,05%): devuelve `null`/niveles calculados como se esperaba en cada caso.
+- `StockDetailPage::render()` ejecutado por CLI con un `StockAnalysis` sintetico, dos veces (con y sin `RiskLevels`): confirmado que los dos `value-box` nuevos y el disclaimer solo aparecen en el HTML cuando hay niveles, y que el chart JS solo añade los datasets de stop/objetivo al array de `datasets` cuando `full.stopLoss`/`full.target` no son `null` (comprobado leyendo el bloque `if` generado, no solo la presencia de texto en el `<script>`).
+- Los 3 tests PHPUnit nuevos (`TechnicalAnalyzerAtrTest`, `RiskLevelsTest`, `RiskLevelsCalculatorTest`) no se pudieron ejecutar con `vendor/bin/phpunit` por la limitacion de extensiones ya descrita, pero replican exactamente los mismos calculos ya verificados manualmente por CLI arriba.
+
+Queda pendiente que el usuario ejecute `vendor/bin/phpunit` en su entorno real (con las extensiones PHP completas) para confirmar que los 3 tests nuevos pasan, y que abra la ficha de detalle de un valor con historico suficiente en ddev para confirmar visualmente el aspecto de las cajas de stop/objetivo y las lineas del grafico.
+
+Resultado esperado:
+
+En la ficha de detalle de cualquier accion con historico suficiente (>=40 sesiones y ATR14 no despreciable), aparecen un stop-loss y un objetivo sugeridos, tanto como valor numerico (con su propio color, rojo/verde) como como linea horizontal en el grafico de precio, utiles tanto para decidir una compra como para gestionar una posicion ya abierta. Cuando no hay datos suficientes, no aparece nada (ni cajas ni lineas ni mensajes de error).
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; se anotan aqui porque encajan de forma natural con `v2.1`/`v2.2` y pueden valer la pena mas adelante. No tienen version asignada.
 
-- **Exportar cartera a CSV.** Mismo mecanismo que la exportacion CSV ya pendiente en `v1.5`, aplicado a la cartera y al historial de operaciones.
-
-Las otras tres ideas que estaban aqui (evolucion de la cartera en el tiempo, watchlist personal, alertas basicas) ya se implementaron: ver `v2.13`, `v2.14` y `v2.15` mas arriba.
+- **Stop/objetivo compactos en Watchlist y Cartera.** Extender el stop-loss/objetivo sugerido (basado en ATR14) de la ficha de detalle a una version resumida (badge o columna corta) en `WatchlistPage.php`/`PortfolioPage.php`, para gestionar posiciones abiertas sin entrar a cada ficha; requiere pensar el formato compacto porque esas tablas ya son densas.
 

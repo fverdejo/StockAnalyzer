@@ -572,6 +572,24 @@ class Layout
             margin-bottom: 4px;
         }
 
+        .value-box-risk {
+            border-color: var(--bad);
+            background: #fdf1ef;
+        }
+
+        .value-box-risk strong {
+            color: var(--bad);
+        }
+
+        .value-box-target {
+            border-color: var(--good);
+            background: #eef8f2;
+        }
+
+        .value-box-target strong {
+            color: var(--good);
+        }
+
         .watch-star {
             background: transparent;
             border: 0;

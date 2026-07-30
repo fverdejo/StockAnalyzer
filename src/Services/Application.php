@@ -11,6 +11,7 @@ use StockAnalyzer\Auth\AuthService;
 use StockAnalyzer\Auth\CsrfToken;
 use StockAnalyzer\Config\CompanyDirectory;
 use StockAnalyzer\Config\ProviderConfig;
+use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
 use StockAnalyzer\DTO\StockAnalysis;
@@ -98,7 +99,8 @@ class Application
         $this->analysisService = new StockAnalysisService(
             $this->marketDataProvider,
             $this->scoreCalculator,
-            new TechnicalAnalyzer()
+            new TechnicalAnalyzer(),
+            new RiskLevelsCalculator(new RiskLevelsConfig())
         );
         $this->tickerNormalizer = new TickerNormalizer(CompanyDirectory::names());
         $this->explainer = new RecommendationExplainer();
