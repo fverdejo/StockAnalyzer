@@ -191,7 +191,7 @@ class StockDetailPage
         }
 
         return sprintf(
-            '<section class="panel"><h2>Operacion simulada</h2><p class="muted panel-note">Indica cantidad de acciones (admite decimales) o un importe en dinero; el importe tiene prioridad si rellenas ambos.</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en dinero</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form></section>',
+            '<section class="panel"><h2>Operacion simulada</h2><p class="muted panel-note">Indica cantidad de acciones (admite decimales) o un importe en dinero; el importe tiene prioridad si rellenas ambos. Si dejas el precio en blanco se usa el precio de mercado actual; indicalo para registrar una compra o venta real ya hecha a otro precio.</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en dinero</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><div><label for="price">Precio de compra/venta (opcional)</label><input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form></section>',
             Layout::escape($csrfToken),
             Layout::escape($ticker)
         );
@@ -383,60 +383,71 @@ class StockDetailPage
                 setVolumeDataset(next.labels, next.volumes);
             }
 
+            var intradayToolbar = document.querySelector('.chart-toolbar[data-intraday-target="{$canvasId}"]');
+
+            function clearActiveButtons() {
+                document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (item) {
+                    item.classList.remove('active');
+                });
+
+                if (intradayToolbar) {
+                    intradayToolbar.querySelectorAll('button').forEach(function (item) {
+                        item.classList.remove('active');
+                    });
+                }
+            }
+
+            function applyIntraday(interval, button) {
+                var ticker = intradayToolbar.getAttribute('data-ticker');
+
+                button.disabled = true;
+
+                fetch('?page=intraday&ticker=' + ticker + '&interval=' + interval)
+                    .then(function (response) { return response.json(); })
+                    .then(function (data) {
+                        if (!data || !data.closes || !data.closes.length) {
+                            return;
+                        }
+
+                        clearActiveButtons();
+                        button.classList.add('active');
+
+                        setPriceDatasets({
+                            labels: data.labels,
+                            highs: [],
+                            lows: [],
+                            closes: data.closes,
+                            sma20: [],
+                            sma50: [],
+                            bbUpper: [],
+                            bbLower: []
+                        });
+                        setVolumeDataset(data.labels, data.volumes);
+                    })
+                    .catch(function () {})
+                    .finally(function () {
+                        button.disabled = false;
+                    });
+            }
+
             document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (button) {
                 button.addEventListener('click', function () {
-                    document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (item) {
-                        item.classList.remove('active');
-                    });
-                    document.querySelectorAll('.chart-toolbar[data-intraday-target="{$canvasId}"] button').forEach(function (item) {
-                        item.classList.remove('active');
-                    });
+                    if (intradayToolbar && button.hasAttribute('data-days') && parseInt(button.getAttribute('data-days'), 10) <= 7) {
+                        applyIntraday('15m', button);
+
+                        return;
+                    }
+
+                    clearActiveButtons();
                     button.classList.add('active');
                     applyDailyRange(button);
                 });
             });
 
-            var intradayToolbar = document.querySelector('.chart-toolbar[data-intraday-target="{$canvasId}"]');
-
             if (intradayToolbar) {
                 intradayToolbar.querySelectorAll('button').forEach(function (button) {
                     button.addEventListener('click', function () {
-                        var interval = button.getAttribute('data-interval');
-                        var ticker = intradayToolbar.getAttribute('data-ticker');
-
-                        button.disabled = true;
-
-                        fetch('?page=intraday&ticker=' + ticker + '&interval=' + interval)
-                            .then(function (response) { return response.json(); })
-                            .then(function (data) {
-                                if (!data || !data.closes || !data.closes.length) {
-                                    return;
-                                }
-
-                                document.querySelectorAll('.chart-toolbar[data-target="{$canvasId}"] button').forEach(function (item) {
-                                    item.classList.remove('active');
-                                });
-                                intradayToolbar.querySelectorAll('button').forEach(function (item) {
-                                    item.classList.remove('active');
-                                });
-                                button.classList.add('active');
-
-                                setPriceDatasets({
-                                    labels: data.labels,
-                                    highs: [],
-                                    lows: [],
-                                    closes: data.closes,
-                                    sma20: [],
-                                    sma50: [],
-                                    bbUpper: [],
-                                    bbLower: []
-                                });
-                                setVolumeDataset(data.labels, data.volumes);
-                            })
-                            .catch(function () {})
-                            .finally(function () {
-                                button.disabled = false;
-                            });
+                        applyIntraday(button.getAttribute('data-interval'), button);
                     });
                 });
             }

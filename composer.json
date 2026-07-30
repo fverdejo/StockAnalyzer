@@ -10,5 +10,13 @@
         "psr-4": {
             "StockAnalyzer\\": "src/"
         }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "StockAnalyzer\\Tests\\": "tests/"
+        }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11"
     }
 }

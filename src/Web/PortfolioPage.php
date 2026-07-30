@@ -46,7 +46,7 @@ class PortfolioPage
 
         <section class="panel">
             <h2>Nueva operacion</h2>
-            <p class="muted panel-note">Indica la cantidad de acciones (pueden ser decimales, por ejemplo 2,5) o, si lo prefieres, un importe en dinero y se calculara la cantidad equivalente al precio actual.</p>
+            <p class="muted panel-note">Indica la cantidad de acciones (pueden ser decimales, por ejemplo 2,5) o, si lo prefieres, un importe en dinero y se calculara la cantidad equivalente al precio actual. Si dejas el precio en blanco se usa el precio de mercado actual; indicalo para registrar una compra o venta real ya hecha a otro precio.</p>
             <form method="post" action="?page=portfolio" class="trade-form">
                 <input type="hidden" name="csrf_token" value="{$token}">
                 <div>
@@ -60,6 +60,10 @@ class PortfolioPage
                 <div>
                     <label for="amount">o importe en dinero</label>
                     <input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150">
+                </div>
+                <div>
+                    <label for="price">Precio de compra/venta (opcional)</label>
+                    <input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco">
                 </div>
                 <button type="submit" name="trade_action" value="buy">Comprar a mercado</button>
                 <button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button>

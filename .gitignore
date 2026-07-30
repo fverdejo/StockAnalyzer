@@ -1,6 +1,9 @@
 # Dependencias
 /vendor/
 
+# Cache de PHPUnit
+/.phpunit.cache/
+
 # Entorno
 /.env
 /config/provider.local.php

@@ -15,8 +15,8 @@ class ProviderConfigPage
     {
         $token = Layout::escape($csrfToken);
         $active = 'yahoo';
-        $messageHtml = $message !== null ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
-        $errorHtml = $error !== null ? sprintf('<div class="form-error">%s</div>', Layout::escape($error)) : '';
+        $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
+        $errorHtml = $error !== null && $error !== '' ? sprintf('<div class="form-error">%s</div>', Layout::escape($error)) : '';
         $providers = [];
 
         foreach ($config['providers'] as $key => $provider) {

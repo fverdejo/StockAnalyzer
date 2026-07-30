@@ -1236,6 +1236,47 @@ El texto que explica una recomendacion refleja de forma visible que el motor usa
 
 ---
 
+## v2.18 - Bandas de Bollinger coherentes con la tendencia SMA
+
+Estado: implementado, pendiente de verificar con tests automatizados (ver mas abajo).
+
+Objetivo:
+
+En `TechnicalScoreAnalyzer::technical()` (bloque de Bandas de Bollinger), cuando el precio estaba cerca de la banda superior (`$position >= 0.85`) la señal daba siempre 1,5/4 puntos con verdict `NEGATIVE`, sin mirar si esa misma llamada ya habia detectado tendencia alcista confirmada (SMA20 > SMA50, cruce dorado, unas lineas antes en el mismo metodo). Eso contradecia al resto de la categoria `TECHNICAL`: en una tendencia alcista fuerte y confirmada, el precio "caminando por la banda superior" (walking the band, John Bollinger) es continuidad, no agotamiento; solo es sobrecompra genuina cuando no hay tendencia confirmada detras. El propio analisis tecnico se penalizaba a si mismo en el caso mas alcista.
+
+Causa raiz encontrada:
+
+El `match` de puntos de Bollinger no tenia en cuenta `$sma20`/`$sma50`, que ya estan disponibles en el mismo metodo (se usan unas lineas antes para las señales "Precio vs SMA20/50" y "Cruce de medias"). No se pudo reutilizar directamente la variable `$goldenCross` de esas lineas porque solo se asigna dentro de un `if ($sma20 !== null && $sma50 !== null)`; usarla tal cual en el bloque de Bollinger habria dado "undefined variable" cuando alguna SMA es null. Se recalcula una variable local propia, `$trendConfirmed`, con la misma condicion pero contenida en el bloque de Bollinger.
+
+Decisiones de arquitectura:
+
+- Se anade `$trendConfirmed = $sma20 !== null && $sma50 !== null && $sma20 > $sma50;` dentro del bloque de Bollinger, sin reutilizar ni depender del scope de `$goldenCross`.
+- Puntuacion de la rama `$position >= 0.85`: con tendencia confirmada pasa de 1,5 a 3,0 (igual que la rama `default`, zona media); sin tendencia confirmada (o con alguna SMA ausente) se endurece ligeramente de 1,5 a 1,0, ya que ahi si es sobrecompra genuina sin respaldo de tendencia. Las ramas `<= 0.25` (soporte) y `default` (zona media) no cambian.
+- Verdict de esa misma rama: deja de ser siempre `NEGATIVE`; con tendencia confirmada pasa a `POSITIVE` (coherente con que ahora reparte los mismos 3,0 puntos que la rama `default`, que tambien es `POSITIVE`); sin tendencia confirmada se mantiene `NEGATIVE`.
+- Mensaje del `Signal`: la rama `>= 0.85` deja de tener un texto generico de "sobrecompra a corto plazo" fijo y usa uno de dos mensajes segun `$trendConfirmed`, explicando en el propio texto por que el precio cerca de la banda superior no es igual de malo en ambos casos.
+- Cambio quirurgico y local a ese bloque: no se toca el resto de sub-señales de `TECHNICAL` (SMA20, SMA50, cruce de medias, MACD, volumen) ni las categorias `MOMENTUM`/`RISK`.
+
+Incluye:
+
+- `Analyzer/TechnicalScoreAnalyzer.php`: bloque de Bandas de Bollinger dentro de `technical()` (puntuacion, verdict y mensaje del `Signal` de la rama `$position >= 0.85`, mas la nueva variable local `$trendConfirmed`).
+
+Verificado en ddev con...:
+
+No se pudo levantar ddev en este entorno. Verificado con `php -l` (sin errores de sintaxis) y con razonamiento manual sobre los 4 casos de umbral propuestos por el analista:
+
+- Tendencia confirmada + banda superior (sma20=105, sma50=100, price=110, bollingerUpper=112, bollingerLower=98 -> position=(110-98)/(112-98)=0,857): `$trendConfirmed` = true -> 3,0 pts / `POSITIVE` (antes: 1,5 pts / `NEGATIVE`).
+- Sin tendencia confirmada + banda superior (mismas bandas y precio, sma20=98, sma50=100): `$trendConfirmed` = false -> 1,0 pts / `NEGATIVE` (antes: 1,5 pts / `NEGATIVE`).
+- Zona media, position=0,50, con cualquier combinacion de SMA: cae en la rama `default`, no tocada -> 3,0 pts / `POSITIVE`, igual que antes.
+- SMA20 o SMA50 null con position=0,90: `$trendConfirmed` se evalua a `false` por cortocircuito del `&&` sin lanzar "undefined variable" -> se comporta igual que "sin tendencia confirmada", 1,0 pts / `NEGATIVE`.
+
+Los tests automatizados que cubran estos 4 casos (y confirmen los limites exactos `position <= 0.25`, `position >= 0.85` y el punto intermedio) quedan para el siguiente agente, `qa-tests`.
+
+Resultado esperado:
+
+En una tendencia alcista confirmada por SMA20 > SMA50, la señal de Bandas de Bollinger deja de restar puntos por "sobrecompra" cuando el precio camina por la banda superior, y pasa a ser neutra-positiva, coherente con el resto de señales de `TECHNICAL` en ese escenario. Sin tendencia confirmada, la sobrecompra en banda superior sigue penalizando (algo mas que antes).
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; se anotan aqui porque encajan de forma natural con `v2.1`/`v2.2` y pueden valer la pena mas adelante. No tienen version asignada.

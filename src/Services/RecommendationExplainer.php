@@ -91,14 +91,14 @@ class RecommendationExplainer
             if ($technicalReasons !== []) {
                 $sentences[] = 'En el analisis tecnico: ' . implode(' ', array_map(
                     static fn (Signal $signal): string => $signal->getMessage(),
-                    array_slice($technicalReasons, 0, 2)
+                    $this->pickRandom($technicalReasons, 2)
                 ));
             }
 
             if ($fundamentalReasons !== []) {
                 $sentences[] = 'En el analisis fundamental: ' . implode(' ', array_map(
                     static fn (Signal $signal): string => $signal->getMessage(),
-                    array_slice($fundamentalReasons, 0, 2)
+                    $this->pickRandom($fundamentalReasons, 2)
                 ));
             }
         }
@@ -108,7 +108,7 @@ class RecommendationExplainer
         }
 
         if ($negatives !== [] && in_array($recommendation, ['STRONG BUY', 'BUY'], true)) {
-            $sentences[] = 'Aun asi, conviene tener en cuenta: ' . $negatives[0]->getMessage();
+            $sentences[] = 'Aun asi, conviene tener en cuenta: ' . $this->pickRandom($negatives, 1)[0]->getMessage();
         }
 
         return implode(' ', $sentences);
@@ -117,5 +117,26 @@ class RecommendationExplainer
     private function fmt(float $value): string
     {
         return number_format($value, 1, ',', '.');
+    }
+
+    /**
+     * Elige $count señales al azar en vez de tomar siempre las primeras del
+     * array, para que el resumen no cite siempre los mismos indicadores
+     * (SMA20/SMA50, ROE/Deuda-Patrimonio...) por el orden fijo en que los
+     * generan los analizadores.
+     *
+     * @param list<Signal> $signals
+     * @return list<Signal>
+     */
+    private function pickRandom(array $signals, int $count): array
+    {
+        if (count($signals) <= $count) {
+            return $signals;
+        }
+
+        $shuffled = $signals;
+        shuffle($shuffled);
+
+        return array_slice($shuffled, 0, $count);
     }
 }

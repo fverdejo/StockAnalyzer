@@ -452,7 +452,8 @@ class Application
             $this->assertValidCsrf();
             $user = $this->auth->requireUser();
             $ticker = $this->resolveTradeTicker($this->postString('ticker'));
-            $price = $this->portfolioService->getCurrentMarketPrice($ticker);
+            $manualPrice = $this->postFloat('price');
+            $price = $manualPrice > 0 ? $manualPrice : $this->portfolioService->getCurrentMarketPrice($ticker);
             $quantity = $this->resolveTradeQuantity($price);
             $action = $this->postString('trade_action');
 

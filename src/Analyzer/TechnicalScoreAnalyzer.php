@@ -144,18 +144,25 @@ class TechnicalScoreAnalyzer
         $lower = $technical->getBollingerLower();
         if ($upper !== null && $lower !== null && $upper > $lower) {
             $position = ($price - $lower) / ($upper - $lower);
+            $trendConfirmed = $sma20 !== null && $sma50 !== null && $sma20 > $sma50;
             $points = match (true) {
                 $position <= 0.25 => 4.0,
-                $position >= 0.85 => 1.5,
+                $position >= 0.85 => $trendConfirmed ? 3.0 : 1.0,
                 default => 3.0,
             };
             $score += $points;
             $signals[] = new Signal(
                 'Bandas de Bollinger',
-                $position <= 0.25 ? SignalVerdict::NEUTRAL : ($position >= 0.85 ? SignalVerdict::NEGATIVE : SignalVerdict::POSITIVE),
+                match (true) {
+                    $position <= 0.25 => SignalVerdict::NEUTRAL,
+                    $position >= 0.85 => $trendConfirmed ? SignalVerdict::POSITIVE : SignalVerdict::NEGATIVE,
+                    default => SignalVerdict::POSITIVE,
+                },
                 match (true) {
                     $position <= 0.25 => 'El precio esta cerca de la banda inferior, una zona que historicamente ha actuado como soporte (aunque tambien puede reflejar debilidad continuada).',
-                    $position >= 0.85 => 'El precio esta cerca de la banda superior, zona de sobrecompra a corto plazo.',
+                    $position >= 0.85 => $trendConfirmed
+                        ? 'El precio esta cerca de la banda superior, pero con la tendencia alcista confirmada (SMA20 > SMA50) esto suele reflejar continuidad ("caminar por la banda"), no agotamiento.'
+                        : 'El precio esta cerca de la banda superior sin una tendencia alcista confirmada detras, zona de sobrecompra a corto plazo.',
                     default => 'El precio se mueve en la zona media de las bandas, sin señal extrema.',
                 },
                 ScoreCategory::TECHNICAL
