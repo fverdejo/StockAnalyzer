@@ -1469,6 +1469,32 @@ En la ficha de detalle de cualquier ticker, tras pulsar "Ver historial de esta s
 
 ---
 
+## v2.24 - Curacion de `config/universes.php`: IBEX 35 completo y 4 universos ADR nuevos
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+`fiabilidad-datos-mercado` completo el universo `ibex35` (tenia solo 15 de los 35 valores reales del indice) y anadio 4 universos geograficos fuera de EEUU/Europa propuestos por el analista de mercado: `china_adr`, `asia_pacific_adr`, `latam_adr` y `semiconductors_global`.
+
+Cambios:
+
+- **`ibex35` completado a 35 valores.** Composicion verificada contra la revision oficial del comite asesor tecnico de BME (PDF "Composicion historica IBEX 35", revision num. 136 del 22/06/2026, sin cambios desde la num. 130 del 22/07/2024 que incluyo `PUIG.MC` y excluyo `MEL.MC`). Los 20 valores nuevos anadidos: `ACS.MC`, `ACX.MC`, `ANE.MC`, `BKT.MC`, `CLNX.MC`, `COL.MC`, `FDR.MC`, `GRF.MC`, `IAG.MC`, `IDR.MC`, `LOG.MC`, `MRL.MC`, `MTS.MC`, `PUIG.MC`, `RED.MC`, `ROVI.MC`, `SAB.MC`, `SCYR.MC`, `SLR.MC`, `UNI.MC`. Los 35 se verificaron uno a uno contra el endpoint de Yahoo Finance (precio y nombre de empresa validos) y despues con `bin/analyze.php --universe=ibex35` en ddev: 35 resultados, 0 errores.
+- **`china_adr` (19 tickers).** Lista propuesta por el analista menos `TCEHY` (Tencent): es el unico ADR OTC (Pink Markets) del grupo frente al resto que cotiza directo en NYSE/NASDAQ; aunque Yahoo devuelve datos, el campo `previousClose` mostro un salto injustificado del +34% en la verificacion (la serie diaria en si era consistente, asi que es un problema puntual de ese campo de metadatos, no de la serie historica completa), reforzando la decision de excluirlo por inconsistencia de calidad/liquidez con el resto del grupo. `bin/analyze.php --universe=china_adr`: 19 resultados, 0 errores.
+- **`asia_pacific_adr` (21 tickers).** Lista propuesta por el analista menos `WNS` (WNS Holdings): adquirida por Capgemini, dejo de cotizar en NYSE el 17/10/2025 (delisting real confirmado, no rate limit). `SKM` (SK Telecom) se mantiene: pese al incidente de ciberseguridad de abril 2025, sigue cotizando con normalidad en NYSE y reanudo el dividendo en 2026. `bin/analyze.php --universe=asia_pacific_adr`: 21 resultados, 0 errores.
+- **`latam_adr` (26 tickers).** Lista propuesta por el analista completa, sin cambios: los 26 tickers verificados activos, incluidos `STNE` (StoneCo) y `TV` (Grupo Televisa) que el analista habia marcado con menos rigor. `CIB` corresponde a Bancolombia, reorganizada como Grupo Cibest S.A. en mayo 2025 manteniendo el mismo ticker en NYSE. `bin/analyze.php --universe=latam_adr`: 26 resultados, 0 errores.
+- **`semiconductors_global` (22 tickers).** Lista propuesta por el analista completa, sin recortar. Se decidio mantener el solape con `tech40` (9 tickers en comun: `NVDA`, `AVGO`, `AMD`, `INTC`, `QCOM`, `TXN`, `MU`, `LRCX`, `AMAT`) a proposito, documentado en un comentario en el propio fichero: `tech40` es "tecnologia ampliada de EEUU" y este grupo es especificamente la cadena de valor global de semiconductores (diseno EEUU + fabricacion/equipos de Taiwan, Europa y Asia), un proposito de analisis distinto. `bin/analyze.php --universe=semiconductors_global`: 22 resultados, 0 errores.
+
+Verificado en ddev con...:
+
+`php -l config/universes.php` sin errores. Comprobacion con `php -r` de que ningun grupo supera el limite y que no hay tickers duplicados dentro de cada grupo (el solape entre grupos distintos es aceptable y ya existia antes, ej. `REP.MC`/`ITX.MC`). Los 5 universos tocados o nuevos se ejecutaron con `php bin/analyze.php --universe=<nombre>` dentro de ddev contra el proveedor Yahoo real: `ibex35` (35/0), `china_adr` (19/0), `asia_pacific_adr` (21/0), `latam_adr` (26/0), `semiconductors_global` (22/0) — cero errores 404 "may be delisted" ni de otro tipo en ningun ticker final.
+
+Resultado esperado:
+
+`ibex35` ya representa el indice real completo en vez de un subconjunto de 15 valores, y los 4 universos ADR nuevos amplian la cobertura geografica del ranking/backtest fuera de EEUU y Europa con tickers verificados como activos y correctamente servidos por Yahoo Finance a fecha de esta revision (2026-07-31); la composicion de indices como IBEX 35 puede volver a cambiar en revisiones semestrales futuras del comite tecnico, por lo que conviene re-verificar periodicamente en vez de darla por definitiva para siempre.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; se anotan aqui porque encajan de forma natural con `v2.1`/`v2.2` y pueden valer la pena mas adelante. No tienen version asignada.
