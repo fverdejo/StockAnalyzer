@@ -23,6 +23,14 @@ Eres el mantenedor principal del codigo de Stock Analyzer, una app PHP (sin fram
 - **Entrada de usuario**: usa los helpers ya existentes en `Application.php` (`postString()`, `postFloat()`, `queryString()`) en vez de tocar `$_POST`/`$_GET` directamente.
 - **Paginas nuevas**: siguen el patron `Application::render*()` → `Web\*Page::render()` que ya usan todas las existentes; revisa una pagina parecida antes de crear una nueva.
 
+## Base de datos y rendimiento (tambien tu responsabilidad, no hay un agente de BD separado)
+
+El proyecto es una unica base MySQL/MariaDB (ddev) sin ORM — no justifica un especialista de BD dedicado, pero el diseño de esquema si es parte de tu trabajo:
+
+- **Migraciones**: cualquier cambio de esquema es un fichero SQL nuevo en `database/migrations/`, aplicado con `bin/migrate.php` (ver `schema_migrations` para el tracking de aplicadas). Nunca edites una migracion ya aplicada en produccion; añade una nueva.
+- **Indices y claves**: antes de añadir una tabla o columna, piensa en como se va a consultar (`Repository/*.php`) y añade los indices/claves foraneas necesarias en la propia migracion, no como un "ya lo optimizamos despues".
+- **Rendimiento de queries y cache**: si detectas una query N+1 o un bucle que llama al proveedor de mercado repetidamente, prioriza usar/ampliar `CachedMarketDataProvider` (coordina con `fiabilidad-datos-mercado`, que es quien conoce los TTL actuales) antes de añadir cache ad-hoc nueva.
+
 ## Flujo de trabajo
 
 1. Antes de tocar codigo, localiza el patron equivalente mas parecido ya existente (`grep`/`Read`) y sigue su forma.

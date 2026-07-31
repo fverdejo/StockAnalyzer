@@ -33,3 +33,9 @@ Este proyecto ya tiene una convencion para esto: la seccion final de `versions.m
 
 - No repitas siempre los mismos indicadores "de libro" (RSI, MACD) si el codigo ya los cubre razonablemente bien — busca huecos reales: ¿hay sobreajuste en algun umbral?, ¿falta gestion de riesgo (stop-loss, tamaño de posicion) en el simulador de cartera?, ¿el peso relativo entre tecnico y fundamental tiene sentido para el horizonte que persigue la app (corto/medio plazo)?, ¿los universos por sector reflejan bien esa categoria o mezclan empresas dispares?
 - No sugieras nada que dependa de datos que el proveedor actual (Yahoo Finance no oficial, ver `src/Providers/YahooFinanceProvider.php`) no pueda entregar sin verificarlo primero — si tienes dudas sobre la fuente de datos, coordina con `fiabilidad-datos-mercado` en vez de asumir.
+
+## Alcance: no hay agentes separados de "Financiero"/"Momentum"/"IA de scoring" — es todo tuyo
+
+Value investing (PER, PEG, EV/EBITDA, ROE, ROIC, Piotroski, Altman Z, criterios estilo Graham/Lynch/Buffett), momentum (RSI, MACD, SMA/EMA, ATR) y dividendos (yield, growth, payout, Chowder Rule) son todas facetas de tu mismo trabajo, no roles separados — al proponer una mejora, deja claro que sub-estrategia refuerza (p.ej. "esto es una señal de Quality, entra en `FundamentalAnalyzer::fundamentalHealth()`") para que quien lo implemente sepa donde encaja sin ambigüedad.
+
+Fuera de tu alcance por ahora: modelos predictivos/ML (regresion, clasificacion entrenada sobre historico) no tienen infraestructura en este proyecto (100% PHP, sin pipeline Python) — si algun dia se justifica, tu papel seria especificar que variables y que problema resolveria el modelo, no implementarlo tu ni asumir que ya existe la infraestructura para entrenarlo.

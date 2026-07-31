@@ -9,6 +9,7 @@ use StockAnalyzer\Analyzer\NewsAnalyzer;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\Auth\AuthService;
 use StockAnalyzer\Auth\CsrfToken;
+use StockAnalyzer\Config\AppUrlConfig;
 use StockAnalyzer\Config\CompanyDirectory;
 use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
@@ -106,7 +107,11 @@ class Application
         $this->explainer = new RecommendationExplainer();
         $this->jsonPresenter = new AnalysisJsonPresenter();
 
-        $this->auth = new AuthService(new UserRepository($this->connection), new LogMailer());
+        $this->auth = new AuthService(
+            new UserRepository($this->connection),
+            new LogMailer(),
+            (new AppUrlConfig())->getBaseUrl() . '/?page=verify-email'
+        );
         $this->watchlistRepository = new WatchlistRepository($this->connection);
         $this->alertRepository = new AlertRepository($this->connection);
         $this->alertService = new AlertService($this->alertRepository, new TickerAlertStateRepository($this->connection));
@@ -188,6 +193,12 @@ class Application
 
         if ($page === 'intraday') {
             echo $this->renderIntraday();
+
+            return;
+        }
+
+        if ($page === 'signal-history') {
+            echo $this->renderSignalHistory();
 
             return;
         }
@@ -711,7 +722,8 @@ class Application
                 $service = new BacktestingService(
                     $this->marketDataProvider,
                     new TechnicalAnalyzer(),
-                    $this->scoreCalculator
+                    $this->scoreCalculator,
+                    new RiskLevelsCalculator(new RiskLevelsConfig())
                 );
                 $result = $service->run($tickers, $horizon);
             } catch (Throwable $exception) {
@@ -783,6 +795,53 @@ class Application
             ),
             'closes' => array_map(static fn ($quote) => $quote->getClose(), $quotes),
             'volumes' => array_map(static fn ($quote) => $quote->getVolume(), $quotes),
+        ];
+
+        return json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '{}';
+    }
+
+    /**
+     * Endpoint AJAX ligero (ver versions.md v2.23) que da el historial real
+     * de la señal de compra de un ticker concreto: reutiliza
+     * `BacktestingService::runForTicker()` (misma simulacion de
+     * stop-loss/objetivo de v2.21, sin recalibrar nada del motor de
+     * puntuacion). Recorre buena parte del historico recalculando analisis
+     * tecnico en cada muestra, por lo que solo se invoca cuando el usuario
+     * pulsa el boton en StockDetailPage, nunca al cargar la ficha.
+     */
+    private function renderSignalHistory(): string
+    {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $ticker = $this->queryString('ticker');
+
+        if ($ticker === '') {
+            http_response_code(400);
+
+            return json_encode(['error' => 'ticker requerido'], JSON_UNESCAPED_SLASHES) ?: '{}';
+        }
+
+        $service = new BacktestingService(
+            $this->marketDataProvider,
+            new TechnicalAnalyzer(),
+            $this->scoreCalculator,
+            new RiskLevelsCalculator(new RiskLevelsConfig())
+        );
+
+        $result = $service->runForTicker($ticker, 20);
+
+        if ($result === null || $result['buy_managed_samples'] === 0) {
+            return json_encode(['buy_managed_samples' => 0], JSON_UNESCAPED_SLASHES) ?: '{}';
+        }
+
+        $payload = [
+            'ticker' => $result['ticker'],
+            'horizon_days' => 20,
+            'buy_managed_samples' => $result['buy_managed_samples'],
+            'avg_buy_managed_return' => $result['avg_buy_managed_return'],
+            'stop_loss_rate' => $result['stop_loss_rate'],
+            'target_rate' => $result['target_rate'],
+            'horizon_rate' => $result['horizon_rate'],
         ];
 
         return json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '{}';

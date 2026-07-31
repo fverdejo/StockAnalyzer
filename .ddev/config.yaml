@@ -15,6 +15,7 @@ web_environment:
     - DB_DSN=mysql:host=db;port=3306;dbname=db;charset=utf8mb4
     - DB_USER=db
     - DB_PASSWORD=db
+    - APP_URL=https://stockanalyzer.ddev.site
 corepack_enable: false
 
 # Key features of DDEV's config.yaml:

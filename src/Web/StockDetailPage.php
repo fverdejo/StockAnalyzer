@@ -73,6 +73,7 @@ class StockDetailPage
         $scoreBreakdown = self::renderScoreBreakdown($score->toArray()['categories']);
 
         $charts = self::renderCharts($analysis);
+        $signalHistory = self::renderSignalHistory($analysis);
         $tradePanel = self::renderTradePanel($analysis, $currentUser, $csrfToken);
         $education = IndicatorEducation::render(
             $explanation->getPositives(),
@@ -142,10 +143,11 @@ class StockDetailPage
         );
 
         $body = sprintf(
-            '<header class="topbar detail-topbar">%s</header>%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             '',
             $charts,
+            $signalHistory,
             $tradePanel,
             Layout::formatNumber($score->getPercentage()),
             Layout::formatNumber(100.0),
@@ -207,6 +209,96 @@ class StockDetailPage
             Layout::escape($csrfToken),
             Layout::escape($ticker)
         );
+    }
+
+    /**
+     * Historial real de la señal de compra de este ticker (ver
+     * versions.md v2.23), reutilizando la simulacion de stop-loss/objetivo
+     * de `BacktestingService` (v2.21) pero solo para este valor. Se pide
+     * al pulsar el boton, no al cargar la ficha: recorre buena parte del
+     * historico recalculando analisis tecnico en cada muestra, coste que
+     * no debe pagar quien solo esta mirando la ficha.
+     */
+    private static function renderSignalHistory(StockAnalysis $analysis): string
+    {
+        $ticker = $analysis->getStock()->getCompany()->getTicker();
+        $escapedTicker = Layout::escape($ticker);
+        $rawTicker = Layout::escape(rawurlencode($ticker));
+        $containerId = 'signalHistory_' . preg_replace('/[^a-zA-Z0-9]/', '', $ticker);
+
+        return <<<HTML
+        <section class="panel signal-history" id="{$containerId}" data-ticker="{$rawTicker}">
+            <h2>Historial de la señal de compra en {$escapedTicker}</h2>
+            <p class="muted panel-note">De las veces que el modelo emitio una senal de compra (BUY/STRONG BUY) en este valor con stop-loss/objetivo calculables (mismo metodo que las lineas del grafico de arriba), esto es lo que habria pasado siguiendo esa gestion de riesgo. Datos historicos, no una garantia de resultado futuro.</p>
+            <button type="button" class="secondary-button signal-history-toggle">Ver historial de esta senal</button>
+            <div class="signal-history-body" hidden></div>
+        </section>
+        <script>
+        (function () {
+            var container = document.getElementById('{$containerId}');
+            if (!container) { return; }
+
+            var button = container.querySelector('.signal-history-toggle');
+            var body = container.querySelector('.signal-history-body');
+            var ticker = container.getAttribute('data-ticker');
+            var loaded = false;
+
+            button.addEventListener('click', function () {
+                if (loaded) {
+                    body.hidden = !body.hidden;
+                    button.textContent = body.hidden ? 'Ver historial de esta senal' : 'Ocultar historial';
+                    return;
+                }
+
+                button.disabled = true;
+                button.textContent = 'Calculando...';
+
+                fetch('?page=signal-history&ticker=' + ticker)
+                    .then(function (response) { return response.json(); })
+                    .then(function (data) {
+                        if (!data || !data.buy_managed_samples) {
+                            body.innerHTML = '<div class="muted">Este valor no ha tenido senales de compra con niveles de riesgo calculables en el historico disponible.</div>';
+                        } else {
+                            var stop = data.stop_loss_rate;
+                            var target = data.target_rate;
+                            var horizon = data.horizon_rate;
+                            var ret = data.avg_buy_managed_return;
+                            var retClass = ret === null ? '' : (ret >= 0 ? 'positive' : 'negative');
+                            var retText = ret === null ? '-' : (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%';
+                            var lowSample = data.buy_managed_samples < 5;
+
+                            body.innerHTML =
+                                '<p class="signal-history-return ' + retClass + '">Retorno medio gestionado: ' + retText + '</p>' +
+                                '<div class="signal-history-bar">' +
+                                    '<span class="signal-history-segment-stop" style="width:' + stop + '%"></span>' +
+                                    '<span class="signal-history-segment-target" style="width:' + target + '%"></span>' +
+                                    '<span class="signal-history-segment-horizon" style="width:' + horizon + '%"></span>' +
+                                '</div>' +
+                                '<ul class="signal-history-legend">' +
+                                    '<li><span class="dot dot-stop"></span>Toco stop-loss: ' + stop + '%</li>' +
+                                    '<li><span class="dot dot-target"></span>Alcanzo objetivo: ' + target + '%</li>' +
+                                    '<li><span class="dot dot-horizon"></span>Sin disparo en ' + data.horizon_days + ' sesiones: ' + horizon + '%</li>' +
+                                '</ul>' +
+                                '<p class="muted panel-note">Basado en ' + data.buy_managed_samples + ' senales historicas' + (lowSample ? ' (muestra pequena, interpretar con cautela)' : '') + '.</p>';
+                        }
+
+                        loaded = true;
+                        body.hidden = false;
+                        button.textContent = 'Ocultar historial';
+                    })
+                    .catch(function () {
+                        body.innerHTML = '<div class="muted">No se pudo calcular el historial de esta senal.</div>';
+                        loaded = true;
+                        body.hidden = false;
+                        button.textContent = 'Ocultar historial';
+                    })
+                    .finally(function () {
+                        button.disabled = false;
+                    });
+            });
+        })();
+        </script>
+        HTML;
     }
 
     private static function renderCharts(StockAnalysis $analysis): string

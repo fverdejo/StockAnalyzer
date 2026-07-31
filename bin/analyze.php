@@ -8,6 +8,7 @@ use StockAnalyzer\Analyzer\NewsAnalyzer;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\Config\ProviderConfig;
+use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
 use StockAnalyzer\Infrastructure\Database\Connection;
@@ -17,6 +18,7 @@ use StockAnalyzer\Repository\DailyRankingRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
 use StockAnalyzer\Services\AnalysisJsonPresenter;
+use StockAnalyzer\Services\RiskLevelsCalculator;
 use StockAnalyzer\Services\StockAnalysisService;
 use StockAnalyzer\Utils\TickerNormalizer;
 
@@ -42,7 +44,12 @@ $providerConfig = new ProviderConfig();
 $provider = new CachedMarketDataProvider(new YahooFinanceProvider(), new MarketDataCacheRepository($connection));
 $weights = new ScoreWeights();
 $scoreCalculator = new ScoreCalculator($weights, new NewsAnalyzer(new NewsRepository($connection), $weights));
-$service = new StockAnalysisService($provider, $scoreCalculator, new TechnicalAnalyzer());
+$service = new StockAnalysisService(
+    $provider,
+    $scoreCalculator,
+    new TechnicalAnalyzer(),
+    new RiskLevelsCalculator(new RiskLevelsConfig())
+);
 $presenter = new AnalysisJsonPresenter();
 $results = [];
 $errors = [];

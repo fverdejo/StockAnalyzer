@@ -778,6 +778,56 @@ class Layout
             background: var(--accent);
         }
 
+        .signal-history-return {
+            font-size: 22px;
+            font-weight: 800;
+            margin: 0 0 10px;
+        }
+
+        .signal-history-return.positive { color: var(--good); }
+        .signal-history-return.negative { color: var(--bad); }
+
+        .signal-history-bar {
+            display: flex;
+            height: 14px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: var(--surface-alt);
+            margin-bottom: 10px;
+        }
+
+        .signal-history-segment-stop { background: var(--bad); }
+        .signal-history-segment-target { background: var(--good); }
+        .signal-history-segment-horizon { background: var(--warn); }
+
+        .signal-history-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 16px;
+            font-size: 13px;
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .signal-history-legend li {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .signal-history-legend .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            flex-shrink: 0;
+            display: inline-block;
+        }
+
+        .dot-stop { background: var(--bad); }
+        .dot-target { background: var(--good); }
+        .dot-horizon { background: var(--warn); }
+
         .education-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));

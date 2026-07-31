@@ -1326,9 +1326,157 @@ En la ficha de detalle de cualquier accion con historico suficiente (>=40 sesion
 
 ---
 
+## v2.20 - Enlace absoluto en el correo de verificacion de email
+
+Estado: implementado, pendiente de verificar en ddev.
+
+Objetivo:
+
+El correo de verificacion de cuenta (`v2.11`) enviaba un enlace relativo (`?page=verify-email&token=...`), sin esquema ni dominio. En un cliente de correo eso no es clicable: el usuario tenia que copiar el token y montar la URL a mano.
+
+Causa raiz encontrada:
+
+`AuthService::$verificationBaseUrl` valia literalmente `'?page=verify-email'`, sin dominio, y no existia en el proyecto ninguna variable de configuracion con la URL base de la aplicacion (solo `DB_DSN`/`DB_USER`/`DB_PASSWORD` en `.env`). Como el dominio es distinto en ddev (`*.ddev.site`) y en produccion, no se podia resolver hardcodeando un valor fijo en el codigo.
+
+Decisiones de arquitectura:
+
+- `Config\AppUrlConfig`: nueva clase con una unica responsabilidad, `getBaseUrl(): string`, que lee la variable de entorno `APP_URL` con el mismo mecanismo de Dotenv que ya usaba en solitario `Infrastructure\Database\Connection` para `DB_DSN`/`DB_USER`/`DB_PASSWORD` (carga `.env` desde la raiz si existe y la libreria esta disponible, y lee con `$_ENV`/`$_SERVER`/`getenv()`). Si `APP_URL` no esta definida, cae en `http://localhost` en vez de lanzar excepcion: un enlace con el dominio equivocado en un entorno mal configurado es preferible a que el registro de usuarios se rompa por completo.
+- No se ha creado un lector de entorno generico compartido entre `Connection` y `AppUrlConfig`: son solo dos usos, la duplicacion es minima (un par de metodos privados de ~10 lineas) y ambas clases mantienen una unica responsabilidad clara sin acoplarse entre si.
+- `AuthService` no depende de `AppUrlConfig` ni de Dotenv: sigue recibiendo `$verificationBaseUrl` como string ya resuelta por el constructor (mismo patron que el resto de dependencias de `AuthService`), documentado ahora en el docblock del constructor como que debe ser una URL absoluta. `Services\Application` (raiz de composicion) es quien instancia `AppUrlConfig` y concatena `getBaseUrl() . '/?page=verify-email'` al construir `AuthService`, igual que ya hace con `RiskLevelsConfig`/`RiskLevelsCalculator` en `v2.19`.
+- Revisado el resto del codigo por si habia otro enlace de email que corregir igual (p.ej. reset de password): no existe todavia esa funcionalidad, asi que `sendVerificationEmail()` es el unico sitio afectado.
+- `.env.example` documenta `APP_URL` junto a las variables de base de datos ya existentes. `.ddev/config.yaml` anade `APP_URL=https://stockanalyzer.ddev.site` a `web_environment`, mismo mecanismo que ya usan `DB_DSN`/`DB_USER`/`DB_PASSWORD` para no depender de que cada desarrollador cree un `.env` local a mano.
+
+Incluye:
+
+- `Config/AppUrlConfig.php` (nuevo).
+- `Auth/AuthService.php`: docblock del constructor documentando que `$verificationBaseUrl` debe ser absoluta.
+- `Services/Application.php`: wiring de `AppUrlConfig` al construir `AuthService`.
+- `.env.example`: variable `APP_URL` documentada.
+- `.ddev/config.yaml`: `APP_URL` anadida a `web_environment`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros PHP tocados. Comprobado por CLI que `AppUrlConfig::getBaseUrl()` devuelve `http://localhost` sin `APP_URL` definida y el valor de la variable de entorno (sin barra final, aunque se defina con ella) cuando si esta definida. No se pudo levantar ddev en este entorno (sin acceso de red fiable) para confirmar visualmente que el enlace del correo de verificacion llega clicable con el dominio `https://stockanalyzer.ddev.site`; queda pendiente que el usuario lo confirme registrando una cuenta de prueba en su ddev real y revisando el correo en Mailpit.
+
+Resultado esperado:
+
+El correo de verificacion de cuenta contiene un enlace absoluto y clicable (`https://dominio/?page=verify-email&token=...`) tanto en ddev como en produccion, sin depender de que el usuario copie/pegue el enlace manualmente.
+
+---
+
+## v2.21 - Simulacion de stop-loss/objetivo en el backtesting
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+`BacktestingService` media unicamente el retorno a N dias tras una señal BUY/STRONG BUY (comprar y aguantar a ciegas hasta el horizonte fijo), sin comprobar si el stop-loss/objetivo basado en ATR14 que la app ya calcula y muestra en la ficha de detalle (`RiskLevelsCalculator`/`RiskLevels`, ver v2.19) se habria disparado antes. Idea anotada en la seccion de ideas futuras de este mismo fichero; se implementa ahora tal cual estaba descrita, sin las otras 5 ideas de la misma seccion.
+
+Decisiones de arquitectura:
+
+- **Nueva dependencia inyectada, sin tocar el motor de puntuacion.** `BacktestingService` recibe un `RiskLevelsCalculator` mas en el constructor (mismo patron DI que el resto del proyecto). No se toca `ScoreCalculator`, ningun `ScoreCategory`, ni los umbrales de `TechnicalScoreAnalyzer`/`FundamentalAnalyzer`: la simulacion vive enteramente dentro de `backtestTicker()`, usando el mismo `TechnicalSnapshot` que ya se calculaba para puntuar cada muestra.
+- **Simulacion dia a dia con datos ya disponibles.** Para cada muestra con recomendacion BUY/STRONG BUY, se llama a `RiskLevelsCalculator::compute($technical, $current->getClose())` (identico calculo que ve el usuario en la ficha de detalle) y, si devuelve niveles, se recorre el historico desde el dia siguiente hasta el horizonte comparando `HistoricalQuote::getLow()`/`getHigh()` contra el stop/objetivo, sin pedir ningun dato nuevo al proveedor.
+- **Criterio conservador acordado para el caso borde.** Si un mismo dia perfora stop-loss y objetivo a la vez (posible porque solo hay datos diarios, no intradia), se asume que el stop-loss se ejecuta primero: es la lectura mas prudente cuando no se puede saber cual de los dos sucedio antes en esa sesion.
+- **Guardarrayas reutilizados, no reinventados.** Cuando `RiskLevelsCalculator::compute()` devuelve `null` (ATR14 ausente, historial insuficiente, o ATR despreciable frente al precio: los mismos guardarrayas de v2.19), la muestra queda con `managed_return`/`exit_reason`/`exit_day` en `null` y no entra en ninguna de las medias/tasas nuevas: no se inventa ningun fallback ni se fuerza un valor.
+- **JSON de salida solo crece, nunca cambia.** Se añaden campos nuevos por muestra (`managed_return`, `exit_reason`, `exit_day`) y nuevos agregados por ticker (`buy_managed_samples`, `avg_buy_managed_return`, `stop_loss_rate`, `target_rate`, `horizon_rate`, via un helper nuevo `rateOf()` que sigue el mismo patron que `average()` ya existente), sin renombrar ni quitar ninguna clave existente: `Web/BacktestPage.php` sigue funcionando sin cambios (no se ha tocado, mostrar los campos nuevos en la UI queda pendiente y no es bloqueante).
+
+Incluye:
+
+- `Services/BacktestingService.php`: nueva dependencia `RiskLevelsCalculator`, metodo privado `simulateManagedExit()`, helpers privados `managedSamplesFor()`/`rateOf()`, campos nuevos por muestra y agregados nuevos por ticker.
+- `bin/backtest.php`: wiring de la nueva dependencia (`new RiskLevelsCalculator(new RiskLevelsConfig())`, mismo patron que `Services/Application.php` ya usaba desde v2.19).
+- `Services/Application.php`: mismo wiring en `renderBacktest()` (la pagina web de backtesting, que instanciaba `BacktestingService` por separado del wiring de `analysisService`).
+- `tests/Services/BacktestingServiceTest.php` (nuevo) + `tests/Services/FixedHistoryProvider.php` (nuevo, `MarketDataProviderInterface` fake): 6 tests que cubren caida clara con stop-loss en un dia conocido, subida clara con objetivo en un dia conocido, tramo sin disparo (retorno gestionado idéntico al `forward_return`), el caso borde de stop+objetivo el mismo dia (resuelve como stop-loss), una muestra BUY sin niveles de riesgo calculables, y el invariante estructural `buy_managed_samples <= buy_signals` con señales BUY mezcladas entre niveles calculables y no calculables. Se usan las clases reales `TechnicalAnalyzer`/`ScoreCalculator`/`RiskLevelsCalculator` (nada de dobles del motor de puntuacion): la recomendacion BUY se consigue de forma determinista con fundamentales excelentes y fijos mas un historico con rango diario constante (para un ATR14 de Wilder exacto y conocido) y una ligera tendencia alcista, verificado antes de escribir los tests ejecutando `TechnicalAnalyzer::analyze()`/`ScoreCalculator::calculate()` directamente por CLI.
+- Nota sobre el guardarraya "historial insuficiente" de `RiskLevelsCalculator` (< 40 sesiones, ver v2.19): es inalcanzable a traves de `BacktestingService`, porque su propio `minimumLookback` interno (80) ya excede ese umbral, asi que ninguna muestra real llega nunca con menos historial del que `RiskLevelsCalculator` necesita. El test de "sin niveles de riesgo calculables" (caso 5) ejercita en su lugar el otro guardarraya alcanzable (ATR14/precio por debajo del 0,05%), documentado explicitamente en el propio test.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 5 ficheros tocados/creados. `vendor/bin/phpunit` completo: 26 tests, 80 assertions, todos en verde (incluidos los 6 nuevos de `BacktestingServiceTest`). `ddev exec php bin/backtest.php --tickers=AAPL,MSFT,NVDA,JPM,XOM --horizon=20` ejecutado con datos reales de Yahoo Finance: para los tickers con `buy_managed_samples > 0` en la ventana muestreada (MSFT, JPM), `stop_loss_rate + target_rate + horizon_rate` suma exactamente 100 (100+0+0 en ambos casos, dentro de este historico concreto); para los tickers sin señales BUY en la ventana (AAPL, NVDA, XOM), los 5 campos nuevos por ticker quedan en `null`, como se esperaba. Tambien se confirmo por `curl` contra `https://stockanalyzer.ddev.site/?page=backtest&tickers=MSFT&horizon=20` que la pagina web de backtesting sigue devolviendo HTTP 200 sin errores con el `BacktestingService` ya actualizado.
+
+Resultado esperado:
+
+El backtest ya no solo dice "si hubieras comprado y aguantado N dias, esto habrias ganado": para cada señal BUY/STRONG BUY con niveles de riesgo calculables, tambien dice si gestionar la posicion con el stop-loss/objetivo basado en ATR14 (el mismo que ya ve el usuario en la ficha de detalle) habria mejorado o empeorado ese resultado, y con que frecuencia se sale por stop, por objetivo, o por agotar el horizonte.
+
+---
+
+## v2.22 - Recalibracion de la bonificacion de "tendencia confirmada" en Bandas de Bollinger
+
+Estado: implementado y verificado en ddev (con un hallazgo mixto en el backtest, ver mas abajo).
+
+Objetivo:
+
+`analista-mercado` valido con backtesting real (retorno futuro a 10/20/40 dias, agrupado por `SMA20 vs SMA50`, sobre 6 universos sectoriales: `largecap60`, `financials`, `consumer`, `industrials`, `healthcare`, `energy`) la bonificacion de "tendencia confirmada" que `v2.18` introdujo en la sub-señal "Bandas de Bollinger" de `TechnicalScoreAnalyzer::technical()`. Hallazgo: en 5 de 6 universos, el caso "con tendencia confirmada" (que puntuaba 3,0/4,0, igual que la zona neutra) tuvo retorno futuro medio/mediano igual o peor que el caso "sin tendencia confirmada" (que puntuaba solo 1,0/4,0). La premisa de `v2.18` ("caminar por la banda" = continuidad, no agotamiento) no esta respaldada por los datos disponibles.
+
+Causa raiz encontrada:
+
+No es un bug de codigo sino una hipotesis de calibracion (`v2.18`) que se dio por valida sin backtest instrumentado en su momento; el backtest posterior con mas universos/horizontes la contradice.
+
+Decisiones de arquitectura:
+
+- Cuando el precio esta cerca de la banda superior (`position >= 0.85`), la puntuacion deja de depender de `$sma20 > $sma50`: pasa de `$trendConfirmed ? 3.0 : 1.0` a un valor fijo de `1.5`. Se elige `1.5` (intermedio entre el `1.0` y el `3.0` anteriores) en vez de invertir la logica o volver directamente a `1.0`: retira una bonificacion que los datos no sostienen, sin apostar por un valor mas agresivo que tampoco tiene respaldo solido (solo ~2 años de historico, un unico regimen de mercado).
+- El verdict de la `Signal` en esa zona pasa de `$trendConfirmed ? POSITIVE : NEGATIVE` a `NEGATIVE` fijo, y el mensaje deja de mencionar la tendencia como atenuante.
+- El resto del bloque `technical()` (Precio vs SMA20/SMA50, Cruce de medias) no se toca: se reviso por separado y se decidio no recalibrar todavia por falta de evidencia suficiente en mas de un regimen de mercado (la variable `$trendConfirmed` se elimina solo del bloque de Bollinger; `$sma20`/`$sma50` se siguen usando sin cambios en esos otros bloques).
+- No se toca `MOMENTUM`, `RISK`, ninguna categoria fundamental, `ScoreWeights`, `Score` ni `RecommendationExplainer`.
+- De paso, corregido un bug operativo real encontrado por `analista-mercado` al ejecutar el backtest de validacion: `bin/analyze.php` instanciaba `StockAnalysisService` con 3 argumentos (`$provider, $scoreCalculator, new TechnicalAnalyzer()`), pero el constructor exige un 4º parametro `RiskLevelsCalculator` desde `v2.19` (`ArgumentCountError` en cada ejecucion). Corregido siguiendo el mismo wiring que ya usan `Services/Application.php` y `bin/backtest.php`: `new RiskLevelsCalculator(new RiskLevelsConfig())`.
+
+Incluye:
+
+- `src/Analyzer/TechnicalScoreAnalyzer.php`: bloque de Bandas de Bollinger dentro de `technical()`, puntuacion y `Signal` recalibradas.
+- `bin/analyze.php`: 4º argumento `RiskLevelsCalculator` al instanciar `StockAnalysisService`.
+- `tests/Analyzer/TechnicalScoreAnalyzerBollingerTest.php`: los 4 casos existentes (introducidos en `v2.18`) actualizados para esperar `1.5`/`NEGATIVE` en banda superior, con y sin tendencia confirmada, y con SMA ausentes; el caso de zona media no cambia.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros tocados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde. `ddev exec php bin/analyze.php --tickers=AAPL,MSFT` confirma que el `ArgumentCountError` ya no aparece. Comparado `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20` y `--universe=financials --horizon=20` antes/despues del cambio (guardando el JSON de cada ejecucion): en ambos universos el numero de señales BUY se reduce como se esperaba (`largecap60`: 144→133 señales; `financials`: 238→208 señales), consistente con retirar una bonificacion que empujaba muestras marginales por encima del umbral de compra. El resultado sobre el retorno de las señales BUY restantes es mixto, no la mejora limpia que se esperaba: en `largecap60`, `avg_buy_forward_return` mejora ligeramente (-1,62%→-1,59%) pero `avg_buy_managed_return` empeora ligeramente (-0,79%→-0,86%); en `financials`, ambos empeoran de forma mas notable (`avg_buy_forward_return` -1,13%→-1,54%; `avg_buy_managed_return` -0,87%→-1,08%), con el grueso del efecto concentrado en dos tickers (BBVA.MC pierde señales BUY con retorno historico bueno, de 8 a 5; CABK.MC de 22 a 13). No se ha revertido el cambio: la evidencia de calibracion original (agrupando TODAS las muestras tecnicas por banda de RSI/Bollinger, no solo las que cruzan el umbral BUY final) sigue siendo la valida segun el analista, y el numero de señales BUY por ticker en `financials` es pequeño (a menudo <10), por lo que el efecto en 2 tickers concretos puede no ser representativo; ademas los `versions.md` de `v2.21` ya documentan que las muestras del backtest estan autocorrelacionadas (`step=5` con horizonte 20), por lo que una diferencia de este tamaño en un solo universo no es concluyente. Se reporta como hallazgo para seguimiento, no como fallo del cambio.
+
+Resultado esperado:
+
+La sub-señal de Bandas de Bollinger en banda superior deja de asumir que una tendencia de corto plazo confirmada (SMA20 > SMA50) implica continuidad; penaliza la sobrecompra en banda superior de forma uniforme (1,5/4,0), moderada respecto al extremo anterior (1,0) pero sin la bonificacion no sostenida por los datos (3,0). `bin/analyze.php --universe=<clave>` vuelve a ejecutarse sin `ArgumentCountError`. Pendiente: seguimiento del hallazgo mixto en `financials` (posiblemente ligado a la heterogeneidad de ese universo, ya anotada como idea futura mas abajo) antes de considerar un ajuste adicional del valor `1.5`.
+
+---
+
+## v2.23 - Historial real de la señal de compra en la ficha de detalle
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+`agente-diseno-usabilidad` audito la ficha de detalle y detecto que `BacktestingService` ya calcula desde `v2.21` como le habria ido a la señal de compra de un ticker concreto (retorno gestionado con stop-loss/objetivo basado en ATR14, y con que frecuencia se sale por stop, por objetivo o por agotar el horizonte), pero ese dato solo se veia agregado por universo en `bin/backtest.php`/`Web/BacktestPage.php`, nunca para el ticker que el usuario esta mirando en ese momento en la ficha de detalle. El usuario decide comprar o no viendo solo el stop/objetivo teoricos de hoy, sin saber si esa misma gestion de riesgo le habria funcionado historicamente en ese valor.
+
+Decisiones de arquitectura:
+
+- **Nada de logica nueva, solo un punto de entrada interactivo.** `BacktestingService::backtestTicker()` (privado desde `v2.21`) no se toca. Se añade `runForTicker(string $ticker, int $horizonDays = 20): ?array`, publico, que lo reutiliza tal cual y captura cualquier excepcion devolviendo `null`: la ficha de detalle no debe romperse si el calculo falla (proveedor caido, historico insuficiente...), a diferencia de `run()` (usado por `bin/backtest.php`/`BacktestPage.php`), que si necesita reportar el error por ticker en un batch.
+- **Endpoint JSON nuevo, mismo patron que `renderIntraday()` (v2.9).** `Application::renderSignalHistory()` (ruta `?page=signal-history&ticker=...`) sigue exactamente el mismo estilo: `header('Content-Type: application/json...')`, `queryString()` para leer el ticker, respuesta JSON minima cuando no hay datos (`{"buy_managed_samples":0}`, mismo criterio que usa el frontend para distinguir "sin señales historicas" de un error). El `BacktestingService` se instancia con el mismo wiring que ya usa `renderBacktest()` (`RiskLevelsCalculator(new RiskLevelsConfig())`), no uno nuevo.
+- **Calculo detras de un boton explicito, no en la carga de la pagina.** `backtestTicker()` recorre buena parte del historico recalculando analisis tecnico + score en cada muestra (del orden de 80-100 iteraciones con ~2 años de historico): coste de CPU real, inaceptable como coste automatico de visitar la ficha de detalle en la Raspberry Pi de produccion. `StockDetailPage` renderiza el panel con un boton ("Ver historial de esta senal") y un `fetch()` a `?page=signal-history` que solo se dispara al pulsarlo, con estado de carga ("Calculando...") y cache en el propio DOM (un segundo click alterna mostrar/ocultar sin volver a pedir el JSON), mismo patron de JS inline por seccion que ya usan `renderCharts()`/el selector intradia.
+- **Reutiliza el vocabulario visual ya establecido, no inventa uno nuevo.** La barra de 3 segmentos (stop/objetivo/horizonte) usa los mismos tokens de color que ya tiene la app para roja/verde/ambar (`--bad`/`--good`/`--warn`, los mismos de `.sell`/`.buy`/`.hold`), no una paleta nueva. El panel es una `<section class="panel">` normal, el boton es `.secondary-button` ya existente: no hace falta ninguna regla nueva en los `@media` breakpoints existentes, confirmado visualmente con capturas a 375px y 1280px (ver verificacion).
+- **Aviso de muestra pequeña, sin ocultar el dato.** Cuando `buy_managed_samples < 5`, el texto añade "(muestra pequeña, interpretar con cautela)" en vez de no mostrar nada: no se descarta el dato (5 señales siguen siendo informacion real), pero se evita que una sola señal historica se lea con la misma confianza que 30.
+- Ubicacion deliberada entre el grafico de precio (donde el usuario ya ve las lineas de stop/objetivo de hoy) y el panel de compra/venta: el orden de lectura es "esto es lo que sugiere hoy" -> "esto es lo que ha pasado historicamente siguiendo ese mismo criterio" -> "decide si operar".
+- No se ha implementado el hallazgo aparte del mismo especialista sobre la prioridad de "importe" sobre "cantidad" en el formulario de compra/venta: queda fuera de esta entrega, marcado como mejora aparte.
+
+Incluye:
+
+- `Services/BacktestingService.php`: metodo publico nuevo `runForTicker()`, junto a `run()`, antes de `backtestTicker()`.
+- `Services/Application.php`: ruta `?page=signal-history`, metodo privado `renderSignalHistory()`.
+- `Web/StockDetailPage.php`: metodo privado nuevo `renderSignalHistory(StockAnalysis $analysis)` junto a `renderCharts()`, invocado en `render()` entre `renderCharts()` y `renderTradePanel()`.
+- `Web/Layout.php`: reglas CSS `.signal-history-*`/`.dot-*` tras `.score-bar-fill`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 4 ficheros tocados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde (sin tests nuevos: no hay suite automatizada todavia, tarea pendiente en `roadmap.md`; este cambio es buen candidato para `qa-tests` si se prioriza). Con ddev levantado: `curl https://stockanalyzer.ddev.site/?ticker=MSFT` y `?page=stock-detail&ticker=MSFT` devuelven HTTP 200 con la seccion `signal-history` presente en el HTML, en el orden correcto (grafico de precio -> historial de señal -> panel de cartera/login). `curl ?page=signal-history&ticker=<ticker>` devuelve JSON valido en todos los casos probados: `{"buy_managed_samples":0}` para tickers sin señales BUY con niveles calculables en la ventana muestreada (MSFT, JPM, AAPL, NVDA, XOM) y el payload completo para BBVA.MC (`buy_managed_samples=5`, `stop_loss_rate=40`, `target_rate=20`, `horizon_rate=40`, suma 100). Verificado visualmente con capturas de Chrome headless a 375px y 1280px con un arnes standalone que reutiliza el CSS real de `Layout.php` y reproduce exactamente el HTML que genera el JS del panel (incluidos los casos borde de un segmento a 0% en la barra de 3 colores, en ambas posiciones: 0%/100%/0% y 100%/0%/0%): la barra se recorta limpiamente sin artefactos visuales gracias a `overflow: hidden`, la leyenda envuelve bien en movil (`flex-wrap`), y los estados colapsado/vacio/con-datos se ven correctos en ambos anchos.
+
+Resultado esperado:
+
+En la ficha de detalle de cualquier ticker, tras pulsar "Ver historial de esta senal", el usuario ve cuantas veces el modelo emitio BUY/STRONG BUY en ese valor con stop-loss/objetivo calculables, el retorno medio que habria obtenido gestionando la posicion con esos niveles, y el reparto entre salida por stop, por objetivo o por agotar el horizonte de 20 sesiones — sin coste de CPU en la carga normal de la pagina, y sin romper la ficha si el calculo falla.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; se anotan aqui porque encajan de forma natural con `v2.1`/`v2.2` y pueden valer la pena mas adelante. No tienen version asignada.
 
 - **Stop/objetivo compactos en Watchlist y Cartera.** Extender el stop-loss/objetivo sugerido (basado en ATR14) de la ficha de detalle a una version resumida (badge o columna corta) en `WatchlistPage.php`/`PortfolioPage.php`, para gestionar posiciones abiertas sin entrar a cada ficha; requiere pensar el formato compacto porque esas tablas ya son densas.
+- **Ratios fundamentales sensibles al sector.** `FundamentalAnalyzer::fundamentalHealth()`/`valuation()` usan los mismos umbrales de Deuda/Patrimonio, FCF-yield y EV/EBITDA para cualquier empresa; validado con datos reales, esto penaliza a bancos/aseguradoras del universo `financials` como si fueran industriales sobreendeudadas (Goldman Sachs con D/E=6,47 cae en el peor tramo; MetLife con FCF-yield=-27,9% recibe "señal de alerta" cuando es un artefacto del dato). Simulando el backtest de GS (`--tickers=GS --horizon=20`), neutralizar solo el componente D/E habria hecho cruzar de HOLD a BUY 12 de 81 muestras historicas. **Actualizacion:** revisado el codigo real del proveedor (sesion posterior), `Company::getSector()`/`getIndustry()` estan hoy siempre a `''` en produccion — `YahooParser::parseStock()` los hardcodea vacios (lineas 60-61) y `YahooFundamentalsFetcher::MODULES` (linea 35) ni siquiera pide el modulo `assetProfile` de Yahoo, que es donde vive el sector. Esta idea ya NO es "dato disponible, falta usarlo": requiere primero un cambio de proveedor (pedir `assetProfile`, parsear `sector`/`industry`, cablearlo en `Company`) coordinado con `fiabilidad-datos-mercado` antes de que `FundamentalAnalyzer` pueda consumirlo.
+- **Contexto de tendencia en el RSI — investigada y descartada con datos.** La premisa original (alinear el RSI con el mismo criterio de Bollinger, dar por bueno un RSI>70 cuando `SMA20 > SMA50`) se probo con un backtest instrumentado (retorno futuro a 10/20/40 dias agrupado por banda de RSI x `SMA20 vs SMA50`, 6 universos sectoriales). El resultado no la respalda: dentro de cada banda de RSI, el retorno medio/mediano a futuro con `SMA20 > SMA50` no es sistematicamente mejor que sin tendencia confirmada; en la mayoria de combinaciones universo/horizonte es igual o peor. Aplicar esta idea tal como se planteo habria extendido a una segunda señal una premisa que los propios datos no sostienen (ver hallazgo sobre Bollinger reportado directamente al usuario en la sesion que descarta esta idea). No se recomienda implementarla salvo que aparezca evidencia nueva en otro periodo/regimen de mercado.
+- **Modo de backtesting "solo tecnico" — prioridad al alza.** Sumar unicamente TECHNICAL+MOMENTUM+RISK en `ScoreCalculator` (variante o flag) para aislar el poder predictivo del bloque tecnico del "suelo" fundamental, que en el backtest actual queda practicamente fijo porque se usan los fundamentales de HOY para fechas pasadas (el proveedor no tiene historico de fundamentales). Confirmado con datos: en el universo `largecap60` (81 muestras/ticker, 2 años), la mayoria de los grandes valores (AAPL, NVDA, AMZN, TSLA, AVGO, BRK-B, V, XOM, UNH, MA, COST, WMT...) no generan NINGUNA señal BUY en todo el periodo pese a subidas fuertes, porque su VALORACION (PER/PEG/EV-EBITDA elevados, fijos durante todo el backtest) los mantiene permanentemente por debajo del umbral del 75%; el bloque tecnico/momentum casi nunca llega a compensarlo. Sin este modo, cualquier recalibracion de señales tecnicas (incluida la de Bollinger de mas abajo) solo se puede validar con retornos futuros en bruto agrupados por indicador, no con las recomendaciones BUY/SELL reales de la app.
+- **Universos por sector menos heterogeneos.** `consumer` mezcla consumo discrecional (AMZN, BKNG, CMG) con defensivo (KO, PEP, PG, CL); `financials` mezcla banca, aseguradoras y medios de pago (V, MA, PYPL). Separarlos en subgrupos haria mas honesto comparar "las mejores del sector" y es un prerrequisito natural de la idea de ratios sensibles al sector.
+- **Backtest con muestras no solapadas — prioridad al alza.** `BacktestingService::backtestTicker()` usa `step=5` con `horizonDays` tipicamente 20: cada muestra comparte hasta 15 dias de retorno futuro con la siguiente, autocorrelacionando `avg_buy_forward_return`/`avg_sell_forward_return`. Cambiar a ventanas no solapadas (`step >= horizonDays`) o exponer el numero de muestras efectivamente independientes junto a `samples`. Relevante ahora mismo: el hallazgo sobre Bollinger/RSI reportado al usuario (retornos futuros mayores tras `SMA20 < SMA50` que tras `SMA20 > SMA50` en 5-6 de 6 universos sectoriales) se apoya en varios miles de muestras "en bruto" que en realidad son solo unos cientos de episodios independientes; sigue siendo una señal consistente entre universos y horizontes, pero conviene confirmarla con muestras no solapadas antes de tocar mas umbrales basados en el mismo patron.
 

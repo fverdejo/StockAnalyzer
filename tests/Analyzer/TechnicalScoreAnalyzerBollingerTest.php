@@ -20,11 +20,15 @@ use StockAnalyzer\Models\Quote;
 use StockAnalyzer\Models\Stock;
 
 /**
- * Cubre la correccion v2.18 (ver versions.md): dentro de
+ * Cubre la correccion v2.22 (ver versions.md), que revierte la
+ * bonificacion de "tendencia confirmada" introducida en v2.18: dentro de
  * TechnicalScoreAnalyzer::technical(), la sub-señal "Bandas de Bollinger"
- * ahora depende de `$trendConfirmed = $sma20 !== null && $sma50 !== null
- * && $sma20 > $sma50` cuando el precio esta cerca de la banda superior
- * (`$position >= 0.85`), en lugar de penalizar siempre esa zona.
+ * cuando el precio esta cerca de la banda superior (`$position >= 0.85`)
+ * ya NO depende de `$sma20 > $sma50`. El backtest interno (6 universos,
+ * 3 horizontes) no encontro que la tendencia confirmada mejorase el
+ * retorno futuro desde esa zona, asi que la puntuacion pasa a ser fija
+ * (1,5, un valor intermedio entre el 1,0 y el 3,0 anteriores) y el
+ * verdict pasa a ser siempre NEGATIVE.
  *
  * `technical()` es privado, asi que se testea de forma indirecta a
  * traves del metodo publico `analyze()`, y se filtra dentro de la lista
@@ -129,10 +133,11 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
      * + precio cerca de banda superior: price=110, upper=112, lower=98 =>
      * position = (110-98)/(112-98) = 0,857... >= 0,85.
      *
-     * v2.18: debe dar 3,0 puntos (igual que la zona media), verdict
-     * POSITIVE, y el mensaje debe mencionar la tendencia confirmada.
+     * v2.22: la tendencia confirmada ya no cambia el resultado de esta
+     * zona; debe dar 1,5 puntos y verdict NEGATIVE, igual que el caso 2
+     * (sin tendencia confirmada) con las mismas bandas y precio.
      */
-    public function testBandaSuperiorConTendenciaConfirmadaEsPositiva(): void
+    public function testBandaSuperiorConTendenciaConfirmadaEsNegativa(): void
     {
         $stock = $this->stock(110.0);
         $snapshot = $this->snapshot(105.0, 100.0);
@@ -140,18 +145,18 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
         $technical = $this->technicalResult($stock, $snapshot);
         $bollinger = $this->bollingerSignal($technical);
 
-        self::assertSame(SignalVerdict::POSITIVE, $bollinger->getVerdict());
-        self::assertStringContainsString('tendencia alcista confirmada', $bollinger->getMessage());
+        self::assertSame(SignalVerdict::NEGATIVE, $bollinger->getVerdict());
+        self::assertStringContainsString('el backtest interno no encuentra', $bollinger->getMessage());
 
         // Resto de sub-señales de technical() en esta llamada:
         // - Precio vs SMA20 (110 > 105): +6,0
         // - Precio vs SMA50 (110 > 100): +6,0
         // - Cruce de medias (105 > 100, cruce dorado): +4,0
         // - MACD (histograma null): +3,0 fijo
-        // - Bollinger (banda superior, tendencia confirmada): +3,0
+        // - Bollinger (banda superior): +1,5
         // - Volumen (ratio null): +2,0 fijo
-        // Total = 6 + 6 + 4 + 3 + 3 + 2 = 24,0
-        self::assertEqualsWithDelta(24.0, $technical->getScore(), 0.0001);
+        // Total = 6 + 6 + 4 + 3 + 1,5 + 2 = 22,5
+        self::assertEqualsWithDelta(22.5, $technical->getScore(), 0.0001);
     }
 
     /**
@@ -159,7 +164,8 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
      * sma50=100) + precio cerca de banda superior, mismas bandas y mismo
      * precio que el caso 1 (position = 0,857... >= 0,85).
      *
-     * v2.18: debe dar 1,0 punto, verdict NEGATIVE.
+     * v2.22: debe dar 1,5 puntos, verdict NEGATIVE (mismo resultado que
+     * el caso 1, ya que la tendencia deja de influir en esta zona).
      */
     public function testBandaSuperiorSinTendenciaConfirmadaEsNegativa(): void
     {
@@ -170,16 +176,16 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
         $bollinger = $this->bollingerSignal($technical);
 
         self::assertSame(SignalVerdict::NEGATIVE, $bollinger->getVerdict());
-        self::assertStringContainsString('sin una tendencia alcista confirmada', $bollinger->getMessage());
+        self::assertStringContainsString('el backtest interno no encuentra', $bollinger->getMessage());
 
         // - Precio vs SMA20 (110 > 98): +6,0
         // - Precio vs SMA50 (110 > 100): +6,0
         // - Cruce de medias (98 > 100 es falso): +0,0
         // - MACD (histograma null): +3,0 fijo
-        // - Bollinger (banda superior, sin tendencia confirmada): +1,0
+        // - Bollinger (banda superior): +1,5
         // - Volumen (ratio null): +2,0 fijo
-        // Total = 6 + 6 + 0 + 3 + 1 + 2 = 18,0
-        self::assertEqualsWithDelta(18.0, $technical->getScore(), 0.0001);
+        // Total = 6 + 6 + 0 + 3 + 1,5 + 2 = 18,5
+        self::assertEqualsWithDelta(18.5, $technical->getScore(), 0.0001);
     }
 
     /**
@@ -187,7 +193,8 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
      * upper=112, lower=98), probado con AMBAS combinaciones de SMA
      * (tendencia confirmada y no confirmada) para demostrar que la rama
      * "default" (ni soporte ni sobrecompra) no cambio con la correccion
-     * v2.18: debe seguir dando 3,0 puntos y verdict POSITIVE siempre.
+     * v2.22 (no dependia de la tendencia ni antes ni ahora): debe seguir
+     * dando 3,0 puntos y verdict POSITIVE siempre.
      */
     public function testZonaMediaSiempreEsPositivaIndependientementeDeLaTendencia(): void
     {
@@ -220,13 +227,12 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
      * cerca de banda superior: price=110,6, upper=112, lower=98 =>
      * position = (110,6-98)/(112-98) = 0,90 >= 0,85.
      *
-     * Sin SMA disponibles, $trendConfirmed debe evaluarse a false sin
-     * lanzar ningun error ("undefined variable" era justo el riesgo que
-     * motivo declarar $trendConfirmed como variable local propia dentro
-     * del bloque de Bollinger, ver versions.md v2.18): debe comportarse
-     * igual que "sin tendencia confirmada" (caso 2), sin excepciones.
+     * v2.22: la puntuacion de Bollinger en banda superior ya no lee
+     * $sma20/$sma50 en absoluto, asi que su ausencia no puede provocar
+     * ningun error ni cambiar el resultado: debe comportarse igual que
+     * los casos 1 y 2, sin excepciones.
      */
-    public function testSmaAusentesSeComportaComoSinTendenciaConfirmadaSinErrores(): void
+    public function testSmaAusentesNoAlteraLaPuntuacionDeBollingerSinErrores(): void
     {
         $stock = $this->stock(110.6);
         $snapshot = $this->snapshot(null, null);
@@ -235,15 +241,15 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
         $bollinger = $this->bollingerSignal($technical);
 
         self::assertSame(SignalVerdict::NEGATIVE, $bollinger->getVerdict());
-        self::assertStringContainsString('sin una tendencia alcista confirmada', $bollinger->getMessage());
+        self::assertStringContainsString('el backtest interno no encuentra', $bollinger->getMessage());
 
         // - Precio vs SMA20 (sma20 null): +3,0 fijo
         // - Precio vs SMA50 (sma50 null): +3,0 fijo
         // - Cruce de medias (alguna SMA null): +2,0 fijo
         // - MACD (histograma null): +3,0 fijo
-        // - Bollinger (banda superior, sin tendencia confirmada): +1,0
+        // - Bollinger (banda superior): +1,5
         // - Volumen (ratio null): +2,0 fijo
-        // Total = 3 + 3 + 2 + 3 + 1 + 2 = 14,0
-        self::assertEqualsWithDelta(14.0, $technical->getScore(), 0.0001);
+        // Total = 3 + 3 + 2 + 3 + 1,5 + 2 = 14,5
+        self::assertEqualsWithDelta(14.5, $technical->getScore(), 0.0001);
     }
 }

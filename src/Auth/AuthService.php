@@ -22,6 +22,16 @@ class AuthService
     private const ATTEMPTS_KEY = 'stock_analyzer_login_attempts';
     private const MAX_ATTEMPTS = 8;
 
+    /**
+     * Construye AuthService.
+     *
+     * $verificationBaseUrl debe ser una URL absoluta (esquema + dominio +
+     * ruta, p.ej. "https://stockanalyzer.ddev.site/?page=verify-email")
+     * para que el enlace del correo de verificacion sea clicable desde
+     * cualquier cliente de correo. Application la construye a partir de
+     * Config\AppUrlConfig; el valor por defecto de aqui es solo relativo,
+     * como fallback para quien instancie AuthService sin pasarlo.
+     */
     public function __construct(
         private readonly UserRepository $users,
         private readonly MailerInterface $mailer,
