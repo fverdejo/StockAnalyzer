@@ -11,9 +11,9 @@ Esta seccion (y la tabla de progreso de debajo) llevaba sin tocarse desde el `20
 - `versions.md` es el documento con el estado real, detallado, categoria por categoria.
 - `roadmap.md` (este documento) se centra en que falta por hacer y en que orden, no en repetir el estado exacto de cada pieza.
 
-Resumen muy rapido a fecha de esta revision (2026-07-29): la app esta avanzada hasta `v2.17` y cubre tambien cache/persistencia de mercado, universos configurables, filtros/busqueda por nombre, universo por defecto dinamico (mayores subidas/bajadas del dia), watchlist personal (con estrella-toggle en las tablas), alertas basicas, evolucion de la cartera en el tiempo, explicaciones que combinan analisis tecnico y fundamental, API JSON, backtesting basico, ranking diario por CLI y noticias/sentimiento por CSV. El detalle exacto esta en `versions.md`.
+Resumen muy rapido a fecha de esta revision (2026-08-01): la app esta avanzada hasta `v2.36` y cubre tambien cache/persistencia de mercado, universos configurables (incluido `ibex35` completo, 4 universos ADR geograficos (`v2.24`) y subgrupos sectoriales mas homogeneos en Consumo/Financieras, `v2.33`), filtros/busqueda por nombre, universo por defecto dinamico (mayores subidas/bajadas del dia), watchlist personal (con estrella-toggle y stop/objetivo compacto en las tablas, `v2.29`), alertas basicas, evolucion de la cartera en el tiempo, precio de cada operacion en EUR y USD en el historial de cartera (`v2.25`), exportacion CSV de la cartera y del historial de operaciones (`v2.26`), simbolo de divisa en todo precio mostrado en la app (`v2.27`), explicaciones que combinan analisis tecnico y fundamental, stop-loss/objetivo sugeridos con ATR14 y su simulacion en el backtesting (`v2.19`/`v2.21`) ademas de su version compacta en Watchlist/Cartera (`v2.29`), graficos de MACD y RSI en la ficha de detalle junto a SMA/Bollinger (`v2.28`/`v2.30`), historial real de la señal de compra en la ficha de detalle con prediccion por grupo sectorial cuando el historico propio es corto (`v2.23`/`v2.34`), API JSON, backtesting basico con muestreo no solapado y modo "solo tecnico" via CLI (`v2.31`/`v2.32`), ranking diario por CLI y noticias/sentimiento por CSV. Los pesos de `config/weights.php` se revisaron con backtesting real en `v2.34` y se decidio no tocarlos (sin evidencia limpia que respalde un cambio). El detalle exacto esta en `versions.md`.
 
-La fase pedida directamente por el usuario el mismo dia (`v2.4` a `v2.11`: diseno visual, filtros del Home, cartera con importe en dinero, rentabilidad por operacion, el bug visual de "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro), las correcciones/mejoras posteriores (`v2.5.2`, `v2.11.1`, `v2.12`), las tres ideas implementadas a continuacion (`v2.13` evolucion de cartera, `v2.14` watchlist, `v2.15` alertas) y la ronda final de ajustes (`v2.16` numeracion de version y estrella de watchlist, `v2.17` fundamentales explicitos en la explicacion) ya estan implementadas. El detalle tecnico completo, incluidas las limitaciones honestas de cada pieza, esta en `versions.md`.
+La fase pedida directamente por el usuario el mismo dia (`v2.4` a `v2.11`: diseno visual, filtros del Home, cartera con importe en dinero, rentabilidad por operacion, el bug visual de "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro), las correcciones/mejoras posteriores (`v2.5.2`, `v2.11.1`, `v2.12`), las tres ideas implementadas a continuacion (`v2.13` evolucion de cartera, `v2.14` watchlist, `v2.15` alertas), la ronda de ajustes posterior (`v2.16` numeracion de version y estrella de watchlist, `v2.17` fundamentales explicitos en la explicacion), las rondas de mantenimiento de los agentes especializados (`v2.18`/`v2.22` recalibracion de Bollinger, `v2.19` stop-loss/objetivo con ATR14, `v2.20` enlace de verificacion de email, `v2.21` simulacion de stop-loss/objetivo en backtesting, `v2.23` historial real de la señal en la ficha de detalle, `v2.24` curacion de universos), la sesion del 2026-08-01 (`v2.25` precio en EUR/USD en el historial de cartera, `v2.26` exportacion CSV), la sesion siguiente del mismo dia (`v2.27` simbolo de divisa en todos los precios, `v2.28` MACD en el grafico de detalle, `v2.29` stop/objetivo compactos en Watchlist y Cartera), una tercera sesion tambien del mismo dia (`v2.30` RSI en el grafico de detalle, `v2.31` backtest con muestras no solapadas, `v2.32` modo de backtesting "solo tecnico", `v2.33` universos por sector menos heterogeneos en Consumo/Financieras) una cuarta sesion del mismo dia (`v2.34` revision de los pesos de `config/weights.php` con backtesting real, sin cambios por falta de evidencia limpia, y prediccion del movimiento por grupo sectorial en el historial de señal) una quinta sesion del mismo dia (`v2.35` universo "Manual" por defecto y campo de tickers coherente en el formulario de backtesting) y una sexta sesion del mismo dia (`v2.36` tabla de ranking del Home sin columnas tecnicas ni de categorias) ya estan implementadas. El detalle tecnico completo, incluidas las limitaciones honestas de cada pieza, esta en `versions.md`.
 
 ---
 
@@ -29,12 +29,12 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 Objetivo
 
-Con la fase `v2.4` a `v2.17` ya implementada (ver `versions.md`, incluye watchlist con estrella-toggle, alertas basicas y explicaciones tecnico+fundamental equilibradas), el siguiente trabajo de valor vuelve a ser el que quedo pendiente tras la segunda fase del 2026-07-27: convertir la demo avanzada en una herramienta mas robusta con tests automatizados, exportacion y proveedores oficiales para datos/noticias.
+Con la fase `v2.4` a `v2.36` ya implementada (ver `versions.md`; incluye watchlist con estrella-toggle y stop/objetivo compacto, alertas basicas, explicaciones tecnico+fundamental equilibradas, stop-loss/objetivo con ATR14 (version grande en la ficha de detalle y version compacta en Watchlist/Cartera desde `v2.29`) y su simulacion en el backtesting, precio en EUR/USD y exportacion CSV en la cartera, simbolo de divisa en todo precio (`v2.27`), graficos de MACD y RSI en la ficha de detalle (`v2.28`/`v2.30`), backtest con muestreo no solapado y modo "solo tecnico" via CLI (`v2.31`/`v2.32`), universos por sector menos heterogeneos en Consumo/Financieras (`v2.33`) y prediccion del movimiento por grupo sectorial en el historial de señal, con los pesos de `config/weights.php` ya revisados con backtesting real (`v2.34`)), el siguiente trabajo de valor vuelve a ser el que quedo pendiente tras la segunda fase del 2026-07-27: convertir la demo avanzada en una herramienta mas robusta con tests automatizados de cobertura amplia y proveedores oficiales para datos/noticias. La exportacion CSV, que era el punto 2 de este orden, ya esta cubierta desde `v2.26`. De la lista de "Ideas adicionales sugeridas" al final de `versions.md`, quedan pendientes (sin evidencia/datos suficientes para cerrarlas todavia) la de ratios fundamentales sensibles al sector (bloqueada, requiere cambio de proveedor) y la de activar la categoria NEWS (bloqueada, faltan datos de noticias reales).
 
 Orden recomendado (detalle tecnico completo en `versions.md`):
 
-1. Tests automatizados de servicios/repositorios/rutas.
-2. Exportacion CSV (cartera e historial de operaciones).
+1. Tests automatizados de servicios/repositorios/rutas (hay una suite `phpunit` desde `v2.21`, 26 tests, pero limitada a `BacktestingService` y el analisis de Bollinger; falta cobertura del resto de `Services`/`Repository`/rutas de `Application.php`).
+2. ~~Exportacion CSV (cartera e historial de operaciones).~~ Implementado en `v2.26`.
 3. Proveedor oficial de noticias o datos fundamentales.
 4. Universos mantenidos automaticamente.
 
@@ -46,13 +46,12 @@ Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la 
 
 ## Prioridad alta
 
-- Tests automatizados
+- Tests automatizados (ampliar la suite `phpunit` de `v2.21` mas alla de `BacktestingService`/Bollinger)
 
 ---
 
 ## Prioridad media
 
-- Exportacion CSV
 - Proveedor oficial de noticias/datos
 - Universo completo mantenido automaticamente, tipo S&P 500 (`v1.2` avanzado)
 
@@ -418,3 +417,96 @@ Se implementan como `v2.16` y `v2.17`:
 Verificado en ddev con un usuario real: version correcta tras el cambio; estrella funcionando como toggle en las tres tablas (probado añadir y quitar, y que se refleja igual en cartera y watchlist); para TSLA (STRONG SELL) el resumen ya distingue motivos tecnicos y fundamentales, y para AAPL (HOLD) "Indicadores determinantes" muestra 2 tecnicos y 2 fundamentales en vez de 4 tecnicos.
 
 Detalle tecnico completo en `versions.md` (`v2.16`, `v2.17`).
+
+---
+
+## 2026-07-29 a 2026-07-31 (rondas de mantenimiento de agentes especializados: `v2.18` a `v2.24`)
+
+Entre esta quinta fase y la siguiente, los agentes de mantenimiento del proyecto (`analista-mercado`, `desarrollador-php`, `fiabilidad-datos-mercado`, `agente-diseno-usabilidad`) hicieron varias rondas de trabajo que no se registraron aqui version a version (se documentaron directamente en `versions.md`, que es el documento con el estado real detallado): `v2.18`/`v2.22` recalibracion de la bonificacion de "tendencia confirmada" en Bandas de Bollinger (con backtest instrumentado de por medio), `v2.19` stop-loss/objetivo sugeridos basados en ATR14, `v2.20` enlace absoluto y clicable en el correo de verificacion de email, `v2.21` simulacion de gestion por stop-loss/objetivo dentro del backtesting (con la primera suite `phpunit` del proyecto, 26 tests), `v2.23` historial real de la señal de compra en la ficha de detalle, y `v2.24` curacion de `config/universes.php` (`ibex35` completo a 35 valores y 4 universos ADR geograficos nuevos). Detalle tecnico completo, decisiones de arquitectura y verificacion de cada una en `versions.md`.
+
+---
+
+## 2026-08-01 (precio en EUR/USD en el historial de cartera y exportacion CSV)
+
+El usuario pide dos cosas en la misma sesion: (1) mostrar el precio de cada operacion del historial de "Mi cartera" tanto en euros como en dolares (siempre compra en euros, y algunos tickers cotizan en dolares), con un guion en la divisa que no aplica; (2) exportacion CSV de la cartera y del historial de operaciones, cerrando la prioridad media que llevaba pendiente desde `v1.x`/anotada en este mismo fichero.
+
+Se implementan como `v2.25` y `v2.26`:
+
+- `v2.25`: `Services/ExchangeRateService.php` (nuevo) obtiene el tipo de cambio USD-EUR reutilizando el mismo `MarketDataProviderInterface` ya existente (Yahoo trata los pares de divisas como un ticker mas del mismo endpoint, sin proveedor HTTP nuevo ni cache nueva); `PortfolioService`/`Portfolio` ganan la divisa de cada ticker y el tipo de cambio, y dos metodos nuevos (`getTransactionPriceEur()`/`getTransactionPriceUsd()`) que solo afectan a la visualizacion, no a ningun calculo de rentabilidad existente.
+- `v2.26`: `Services/PortfolioCsvExporter.php` (nuevo, `holdings()`/`transactions()`) genera CSV con `;` como delimitador (los numeros ya usan coma decimal) y BOM UTF-8 para que Excel en español lo abra bien; dos rutas GET nuevas (`?page=portfolio&export=holdings|transactions`) siguiendo el mismo patron que `?page=api`.
+
+Verificado en ddev con un usuario real (login por `curl` con cookie jar y CSRF real, datos de prueba borrados al terminar): compra de AAPL (USD) y SAN.MC (EUR) con el mismo usuario, historial mostrando `173,50 €`/`200,00 $` para AAPL (200 USD al tipo de cambio 0,8675 consultado en vivo) y `4,50 €`/`-` para SAN.MC; ambos CSV descargados con BOM UTF-8 confirmado por `file` y columnas correctamente separadas por `;` confirmado parseando con `python3 -m csv`.
+
+Detalle tecnico completo en `versions.md` (`v2.25`, `v2.26`).
+
+---
+
+## 2026-08-01 (segunda sesion: simbolo de divisa, MACD en el grafico, stop/objetivo compactos)
+
+El usuario pide tres cosas mas en la misma sesion: (1) que todos los precios de la app (ranking, ficha de detalle, watchlist, cartera, incluida la columna "Beneficio vs. precio actual" del historial) lleven el simbolo de su divisa; (2) que el grafico de la ficha de detalle muestre tambien el MACD, no solo SMA/Bollinger; (3) implementar la idea que llevaba pendiente sin version asignada desde `v2.19`, "Stop/objetivo compactos en Watchlist y Cartera".
+
+Se implementan como `v2.27`, `v2.28` y `v2.29`:
+
+- `v2.27`: `Web/Layout.php` gana `currencySymbol()`/`formatMoney()`/`formatNullableMoney()`; se aplican en `DashboardPage`, `StockDetailPage`, `WatchlistPage`, `PortfolioPage` y `PortfolioCsvExporter` a todo lo que es literalmente un nivel de precio (cotizacion, medias, Bollinger, ATR14, stop-loss/objetivo, EPS, precio/importe/beneficio de una posicion u operacion), sin tocar porcentajes, ratios adimensionales, MACD ni las tarjetas resumen de cartera (que suman varias divisas sin convertir, limitacion conocida desde `v2.2`/`v2.25`). `Models\Portfolio` gana `getCurrencyFor()` publico.
+- `v2.28`: `TechnicalAnalyzer::buildChartSeries()` reutiliza `macdFromEma()` (ya usado por `analyze()`) para pasar la serie completa de MACD/señal/histograma al `DTO\PriceChartSeries`; `StockDetailPage` añade un tercer grafico "MACD" (barras + 2 lineas, Chart.js mixto) bajo el de volumen, que se recorta igual que SMA/Bollinger al cambiar de rango y se vacia (sin romper) en velas intradia.
+- `v2.29`: `Web/RiskLevelsBadge.php` (nuevo, mismo patron reutilizable que `WatchlistStar` de `v2.16`) añade una columna compacta "Stop/Objetivo" en `WatchlistPage`/`PortfolioPage`; `Application::analyzeHoldingsForAlerts()` se amplia para capturar tambien `getRiskLevels()` en la misma llamada de analisis que ya hacia por cada posicion, sin duplicar peticiones.
+
+Verificado en ddev con un usuario de prueba nuevo (registrado, verificado a mano en base de datos, datos borrados al terminar): ficha de detalle de AAPL (USD) y SAN.MC (EUR) confirman el simbolo correcto en cada valor esperado y su ausencia en RSI/MACD/ratios/tarjetas resumen; el HTML de la ficha confirma el grafico "MACD" con sus tres series incrustadas con valores no vacios; comprando AAPL y SAN.MC en la cartera de prueba y siguiendo NVDA en la watchlist, ambas tablas muestran la columna "Stop/Objetivo" compacta con simbolo correcto (`SL 284,23 $` / `Obj 358,27 $` para AAPL, `SL 11,55 €` / `Obj 13,86 €` para SAN.MC) sin romper las demas columnas; los CSV exportados se parsearon correctamente pese al simbolo pegado al numero. No se pudo probar en esta sesion, por falta de un ticker con historico insuficiente a mano, el caso real "sin ATR14 calculable" (se confirmo solo por lectura de codigo) ni un clic real de boton de velas intradia en un navegador (se confirmo por lectura del JS generado).
+
+Detalle tecnico completo en `versions.md` (`v2.27`, `v2.28`, `v2.29`).
+
+---
+
+## 2026-08-01 (tercera sesion: RSI en el grafico y cierre de las ideas pendientes de backtesting/universos)
+
+El usuario pide dos cosas mas en la misma sesion: (1) añadir el RSI al grafico de la ficha de detalle, junto al de Volumen; (2) implementar "el resto de ideas sugeridas que hay pendiente". De las 5 ideas anotadas al final de `versions.md` sin version asignada, se descartan explicitamente 2 antes de empezar (confirmado con el usuario via pregunta directa): "contexto de tendencia en el RSI" (ya investigada y descartada con datos en una sesion anterior) y "ratios fundamentales sensibles al sector" (bloqueada, requiere primero un cambio de proveedor fuera de alcance). Las otras 3 se aprueban para esta sesion.
+
+Se implementan como `v2.30` a `v2.33`, con las 3 ideas de backtesting/universos trabajadas por los agentes especializados antes de tocar codigo de produccion (mismo patron que las rondas de `v2.18`/`v2.22`/`v2.21`):
+
+- `v2.30`: `TechnicalAnalyzer::rsiSeries()` nuevo (misma formula que el `rsi()` de un solo valor ya existente, aplicada en cada indice); `StockDetailPage` añade un cuarto grafico "RSI (14)" entre Volumen y MACD, con lineas de referencia en 30/70.
+- `v2.31`: `analista-mercado` valida con backtests reales que muestrear con `step=20` (no solapado) en vez de `step=5` reduce `samples`/`buy_signals` ~4x sin cambiar el signo de las medias; `desarrollador-php` convierte `$step` en parametro de `BacktestingService`/`bin/backtest.php` (por defecto sigue en 5, sin tocar el historial de señal de la ficha de detalle) y añade `effective_independent_samples` al resultado.
+- `v2.32`: `analista-mercado` confirma con backtests reales que 12 grandes valores de `largecap60` (AAPL, NVDA, AMZN... ) no generan ninguna señal BUY con el score completo por el "suelo" fundamental fijo del backtest, y que sumando solo TECHNICAL+MOMENTUM+RISK si la generan; `desarrollador-php` añade `--mode=technical` a `bin/backtest.php` sin tocar el pipeline de recomendaciones reales que ve el usuario.
+- `v2.33`: `fiabilidad-datos-mercado` divide `consumer` en `consumer_discretionary`/`consumer_staples` y `financials` en `financials_banking`/`financials_insurance`/`financials_payments_asset_mgmt` en `config/universes.php`, manteniendo los grupos combinados originales como alias de comparativa amplia.
+
+Verificado en ddev: `php -l` sin errores en todos los ficheros tocados; `vendor/bin/phpunit` sigue en 26 tests/80 assertions sin regresiones; RSI verificado con datos reales de SAN.MC (ultimo valor de la serie coincide con la value box ya existente); backtest de `largecap60` confirma en vivo la caida ~4x de señales con `--step=20` y la subida de 124 a 1351 señales BUY con `--mode=technical`; los 5 universos nuevos analizados contra Yahoo real sin errores.
+
+Detalle tecnico completo en `versions.md` (`v2.30`, `v2.31`, `v2.32`, `v2.33`).
+
+---
+
+## 2026-08-01 (cuarta sesion: revision de pesos y prediccion de movimiento)
+
+El usuario pide dos cosas relacionadas, con enfasis en fiabilidad: (1) comprobar si los pesos de `config/weights.php` son los mas adecuados; (2) añadir, si es posible, una prediccion sobre el movimiento de la accion en la ficha de detalle.
+
+Se implementa como `v2.34`, con `analista-mercado` investigando ambas peticiones con backtesting real antes de que `desarrollador-php` tocara nada:
+
+- **Pesos**: backtests no solapados en 6 universos, mas el aislamiento por bloques (tecnico solo vs. fundamental+valoracion+calidad+dividendo solo) y un reajuste moderado de prueba, no encuentran una recalibracion que corrija de forma limpia y consistente la inversion observada (retorno tras SELL/STRONG SELL mayor que tras BUY en los 6 universos). Se decide NO tocar `config/weights.php`: el problema parece ser efecto de regimen de mercado y de umbrales de valoracion fijos no ajustados por sector, no reparto de pesos. De paso se confirma que `NEWS` (10 puntos) es hoy peso muerto por falta de datos reales de noticias (`news_items` con 0 filas), no por mala calibracion.
+- **Prediccion**: se descarta con datos la opcion obvia (condicionar en la recomendacion actual completa, STRONG BUY a STRONG SELL) porque el orden esperado de retornos no se cumple en la mayoria de universos. Se aprueba en su lugar una extension acotada del panel "Historial de la señal de compra" ya existente (`v2.23`): cuando el historico propio de un ticker tiene menos de 5 señales BUY gestionadas, se muestra ademas la cifra agregada (ponderada por muestra) de todo su grupo sectorial mas especifico, con un disclaimer claro de que es una cifra de grupo, no del ticker en particular. Nuevo `UniverseConfig::narrowestSectorFor()` y `BacktestingService::runForPeerGroup()`, calculados solo bajo demanda y solo cuando el historico propio no basta.
+
+Verificado en ddev: `php -l` sin errores; `vendor/bin/phpunit` sigue en 26 tests/80 assertions sin regresiones; prueba real con Chubb (`financials_insurance`, 1 señal propia) mostrando el bloque de grupo sectorial (111 muestras agregadas, ~1,17s) y con Travelers (mismo sector, 46 señales propias) sin activar el calculo de grupo (~0,54s).
+
+Detalle tecnico completo en `versions.md` (`v2.34`).
+
+---
+
+## 2026-08-01 (quinta sesion: universo "Manual" por defecto en backtesting)
+
+El usuario reporta que la pantalla de backtesting (`?page=backtest`) mostraba, sin haber enviado nada todavia, el universo "Busqueda general" ya seleccionado y el campo de tickers precargado con esos 40 tickers, dando la falsa impresion de una entrada manual. Pide que el universo por defecto sea "Manual" y que el campo de tickers se vacie o se adapte segun el universo elegido.
+
+Se implementa como `v2.35`: `Application::renderBacktest()` solo resuelve universo/tickers por defecto cuando la peticion trae parametros propios (antes se apoyaba siempre en el mismo `resolveTickerRequest()` que usa el Home, aunque el backtest en si ya solo se ejecutaba con parametros reales); un script inline nuevo en `BacktestPage.php` vacia el campo de tickers al cambiar el desplegable de universo, para que quede claro cual de los dos manda.
+
+Verificado en ddev: `php -l` sin errores; `vendor/bin/phpunit` sigue en 26 tests/80 assertions sin regresiones; `?page=backtest` sin parametros confirma "Manual" seleccionado y el campo de tickers vacio; `?page=backtest&universe=largecap60` confirma que el flujo de seleccionar un universo y ejecutar el backtest sigue funcionando igual que antes.
+
+Detalle tecnico completo en `versions.md` (`v2.35`).
+
+---
+
+## 2026-08-01 (sexta sesion: tabla del Home mas simple)
+
+El usuario pide quitar de la tabla de ranking del Home las columnas de datos tecnicos y de categorias del score, porque esa informacion ya se puede ver con mas detalle en la ficha de cada accion.
+
+Se implementa como `v2.36`: `DashboardPage.php` pierde las columnas "Tecnicos"/"Categorias" (cabecera, celdas de cada fila, y los cuatro metodos privados que quedaban sin uso tras quitarlas); `StockDetailPage.php` no se toca, sigue mostrando esa misma informacion igual que siempre. De paso se sincroniza `DashboardPage::APP_VERSION`, que se habia quedado desactualizada desde `v2.29`.
+
+Verificado en ddev: `php -l` sin errores; `vendor/bin/phpunit` sigue en 26 tests/80 assertions sin regresiones; `curl` al Home confirma que ya no aparecen esas columnas y que cada fila tiene el numero correcto de celdas; `curl` a la ficha de detalle de AAPL confirma que sigue mostrando SMA/RSI/MACD y el desglose de categorias con normalidad.
+
+Detalle tecnico completo en `versions.md` (`v2.36`).

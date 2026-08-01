@@ -93,24 +93,26 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Siguiendo desde</th><th>Precio</th><th>Score</th><th>Recomendacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Siguiendo desde</th><th>Precio</th><th>Score</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
     }
 
     private static function renderAnalysisCells(?StockAnalysis $analysis, ?string $errorMessage): string
     {
         if (!$analysis instanceof StockAnalysis) {
-            return sprintf('<td colspan="3" class="muted">%s</td>', Layout::escape($errorMessage ?? 'Sin datos.'));
+            return sprintf('<td colspan="4" class="muted">%s</td>', Layout::escape($errorMessage ?? 'Sin datos.'));
         }
 
         $score = $analysis->getScore();
         $recommendation = $score->getRecommendation();
+        $currency = $analysis->getStock()->getCompany()->getCurrency();
 
         return sprintf(
-            '<td>%s</td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td>',
-            Layout::formatNumber($analysis->getStock()->getQuote()->getPrice()),
+            '<td>%s</td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td>%s</td>',
+            Layout::escape(Layout::formatMoney($analysis->getStock()->getQuote()->getPrice(), $currency)),
             Layout::formatNumber($score->getPercentage()),
             Layout::recommendationClass($recommendation),
-            Layout::escape($recommendation)
+            Layout::escape($recommendation),
+            RiskLevelsBadge::render($analysis->getRiskLevels(), $currency)
         );
     }
 

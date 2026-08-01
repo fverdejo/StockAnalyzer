@@ -44,6 +44,18 @@ class BacktestPage
                 <button type="submit">Probar</button>
             </form>
         </section>
+        <script>
+        (function () {
+            var universeSelect = document.getElementById('universe');
+            var tickersInput = document.getElementById('tickers');
+
+            if (!universeSelect || !tickersInput) { return; }
+
+            universeSelect.addEventListener('change', function () {
+                tickersInput.value = '';
+            });
+        })();
+        </script>
         {$errorHtml}
         {$resultHtml}
 HTML;

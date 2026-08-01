@@ -12,12 +12,16 @@ class Portfolio
      * @param list<Holding> $holdings
      * @param list<Transaction> $transactions
      * @param array<string,float|null> $currentPrices ticker => precio de mercado actual (null si no se pudo consultar)
+     * @param array<string,string> $currencies ticker => divisa nativa (ver versions.md v2.25)
+     * @param ?float $usdToEurRate tipo de cambio USD->EUR del momento (null si no se pudo consultar)
      */
     public function __construct(
         private readonly array $holdings,
         private readonly array $transactions,
         private readonly float $realizedProfit,
-        private readonly array $currentPrices = []
+        private readonly array $currentPrices = [],
+        private readonly array $currencies = [],
+        private readonly ?float $usdToEurRate = null
     ) {
     }
 
@@ -52,6 +56,60 @@ class Portfolio
         }
 
         return (($currentPrice / $transaction->getPrice()) - 1) * 100;
+    }
+
+    /**
+     * Precio de una operacion convertido a euros, solo para visualizacion
+     * en el historico (ver versions.md v2.25): `Transaction::getPrice()`
+     * sigue guardado y usado tal cual en su divisa nativa para el resto de
+     * calculos de rentabilidad, que no se tocan aqui.
+     */
+    public function getTransactionPriceEur(Transaction $transaction): ?float
+    {
+        $currency = $this->currencyFor($transaction);
+
+        if ($currency === '' || $currency === 'EUR') {
+            return $transaction->getPrice();
+        }
+
+        if ($currency === 'USD') {
+            return $this->usdToEurRate === null ? null : $transaction->getPrice() * $this->usdToEurRate;
+        }
+
+        return null;
+    }
+
+    /**
+     * Precio de una operacion en dolares, solo para visualizacion (ver
+     * versions.md v2.25): "-" (null) para tickers que ya cotizan en euros.
+     */
+    public function getTransactionPriceUsd(Transaction $transaction): ?float
+    {
+        $currency = $this->currencyFor($transaction);
+
+        if ($currency === 'USD') {
+            return $transaction->getPrice();
+        }
+
+        return null;
+    }
+
+    private function currencyFor(Transaction $transaction): string
+    {
+        return $this->getCurrencyFor($transaction->getTicker());
+    }
+
+    /**
+     * Divisa nativa de un ticker de la cartera (ver versions.md v2.25:
+     * `$currencies` ya se construye en PortfolioService::getPortfolio()),
+     * expuesta para poder mostrar el simbolo correcto junto a cualquier
+     * precio de una posicion u operacion concreta en la capa de
+     * presentacion. Cadena vacia si el ticker no esta en el mapa (ticker
+     * de una transaccion cuyo precio actual no se pudo consultar).
+     */
+    public function getCurrencyFor(string $ticker): string
+    {
+        return $this->currencies[strtoupper($ticker)] ?? '';
     }
 
     /**

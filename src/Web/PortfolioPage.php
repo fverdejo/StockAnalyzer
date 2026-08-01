@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Web;
 
+use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
@@ -15,6 +16,7 @@ class PortfolioPage
      * @param array{labels: list<string>, values: list<float>} $valueHistory
      * @param array<string,string> $recommendations ticker => recomendacion actual (ver versions.md v2.15)
      * @param list<string> $watchedTickers tickers que el usuario ya sigue (ver versions.md v2.16)
+     * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos, si hay datos suficientes
      */
     public static function render(
         User $user,
@@ -25,7 +27,8 @@ class PortfolioPage
         array $valueHistory = ['labels' => [], 'values' => []],
         array $recommendations = [],
         int $unreadAlerts = 0,
-        array $watchedTickers = []
+        array $watchedTickers = [],
+        array $riskLevels = []
     ): string {
         $token = Layout::escape($csrfToken);
         $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
@@ -34,7 +37,7 @@ class PortfolioPage
         $cards = self::renderCards($portfolio);
         $valueChart = self::renderValueHistoryChart($valueHistory);
         $watched = array_fill_keys($watchedTickers, true);
-        $holdings = self::renderHoldings($portfolio->getHoldings(), $token, $recommendations, $user, $watched);
+        $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels);
         $transactions = self::renderTransactions($portfolio);
 
         $body = <<<HTML
@@ -100,12 +103,14 @@ HTML;
     }
 
     /**
-     * @param list<Holding> $holdings
      * @param array<string,string> $recommendations ticker => recomendacion actual
      * @param array<string,bool> $watched
+     * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos
      */
-    private static function renderHoldings(array $holdings, string $csrfToken, array $recommendations, User $user, array $watched): string
+    private static function renderHoldings(Portfolio $portfolio, string $csrfToken, array $recommendations, User $user, array $watched, array $riskLevels): string
     {
+        $holdings = $portfolio->getHoldings();
+
         if ($holdings === []) {
             return '<div class="muted">Todavia no hay posiciones abiertas.</div>';
         }
@@ -114,29 +119,31 @@ HTML;
 
         foreach ($holdings as $holding) {
             $ticker = Layout::escape($holding->getTicker());
+            $currency = $portfolio->getCurrencyFor($holding->getTicker());
             $marketNote = $holding->getMarketError() !== null
                 ? '<div class="muted">Precio no disponible</div>'
                 : '';
             $recommendation = $recommendations[$holding->getTicker()] ?? null;
             $star = WatchlistStar::render($holding->getTicker(), $user, isset($watched[$holding->getTicker()]), $csrfToken, '?page=portfolio');
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
                 $star,
                 urlencode($holding->getTicker()),
                 $ticker,
                 self::number($holding->getQuantity()),
-                self::money($holding->getAveragePrice()),
-                self::nullableMoney($holding->getCurrentPrice()),
+                Layout::formatMoney($holding->getAveragePrice(), $currency),
+                Layout::formatNullableMoney($holding->getCurrentPrice(), $currency),
                 $marketNote,
-                self::money($holding->getInvestedAmount()),
+                Layout::formatMoney($holding->getInvestedAmount(), $currency),
                 self::profitClass($holding->getUnrealizedProfit()),
-                self::nullableProfit($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent()),
+                self::nullableProfitMoney($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent(), $currency),
                 self::recommendationBadge($recommendation),
+                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency),
                 self::sellForm($holding, $csrfToken)
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
     }
 
     /**
@@ -195,23 +202,25 @@ HTML;
             $type = $transaction->getType();
             $profit = $portfolio->getTransactionProfit($transaction);
             $percent = $portfolio->getTransactionProfitPercent($transaction);
+            $currency = $portfolio->getCurrencyFor($transaction->getTicker());
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td class="%s">%s</td><td class="%s">%s</td></tr>',
+                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td><td class="%s">%s</td></tr>',
                 Layout::escape($transaction->getExecutedAt()->format('Y-m-d H:i')),
                 $type === TransactionType::BUY ? 'buy' : 'sell',
                 Layout::escape($type->label()),
                 urlencode($transaction->getTicker()),
                 Layout::escape($transaction->getTicker()),
                 self::number($transaction->getQuantity()),
-                self::money($transaction->getPrice()),
+                self::nullableEur($portfolio->getTransactionPriceEur($transaction)),
+                self::nullableUsd($portfolio->getTransactionPriceUsd($transaction)),
                 self::profitClass($profit),
-                self::nullableMoney($profit),
+                Layout::formatNullableMoney($profit, $currency),
                 self::profitClass($profit),
                 self::nullablePercent($percent)
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio</th><th>Beneficio vs. precio actual</th><th>%</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas.</p>';
+        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio (EUR)</th><th>Precio (USD)</th><th>Beneficio vs. precio actual</th><th>%</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas. Las columnas de precio muestran el valor convertido a euros y dolares para comparar de un vistazo; el guion indica que esa operacion no aplica en esa divisa (por ejemplo, una accion del IBEX no tiene precio en dolares).</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a></p>';
     }
 
     /**
@@ -286,9 +295,34 @@ HTML;
         return self::money($profit) . '<span class="muted"> (' . Layout::formatNumber($percent) . '%)</span>';
     }
 
+    /**
+     * Igual que nullableProfit(), con simbolo de divisa: el beneficio
+     * latente de una posicion concreta es un unico ticker, una unica
+     * divisa (a diferencia de las tarjetas resumen, que suman varias
+     * posiciones y pueden mezclar divisas sin convertir, ver versions.md).
+     */
+    private static function nullableProfitMoney(?float $profit, ?float $percent, string $currency): string
+    {
+        if ($profit === null || $percent === null) {
+            return '-';
+        }
+
+        return Layout::formatMoney($profit, $currency) . '<span class="muted"> (' . Layout::formatNumber($percent) . '%)</span>';
+    }
+
     private static function nullableMoney(?float $value): string
     {
         return $value === null ? '-' : self::money($value);
+    }
+
+    private static function nullableEur(?float $value): string
+    {
+        return $value === null ? '-' : Layout::formatNullable($value) . ' €';
+    }
+
+    private static function nullableUsd(?float $value): string
+    {
+        return $value === null ? '-' : Layout::formatNullable($value) . ' $';
     }
 
     private static function money(float $value): string

@@ -590,6 +590,31 @@ class Layout
             color: var(--good);
         }
 
+        .risk-badge-compact {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+
+        .risk-badge-compact span {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 3px 8px;
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .risk-badge-stop {
+            background: #fdf1ef;
+            color: var(--bad);
+        }
+
+        .risk-badge-target {
+            background: #eef8f2;
+            color: var(--good);
+        }
+
         .watch-star {
             background: transparent;
             border: 0;
@@ -1013,6 +1038,41 @@ HTML;
     public static function formatNullable(?float $value): string
     {
         return $value === null ? '-' : self::formatNumber($value);
+    }
+
+    /**
+     * Simbolo de una divisa (ver versions.md, simbolo de divisa en
+     * precios): solo EUR/USD estan mapeados, las unicas divisas presentes
+     * hoy en `config/universes.php` (mismo alcance que
+     * Services\ExchangeRateService, v2.25). Una divisa desconocida se
+     * muestra tal cual en vez de romper el formato.
+     */
+    public static function currencySymbol(string $currency): string
+    {
+        return match (strtoupper(trim($currency))) {
+            'EUR' => '€',
+            'USD' => '$',
+            '' => '',
+            default => strtoupper(trim($currency)),
+        };
+    }
+
+    /**
+     * Formatea un nivel de precio (cotizacion, media movil, stop-loss...)
+     * con el simbolo de su divisa nativa. No usar para porcentajes, ratios
+     * adimensionales ni MACD (ver versions.md: se muestran sin simbolo en
+     * toda la app, igual que en cualquier plataforma de trading).
+     */
+    public static function formatMoney(float $value, string $currency): string
+    {
+        $symbol = self::currencySymbol($currency);
+
+        return $symbol === '' ? self::formatNumber($value) : self::formatNumber($value) . ' ' . $symbol;
+    }
+
+    public static function formatNullableMoney(?float $value, string $currency): string
+    {
+        return $value === null ? '-' : self::formatMoney($value, $currency);
     }
 
     public static function recommendationClass(string $recommendation): string

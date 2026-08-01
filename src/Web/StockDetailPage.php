@@ -34,13 +34,12 @@ class StockDetailPage
         $recommendation = $score->getRecommendation();
 
         $header = sprintf(
-            '<div class="detail-title"><h1>%s <span class="muted">%s</span></h1><p class="subtitle">%s &middot; %s &middot; %s %s</p></div>',
+            '<div class="detail-title"><h1>%s <span class="muted">%s</span></h1><p class="subtitle">%s &middot; %s &middot; %s</p></div>',
             Layout::escape($company->getTicker()),
             Layout::escape($company->getName()),
             Layout::escape($company->getMarket()),
             Layout::escape($company->getCurrency()),
-            Layout::formatNumber($quote->getPrice()),
-            Layout::escape($company->getCurrency())
+            Layout::escape(Layout::formatMoney($quote->getPrice(), $company->getCurrency()))
         );
 
         $watchlistButton = self::renderWatchlistButton($company->getTicker(), $currentUser, $isWatched, $csrfToken);
@@ -81,10 +80,11 @@ class StockDetailPage
             $explanation->getNeutrals()
         );
 
+        $currency = $company->getCurrency();
         $riskLevels = $analysis->getRiskLevels();
         $riskLevelsBoxes = $riskLevels !== null ? [
-            self::valueBox('Stop sugerido', Layout::formatNumber($riskLevels->getStopLoss()), 'value-box-risk'),
-            self::valueBox('Objetivo sugerido', Layout::formatNumber($riskLevels->getTarget()), 'value-box-target'),
+            self::valueBox('Stop sugerido', Layout::formatMoney($riskLevels->getStopLoss(), $currency), 'value-box-risk'),
+            self::valueBox('Objetivo sugerido', Layout::formatMoney($riskLevels->getTarget(), $currency), 'value-box-target'),
         ] : [];
 
         $riskLevelsNote = $riskLevels !== null
@@ -94,25 +94,25 @@ class StockDetailPage
         $technicalValues = sprintf(
             '<section class="panel"><h2>Indicadores tecnicos</h2><div class="values-grid">%s</div>%s</section>',
             implode('', array_merge([
-                self::valueBox('Precio', Layout::formatNumber($quote->getPrice())),
-                self::valueBox('SMA 20', Layout::formatNullable($technical->getSma20())),
-                self::valueBox('SMA 50', Layout::formatNullable($technical->getSma50())),
-                self::valueBox('EMA 12', Layout::formatNullable($technical->getEma12())),
-                self::valueBox('EMA 26', Layout::formatNullable($technical->getEma26())),
+                self::valueBox('Precio', Layout::formatMoney($quote->getPrice(), $currency)),
+                self::valueBox('SMA 20', Layout::formatNullableMoney($technical->getSma20(), $currency)),
+                self::valueBox('SMA 50', Layout::formatNullableMoney($technical->getSma50(), $currency)),
+                self::valueBox('EMA 12', Layout::formatNullableMoney($technical->getEma12(), $currency)),
+                self::valueBox('EMA 26', Layout::formatNullableMoney($technical->getEma26(), $currency)),
                 self::valueBox('RSI (14)', Layout::formatNullable($technical->getRsi14())),
                 self::valueBox('MACD', Layout::formatNullable($technical->getMacd())),
                 self::valueBox('MACD senal', Layout::formatNullable($technical->getMacdSignal())),
                 self::valueBox('MACD histograma', Layout::formatNullable($technical->getMacdHistogram())),
-                self::valueBox('Bollinger superior', Layout::formatNullable($technical->getBollingerUpper())),
-                self::valueBox('Bollinger inferior', Layout::formatNullable($technical->getBollingerLower())),
-                self::valueBox('ATR (14)', Layout::formatNullable($technical->getAtr14())),
+                self::valueBox('Bollinger superior', Layout::formatNullableMoney($technical->getBollingerUpper(), $currency)),
+                self::valueBox('Bollinger inferior', Layout::formatNullableMoney($technical->getBollingerLower(), $currency)),
+                self::valueBox('ATR (14)', Layout::formatNullableMoney($technical->getAtr14(), $currency)),
             ], $riskLevelsBoxes, [
                 self::valueBox('Momentum 30d', self::percentOrDash($technical->getMomentum30())),
                 self::valueBox('Volatilidad 20d', self::percentOrDash($technical->getVolatility20())),
                 self::valueBox('Volumen ultima sesion', $technical->getLastVolume() !== null ? number_format($technical->getLastVolume(), 0, ',', '.') : '-'),
                 self::valueBox('Volumen medio 20d', $technical->getAvgVolume20() !== null ? number_format((int) $technical->getAvgVolume20(), 0, ',', '.') : '-'),
-                self::valueBox('Maximo (periodo)', Layout::formatNullable($technical->getHigh52w())),
-                self::valueBox('Minimo (periodo)', Layout::formatNullable($technical->getLow52w())),
+                self::valueBox('Maximo (periodo)', Layout::formatNullableMoney($technical->getHigh52w(), $currency)),
+                self::valueBox('Minimo (periodo)', Layout::formatNullableMoney($technical->getLow52w(), $currency)),
                 self::valueBox('Sesiones analizadas', (string) $technical->getHistoryCount()),
             ])),
             $riskLevelsNote
@@ -127,7 +127,7 @@ class StockDetailPage
                 self::valueBox('Precio/Valor contable', Layout::formatNullable($fundamentals->getPriceToBook())),
                 self::valueBox('ROE', self::percentOrDash($fundamentals->getRoe())),
                 self::valueBox('ROIC', self::percentOrDash($fundamentals->getRoic())),
-                self::valueBox('EPS', Layout::formatNullable($fundamentals->getEps())),
+                self::valueBox('EPS', Layout::formatNullableMoney($fundamentals->getEps(), $currency)),
                 self::valueBox('Capitalizacion', self::formatLarge($fundamentals->getMarketCap())),
                 self::valueBox('Deuda/Patrimonio', Layout::formatNullable($fundamentals->getDebtToEquity())),
                 self::valueBox('Ratio de liquidez', Layout::formatNullable($fundamentals->getCurrentRatio())),
@@ -280,6 +280,16 @@ class StockDetailPage
                                     '<li><span class="dot dot-horizon"></span>Sin disparo en ' + data.horizon_days + ' sesiones: ' + horizon + '%</li>' +
                                 '</ul>' +
                                 '<p class="muted panel-note">Basado en ' + data.buy_managed_samples + ' senales historicas' + (lowSample ? ' (muestra pequena, interpretar con cautela)' : '') + '.</p>';
+
+                            if (data.peer_group) {
+                                var peerRet = data.peer_group.avg_buy_managed_return;
+                                var peerRetClass = peerRet === null ? '' : (peerRet >= 0 ? 'positive' : 'negative');
+                                var peerRetText = peerRet === null ? '-' : (peerRet >= 0 ? '+' : '') + peerRet.toFixed(2) + '%';
+
+                                body.innerHTML +=
+                                    '<p class="signal-history-return ' + peerRetClass + '">Retorno medio gestionado del grupo sectorial (' + data.peer_group.sector_label + '): ' + peerRetText + '</p>' +
+                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' senales historicas de todo el grupo sectorial. Cifra ampliada a todo el grupo sectorial de esta accion (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta accion en particular.</p>';
+                            }
                         }
 
                         loaded = true;
@@ -315,6 +325,10 @@ class StockDetailPage
         $bbUpper = self::jsonFor($series->getBollingerUpper());
         $bbLower = self::jsonFor($series->getBollingerLower());
         $volumes = self::jsonFor($series->getVolumes());
+        $macd = self::jsonFor($series->getMacd());
+        $macdSignal = self::jsonFor($series->getMacdSignal());
+        $macdHistogram = self::jsonFor($series->getMacdHistogram());
+        $rsi14 = self::jsonFor($series->getRsi14());
 
         // Lineas horizontales de stop-loss/objetivo (ver DTO\RiskLevels):
         // valores constantes, no series por fecha, asi que se pasan como
@@ -327,6 +341,8 @@ class StockDetailPage
         $rawTicker = Layout::escape(rawurlencode($analysis->getStock()->getCompany()->getTicker()));
         $canvasId = 'priceChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
         $volumeCanvasId = 'volumeChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
+        $rsiCanvasId = 'rsiChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
+        $macdCanvasId = 'macdChart_' . preg_replace('/[^a-zA-Z0-9]/', '', $analysis->getStock()->getCompany()->getTicker());
 
         return <<<HTML
         <div class="chart-wrap">
@@ -356,6 +372,20 @@ class StockDetailPage
                 <canvas id="{$volumeCanvasId}"></canvas>
             </div>
         </div>
+        <div class="chart-wrap">
+            <h2>RSI (14)</h2>
+            <p class="muted panel-note">El RSI oscila entre 0 y 100, con lineas de referencia en 30 (sobreventa) y 70 (sobrecompra). No disponible en velas intradia.</p>
+            <div class="chart-canvas-medium">
+                <canvas id="{$rsiCanvasId}"></canvas>
+            </div>
+        </div>
+        <div class="chart-wrap">
+            <h2>MACD</h2>
+            <p class="muted panel-note">MACD y su señal se muestran en unidades de precio pero sin simbolo de divisa, igual que en cualquier plataforma de trading: son osciladores, no un nivel de precio a alcanzar. No disponible en velas intradia.</p>
+            <div class="chart-canvas-medium">
+                <canvas id="{$macdCanvasId}"></canvas>
+            </div>
+        </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
         <script>
         (function () {
@@ -369,6 +399,10 @@ class StockDetailPage
                 bbUpper: {$bbUpper},
                 bbLower: {$bbLower},
                 volumes: {$volumes},
+                macd: {$macd},
+                macdSignal: {$macdSignal},
+                macdHistogram: {$macdHistogram},
+                rsi14: {$rsi14},
                 stopLoss: {$stopLossJson},
                 target: {$targetJson}
             };
@@ -391,7 +425,11 @@ class StockDetailPage
                     sma50: full.sma50.slice(start),
                     bbUpper: full.bbUpper.slice(start),
                     bbLower: full.bbLower.slice(start),
-                    volumes: full.volumes.slice(start)
+                    volumes: full.volumes.slice(start),
+                    macd: full.macd.slice(start),
+                    macdSignal: full.macdSignal.slice(start),
+                    macdHistogram: full.macdHistogram.slice(start),
+                    rsi14: full.rsi14.slice(start)
                 };
             }
 
@@ -486,6 +524,53 @@ class StockDetailPage
                 });
             }
 
+            var rsiChart = null;
+            var rsiCtx = document.getElementById('{$rsiCanvasId}');
+            if (rsiCtx && window.Chart) {
+                rsiChart = new Chart(rsiCtx, {
+                    type: 'line',
+                    data: {
+                        labels: current.labels,
+                        datasets: [
+                            { label: 'RSI (14)', data: current.rsi14, borderColor: '#6b3fa0', borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
+                            { label: 'Sobreventa (30)', data: flatLine(current.labels, 30), borderColor: '#147a46', borderWidth: 1, pointRadius: 0, borderDash: [6, 4], tension: 0 },
+                            { label: 'Sobrecompra (70)', data: flatLine(current.labels, 70), borderColor: '#b42318', borderWidth: 1, pointRadius: 0, borderDash: [6, 4], tension: 0 }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            x: { ticks: { maxTicksLimit: 12 } },
+                            y: { min: 0, max: 100 }
+                        }
+                    }
+                });
+            }
+
+            var macdChart = null;
+            var macdCtx = document.getElementById('{$macdCanvasId}');
+            if (macdCtx && window.Chart) {
+                macdChart = new Chart(macdCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: current.labels,
+                        datasets: [
+                            { type: 'bar', label: 'Histograma', data: current.macdHistogram, backgroundColor: '#b6c1c9', barPercentage: 1, categoryPercentage: 1 },
+                            { type: 'line', label: 'MACD', data: current.macd, borderColor: '#0f6b77', borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
+                            { type: 'line', label: 'Señal', data: current.macdSignal, borderColor: '#9a6500', borderWidth: 1.5, pointRadius: 0, tension: 0.15 }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: { x: { ticks: { maxTicksLimit: 12 } } }
+                    }
+                });
+            }
+
             function setPriceDatasets(next) {
                 if (!priceChart) {
                     return;
@@ -521,6 +606,30 @@ class StockDetailPage
                 volumeChart.update();
             }
 
+            function setRsiDataset(next) {
+                if (!rsiChart) {
+                    return;
+                }
+
+                rsiChart.data.labels = next.labels;
+                rsiChart.data.datasets[0].data = next.rsi14;
+                rsiChart.data.datasets[1].data = flatLine(next.labels, 30);
+                rsiChart.data.datasets[2].data = flatLine(next.labels, 70);
+                rsiChart.update();
+            }
+
+            function setMacdDataset(next) {
+                if (!macdChart) {
+                    return;
+                }
+
+                macdChart.data.labels = next.labels;
+                macdChart.data.datasets[0].data = next.macdHistogram;
+                macdChart.data.datasets[1].data = next.macd;
+                macdChart.data.datasets[2].data = next.macdSignal;
+                macdChart.update();
+            }
+
             function applyDailyRange(button) {
                 var next = button.hasAttribute('data-days')
                     ? sliceByDays(parseInt(button.getAttribute('data-days'), 10))
@@ -528,6 +637,8 @@ class StockDetailPage
 
                 setPriceDatasets(next);
                 setVolumeDataset(next.labels, next.volumes);
+                setRsiDataset(next);
+                setMacdDataset(next);
             }
 
             var intradayToolbar = document.querySelector('.chart-toolbar[data-intraday-target="{$canvasId}"]');
@@ -570,6 +681,16 @@ class StockDetailPage
                             bbLower: []
                         });
                         setVolumeDataset(data.labels, data.volumes);
+                        setRsiDataset({
+                            labels: data.labels,
+                            rsi14: []
+                        });
+                        setMacdDataset({
+                            labels: data.labels,
+                            macd: [],
+                            macdSignal: [],
+                            macdHistogram: []
+                        });
                     })
                     .catch(function () {})
                     .finally(function () {

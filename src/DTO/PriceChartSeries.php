@@ -21,6 +21,10 @@ class PriceChartSeries
      * @param list<float|null> $bollingerUpper
      * @param list<float|null> $bollingerLower
      * @param list<int> $volumes
+     * @param list<float|null> $macd
+     * @param list<float|null> $macdSignal
+     * @param list<float|null> $macdHistogram
+     * @param list<float|null> $rsi14
      */
     public function __construct(
         private readonly array $labels,
@@ -31,7 +35,11 @@ class PriceChartSeries
         private readonly array $sma50,
         private readonly array $bollingerUpper,
         private readonly array $bollingerLower,
-        private readonly array $volumes
+        private readonly array $volumes,
+        private readonly array $macd = [],
+        private readonly array $macdSignal = [],
+        private readonly array $macdHistogram = [],
+        private readonly array $rsi14 = []
     ) {
     }
 
@@ -105,5 +113,37 @@ class PriceChartSeries
     public function getVolumes(): array
     {
         return $this->volumes;
+    }
+
+    /**
+     * @return list<float|null>
+     */
+    public function getMacd(): array
+    {
+        return $this->macd;
+    }
+
+    /**
+     * @return list<float|null>
+     */
+    public function getMacdSignal(): array
+    {
+        return $this->macdSignal;
+    }
+
+    /**
+     * @return list<float|null>
+     */
+    public function getMacdHistogram(): array
+    {
+        return $this->macdHistogram;
+    }
+
+    /**
+     * @return list<float|null>
+     */
+    public function getRsi14(): array
+    {
+        return $this->rsi14;
     }
 }

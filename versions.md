@@ -4,30 +4,30 @@ Este documento resume el estado real del proyecto frente a `project.md` y `roadm
 
 ## Estado actual
 
-La aplicacion es una demo funcional avanzada, ahora con la fase de producto personal implementada hasta `v2.17`. Permite consultar acciones reales en Yahoo Finance, calcular indicadores tecnicos completos (incluyendo EMA, MACD, Bollinger y ATR) y fundamentales reales (PER, PEG, ROE, margenes, deuda, dividendo...), combinarlos en un score con pesos configurables por categoria y explicado punto por punto (con el resumen y los "indicadores determinantes" mostrando de forma equilibrada tanto el analisis tecnico como el fundamental, no solo el primero), y mostrar tanto un ranking como una ficha de detalle por accion con graficos Chart.js mas altos y con temporalidades intradia.
+La aplicacion es una demo funcional avanzada, ahora con la fase de producto personal implementada hasta `v2.26`. Permite consultar acciones reales en Yahoo Finance, calcular indicadores tecnicos completos (incluyendo EMA, MACD, Bollinger y ATR, con stop-loss/objetivo sugeridos basados en ATR14, `v2.19`) y fundamentales reales (PER, PEG, ROE, margenes, deuda, dividendo...), combinarlos en un score con pesos configurables por categoria y explicado punto por punto (con el resumen y los "indicadores determinantes" mostrando de forma equilibrada tanto el analisis tecnico como el fundamental, no solo el primero), y mostrar tanto un ranking como una ficha de detalle por accion con graficos Chart.js mas altos y con temporalidades intradia, incluido el historial real de la señal de compra de cada ticker (`v2.23`).
 
-Tambien incluye cuentas de usuario con verificacion de email obligatoria (con Mailpit disponible en local via DDEV), migraciones SQL para MariaDB, cartera simulada basada en operaciones inmutables (con compra/venta por importe en dinero, rentabilidad por operacion en el historico y grafico de evolucion del valor de la cartera en el tiempo), watchlist personal con boton de seguimiento en la ficha de detalle, alertas basicas dentro de la propia web cuando cambia la recomendacion de una accion de la cartera o la watchlist, menu de navegacion, configuracion local de proveedor, tooltips/explicaciones ampliadas de indicadores, graficos con temporalidad seleccionable (desde 1 semana hasta 2 años, mas intradia por velas de 1h/15m/5m/1m) y maximo/minimo diario, cache de datos de mercado, rankings diarios guardados, universos configurables, busqueda por ticker o nombre de empresa, API JSON, backtesting basico y noticias/sentimiento importables por CSV. El universo por defecto del Home ("general") ya no es una lista fija: se construye en vivo con las 20 acciones que mas suben y las 20 que mas bajan hoy segun Yahoo Finance, con una lista de respaldo si ese dato en vivo falla.
+Tambien incluye cuentas de usuario con verificacion de email obligatoria (con Mailpit disponible en local via DDEV, y enlace absoluto y clicable desde `v2.20`), migraciones SQL para MariaDB, cartera simulada basada en operaciones inmutables (con compra/venta por importe en dinero, rentabilidad por operacion en el historico, precio de cada operacion mostrado tambien en euros y dolares cuando aplica, `v2.25`, grafico de evolucion del valor de la cartera en el tiempo y exportacion CSV de posiciones abiertas e historial de operaciones, `v2.26`), watchlist personal con boton de seguimiento en la ficha de detalle, alertas basicas dentro de la propia web cuando cambia la recomendacion de una accion de la cartera o la watchlist, menu de navegacion, configuracion local de proveedor, tooltips/explicaciones ampliadas de indicadores, graficos con temporalidad seleccionable (desde 1 semana hasta 2 años, mas intradia por velas de 1h/15m/5m/1m) y maximo/minimo diario, cache de datos de mercado, rankings diarios guardados, universos configurables (incluido `ibex35` completo a 35 valores y 4 universos ADR geograficos nuevos, `v2.24`), busqueda por ticker o nombre de empresa, API JSON, backtesting basico (con simulacion de gestion por stop-loss/objetivo, `v2.21`) y noticias/sentimiento importables por CSV. El universo por defecto del Home ("general") ya no es una lista fija: se construye en vivo con las 20 acciones que mas suben y las 20 que mas bajan hoy segun Yahoo Finance, con una lista de respaldo si ese dato en vivo falla.
 
-No es todavia una plataforma robusta de produccion porque faltan tests automatizados, exportaciones y proveedores externos oficiales para noticias/datos. Ademas, la obtencion de fundamentales depende de un endpoint no oficial de Yahoo Finance (ver v1.3); si falla, la aplicacion sigue funcionando con el resto de indicadores.
+No es todavia una plataforma robusta de produccion porque faltan tests automatizados de extremo a extremo (si hay una suite `phpunit` con 26 tests, ver `v2.21`, pero no cubre todavia la mayoria de `Services`/`Web`) y proveedores externos oficiales para noticias/datos. Ademas, la obtencion de fundamentales depende de un endpoint no oficial de Yahoo Finance (ver v1.3); si falla, la aplicacion sigue funcionando con el resto de indicadores.
 
-La fase `v2.4` a `v2.11`, pedida directamente por el usuario el 2026-07-29 (diseno visual, filtros/busqueda del Home, cartera con importe en dinero, rentabilidad por operacion, un bug visual en "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro), y las fases posteriores del mismo dia (`v2.12` universo dinamico, `v2.13` a `v2.15` evolucion de cartera/watchlist/alertas, `v2.16` numeracion de version y estrella de watchlist en tablas, `v2.17` fundamentales explicitos en la explicacion), ya estan implementadas. Ver las secciones correspondientes mas abajo para el detalle y las limitaciones honestas de cada una (sobre todo `v2.5` y `v2.9`, que dependen de un directorio de nombres curado a mano y de un endpoint no oficial de Yahoo respectivamente).
+La fase `v2.4` a `v2.11`, pedida directamente por el usuario el 2026-07-29 (diseno visual, filtros/busqueda del Home, cartera con importe en dinero, rentabilidad por operacion, un bug visual en "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro), las fases posteriores del mismo dia (`v2.12` universo dinamico, `v2.13` a `v2.15` evolucion de cartera/watchlist/alertas, `v2.16` numeracion de version y estrella de watchlist en tablas, `v2.17` fundamentales explicitos en la explicacion), y las fases posteriores (`v2.18`/`v2.22` recalibracion de Bollinger, `v2.19` stop-loss/objetivo con ATR14, `v2.20` enlace de verificacion de email, `v2.21` simulacion de stop-loss/objetivo en backtesting, `v2.23` historial real de la señal en la ficha de detalle, `v2.24` curacion de universos, `v2.25` precio en EUR/USD en el historial de cartera y `v2.26` exportacion CSV), ya estan implementadas. Ver las secciones correspondientes mas abajo para el detalle y las limitaciones honestas de cada una (sobre todo `v2.5` y `v2.9`, que dependen de un directorio de nombres curado a mano y de un endpoint no oficial de Yahoo respectivamente).
 
 ---
 
 ## Orden recomendado de ejecucion
 
-Los numeros de version son etiquetas para identificar cada pieza, no dictan el orden en que hay que construirlas. La fase pendiente principal ya esta implementada hasta `v2.17` y se han cubierto tambien `v1.1`, `v1.2` parcial/configurable, `v1.6`, `v1.7`, `v0.5.4`, `v0.6.3` y `v0.6.4`.
+Los numeros de version son etiquetas para identificar cada pieza, no dictan el orden en que hay que construirlas. La fase pendiente principal ya esta implementada hasta `v2.26` y se han cubierto tambien `v1.1`, `v1.2` parcial/configurable, `v1.6`, `v1.7`, `v0.5.4`, `v0.6.3` y `v0.6.4`.
 
-1. **Tests automatizados.** Cubrir serializacion/cache, repositorios, scoring y rutas criticas.
+1. **Tests automatizados.** Hay una suite `phpunit` (26 tests, ver `v2.21`) que cubre `BacktestingService` y el analisis tecnico de Bollinger, pero sigue faltando cobertura de `Services`/`Repository`/rutas de `Application.php` en general.
 2. **Proveedor oficial de datos/noticias.** Yahoo sigue siendo mejor esfuerzo; las noticias ahora entran por CSV.
-3. **Exportaciones CSV.** De la cartera y del historial de operaciones (watchlist y alertas ya implementadas, ver `v2.14`/`v2.15`).
-4. **Universos mantenidos automaticamente.** `config/universes.php` ya permite listas, pero no descarga componentes de indices.
+3. ~~**Exportaciones CSV.** De la cartera y del historial de operaciones.~~ Implementado en `v2.26` (watchlist y alertas ya implementadas desde `v2.14`/`v2.15`).
+4. **Universos mantenidos automaticamente.** `config/universes.php` ya permite listas curadas a mano (ampliadas en `v2.24`), pero no descarga componentes de indices de forma automatica.
 
-La fase `v2.4` a `v2.17` (diseno, filtros/busqueda, cartera con importe/fracciones, bug de "Mi cartera", enlaces al detalle, graficos, tooltips educativos, verificacion de email, universo dinamico, evolucion de cartera, watchlist, alertas, estrella de watchlist en tablas y fundamentales explicitos en la explicacion) ya esta implementada, ver mas abajo.
+La fase `v2.4` a `v2.26` (diseno, filtros/busqueda, cartera con importe/fracciones, bug de "Mi cartera", enlaces al detalle, graficos, tooltips educativos, verificacion de email, universo dinamico, evolucion de cartera, watchlist, alertas, estrella de watchlist en tablas, fundamentales explicitos en la explicacion, recalibracion de Bollinger, stop-loss/objetivo con ATR14, simulacion de gestion de riesgo en backtesting, historial real de la señal en la ficha de detalle, curacion de universos, precio en EUR/USD en el historial de cartera y exportacion CSV) ya esta implementada, ver mas abajo.
 
 `v1.2` queda cubierto como universos configurables/manuales; no queda cubierto como descarga automatica de componentes de indices.
 
-La fecha de esta revision es 2026-07-29.
+La fecha de esta revision es 2026-08-01.
 
 ---
 
@@ -1495,14 +1495,409 @@ Resultado esperado:
 
 ---
 
+## v2.25 - Precio en EUR y USD en el historial de operaciones
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El usuario opera siempre en euros, pero `Transaction::getPrice()` se guarda en la divisa nativa del ticker tal cual la devuelve Yahoo (USD para tickers de EEUU, EUR para los `.MC`). En la tabla "Historial de operaciones" de "Mi cartera" el precio se mostraba sin conversion, sin forma de comparar de un vistazo una compra en dolares con una en euros. Se pide mostrar el precio de cada operacion en ambas divisas, con un guion en la que no aplica.
+
+Decisiones de arquitectura:
+
+- **Solo visualizacion, no se toca ningun calculo de rentabilidad.** `Transaction::getPrice()` sigue guardandose y usandose tal cual en su divisa nativa en `PortfolioService::getPortfolio()`/`Portfolio::getTransactionProfit()` y en las tarjetas resumen: comparan precio de la operacion contra precio actual, ambos en la misma divisa nativa, y eso ya era correcto. Mezclar esos calculos con una conversion habria sido un cambio mucho mayor y fuera de alcance de esta peticion.
+- **Sin proveedor HTTP nuevo ni tabla de cache nueva.** `Services\ExchangeRateService::getRateToEur()` obtiene el tipo de cambio pidiendo al mismo `MarketDataProviderInterface` ya existente el ticker `USDEUR=X` (Yahoo trata los pares de divisas como un ticker mas del mismo endpoint `v8/finance/chart`, con `regularMarketPrice` como euros por cada dolar): como ya pasa por `Providers\CachedMarketDataProvider` (TTL 15 min, cachea por string de ticker sin importar que en realidad sea un par de divisas), el tipo de cambio queda cacheado automaticamente. Devuelve `1.0` si la divisa ya es EUR (o esta vacia/desconocida), y `null` si la peticion falla o el precio no es positivo.
+- **Una sola llamada de red por cartera, no por operacion.** `PortfolioService::getPortfolio()` ya recorre las transacciones para obtener el precio actual de cada ticker (`$currentPrices`); se reutiliza esa misma llamada a `getStock()` para capturar tambien la divisa (`Company::getCurrency()`) sin duplicar peticiones. Solo si algun ticker de la cartera esta en USD se pide el tipo de cambio, una unica vez, no una vez por ticker ni por transaccion.
+- **Sin sistema multidivisa generico.** Se resuelve solo USD<->EUR (las dos unicas divisas presentes en `config/universes.php` hoy): para cualquier otra divisa, o si el tipo de cambio no se pudo obtener, las columnas muestran "-" en vez de inventar una conversion o lanzar un error.
+- `Models\Portfolio` gana `getTransactionPriceEur()`/`getTransactionPriceUsd()`, ambos con un helper privado `currencyFor()` que mira la divisa guardada para el ticker de esa transaccion; los dos parametros nuevos del constructor (`$currencies`, `$usdToEurRate`) tienen default `[]`/`null` porque `Portfolio` solo se instancia desde `PortfolioService::getPortfolio()` (verificado por grep, no hay otro sitio que lo instancie).
+
+Incluye:
+
+- `Services/ExchangeRateService.php` (nuevo): `getRateToEur(string $currency): ?float`.
+- `Services/PortfolioService.php`: dependencia `ExchangeRateService`, captura de `$currencies` en el bucle de precios actuales, calculo de `$usdToEurRate`, pasados al constructor de `Portfolio`.
+- `Models/Portfolio.php`: parametros `$currencies`/`$usdToEurRate`, `getTransactionPriceEur()`, `getTransactionPriceUsd()`, `currencyFor()`.
+- `Web/PortfolioPage.php` (`renderTransactions()`): columna unica "Precio" sustituida por "Precio (EUR)" y "Precio (USD)", formateadas con `Layout::formatNullable()` mas sufijo `' €'`/`' $'` (sin sufijo las dos columnas serian indistinguibles a simple vista, ya que la app no muestra simbolo de divisa en ningun otro sitio).
+- `Services/Application.php`: wiring de `ExchangeRateService` como tercera dependencia de `PortfolioService`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 5 ficheros tocados/creados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde (sin tests nuevos: no hay suite automatizada para `Services`/`Models` de cartera todavia, buen candidato para `qa-tests` si se prioriza). Confirmado por `curl` contra `https://query1.finance.yahoo.com/v8/finance/chart/USDEUR=X` en vivo desde el contenedor ddev que el endpoint devuelve `regularMarketPrice` (0,8675 en el momento de la verificacion). Con un usuario real de ddev (login por `curl` con cookie jar, CSRF real) se registraron una compra de 1 AAPL a 200 USD y una compra de 5 SAN.MC a 4,50 EUR: la tabla de historial mostro `SAN.MC` con `4,50 €` / `-` y `AAPL` con `173,50 €` (200 × 0,8675, coincide con el tipo de cambio consultado a mano) / `200,00 $`; verificado tambien que las tarjetas resumen y la columna "Beneficio" no cambiaron. Las dos operaciones de prueba se borraron de la base de datos al terminar para no dejar datos falsos en la cartera real del usuario.
+
+Resultado esperado:
+
+En "Mi cartera", el historial de operaciones muestra el precio de cada operacion tanto en euros como en dolares, con guion en la divisa que no aplica, sin alterar ningun calculo de rentabilidad existente.
+
+---
+
+## v2.26 - Exportacion CSV de cartera e historial de operaciones
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Cerrar la prioridad media pendiente anotada en `roadmap.md` ("Exportacion CSV. De la cartera y del historial de operaciones", tercer punto del "Orden recomendado de ejecucion" de este mismo fichero), pedida ahora explicitamente por el usuario: poder descargar tanto las posiciones abiertas como el historial completo de operaciones en un fichero que se abra bien en Excel en español.
+
+Decisiones de arquitectura:
+
+- **Misma filosofia de ruta que `?page=api` (v1.x).** Es una ruta GET de solo lectura que no devuelve HTML: `Application::renderPortfolioExport()` sigue el mismo patron que `renderApiRanking()`/`renderIntraday()` (hace `header(...)` y devuelve el body como string; el dispatcher hace `echo`), sin CSRF porque no muta estado, igual criterio que el resto de rutas GET de la app.
+- **`Services/PortfolioCsvExporter.php` (nuevo), no logica en `Web/PortfolioPage.php`.** Sigue el patron ya establecido de separar renderizado (`Web/*Page.php`) de logica de aplicacion (`Services/`): dos metodos estaticos, `holdings(Portfolio $portfolio): string` y `transactions(Portfolio $portfolio): string`, que reutilizan los mismos getters de `Portfolio` que ya usa `PortfolioPage` (incluidos `getTransactionPriceEur()`/`getTransactionPriceUsd()` de v2.25), para que el CSV y la tabla web sean siempre coherentes.
+- **Delimitador `;`, no `,`.** Los numeros ya se formatean con coma decimal (`Layout::formatNumber`, igual que el resto de la UI); una coma como separador de columnas chocaria con los decimales. Se usa `fputcsv()` sobre un stream `php://temp` con `;` como delimitador.
+- **BOM UTF-8 antepuesto al string devuelto**, para que Excel detecte UTF-8 y las tildes/ñ no salgan mal.
+- Dos enlaces "Exportar a CSV" nuevos en `Web/PortfolioPage.php`, uno bajo "Posiciones abiertas" (`?page=portfolio&export=holdings`) y otro bajo "Historial de operaciones" (`?page=portfolio&export=transactions`), reutilizando la clase `panel-note` ya existente.
+- `renderPortfolioExport()` requiere usuario con el mismo patron try/catch-y-redirect-a-login que `renderPortfolio()`; un tipo de exportacion no reconocido cae en el mismo `renderMessage()` de error que ya usan `renderPortfolio()`/`renderProviderConfig()`.
+
+Incluye:
+
+- `Services/PortfolioCsvExporter.php` (nuevo): `holdings()`, `transactions()`, helper privado `toCsv()`.
+- `Web/PortfolioPage.php`: enlaces "Exportar a CSV" en "Posiciones abiertas" y "Historial de operaciones".
+- `Services/Application.php`: ruta `?page=portfolio&export=holdings|transactions` (comprobada antes que la ruta normal de `?page=portfolio`), metodo privado `renderPortfolioExport(string $type): string`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros tocados/creados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde. Con el mismo usuario real de ddev de la verificacion de v2.25 (login por `curl` con cookie jar y CSRF real), tras registrar una compra de AAPL (USD) y una de SAN.MC (EUR): `curl '?page=portfolio&export=holdings'` y `'?page=portfolio&export=transactions'` devuelven HTTP 200 con `Content-Type: text/csv; charset=UTF-8` y `Content-Disposition: attachment; filename="cartera-2026-08-01.csv"`/`"historial-operaciones-2026-08-01.csv"`; `file` confirma "Unicode text, UTF-8 (with BOM) text" en ambos ficheros descargados, y `python3 -m csv` (delimitador `;`, codificacion `utf-8-sig`) parsea las columnas correctamente, incluida la fila de `SAN.MC` con `-` en la columna de precio USD. Tambien verificado que exportar sin sesion iniciada redirige a `?page=login` (mismo criterio que abrir `?page=portfolio` sin sesion) y que un `export` con un valor no reconocido (`?export=bogus`) muestra la misma pantalla de error que usa `renderMessage()` en vez de romper. Los datos de prueba (usuario y transacciones) se borraron de la base de datos al terminar.
+
+Resultado esperado:
+
+Desde "Mi cartera", un clic en "Exportar a CSV" descarga un fichero `.csv` que Excel/LibreOffice en español abre con las columnas correctamente separadas, tildes/ñ legibles y numeros en el mismo formato (coma decimal) que ya se ve en pantalla, tanto para las posiciones abiertas como para el historial completo de operaciones.
+
+---
+
+## v2.27 - Simbolo de divisa en todos los precios
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El usuario pide que todo precio mostrado en la app (cotizacion, medias, bandas de Bollinger, ATR14, maximo/minimo de periodo, stop-loss/objetivo sugeridos, EPS, precios/importes de una posicion u operacion de cartera) lleve el simbolo de su divisa (€ o $), incluida la columna "Beneficio vs. precio actual" del historial de operaciones. Antes de este cambio la app no mostraba ningun simbolo en ningun sitio; en algunos puntos concretos se mostraba el codigo de divisa como texto suelto al lado del numero, en la mayoria ni eso.
+
+Decisiones de arquitectura:
+
+- **Helpers nuevos en `Web/Layout.php`, junto a `formatNumber()`/`formatNullable()`.** `currencySymbol(string $currency)` mapea `EUR`→`€`, `USD`→`$`, cadena vacia→sin simbolo, cualquier otra divisa no mapeada se muestra tal cual (no rompe si algun dia aparece una divisa nueva en `config/universes.php`). `formatMoney()`/`formatNullableMoney()` combinan `formatNumber()`/`formatNullable()` con el simbolo, mismo patron que los pares ya existentes.
+- **Regla de que lleva simbolo y que no, aplicada de forma consistente en toda la app**: llevan simbolo los valores que son literalmente un nivel de precio en la divisa del ticker (cotizacion, SMA/EMA, bandas de Bollinger, ATR14, maximo/minimo de periodo, stop-loss/objetivo, EPS, precio medio/actual/invertido/beneficio de una posicion u operacion concreta). NO llevan simbolo los porcentajes, ratios adimensionales (PER, PEG, EV/EBITDA, Precio/Valor contable, Deuda/Patrimonio, Ratio de liquidez, RSI) ni MACD/señal/histograma (se muestran como oscilador sin simbolo, igual que en cualquier plataforma de trading, aunque tecnicamente esten en unidades de precio). Tampoco llevan simbolo las tarjetas resumen de "Mi cartera" que suman varias posiciones (`Invertido`, `Valor actual`, `Beneficio latente`, `Beneficio realizado`, `Rendimiento general`): son sumas que pueden mezclar tickers en USD y EUR sin convertir (limitacion conocida desde `v2.2`/`v2.25`), poner un simbolo ahi seria mostrar como si fuera una unica divisa correcta un total que no lo es.
+- **`Models\Portfolio` gana `getCurrencyFor(string $ticker): string` publico**, que expone el mapa `$currencies` ya construido en `PortfolioService::getPortfolio()` desde `v2.25` (antes solo accesible a traves del `currencyFor()` privado usado por `getTransactionPriceEur()`/`getTransactionPriceUsd()`, que ahora delega en el metodo nuevo en vez de duplicar el mapeo).
+- Sin conversion de divisa nueva ni logica adicional: es una capa de formato encima de datos que ya existian (`Company::getCurrency()` para el ranking/detalle/watchlist, `Portfolio::getCurrencyFor()` para cartera).
+
+Incluye:
+
+- `Web/Layout.php`: `currencySymbol()`, `formatMoney()`, `formatNullableMoney()`.
+- `Web/DashboardPage.php`: precio de la tabla de ranking y chips "SMA 20"/"SMA 50" (RSI/MACD sin cambios); `renderTechnicalChips()` recibe la divisa del ticker como parametro nuevo.
+- `Web/StockDetailPage.php`: cabecera, y los `value-box` de Precio, SMA 20/50, EMA 12/26, Bollinger superior/inferior, ATR (14), Stop/Objetivo sugeridos, Maximo/Minimo (periodo) y EPS (RSI/MACD/ratios fundamentales sin cambios).
+- `Web/WatchlistPage.php`: precio de `renderAnalysisCells()`.
+- `Models/Portfolio.php`: `getCurrencyFor()` nuevo, `currencyFor()` refactorizado para reutilizarlo.
+- `Web/PortfolioPage.php`: Precio medio/Precio actual/Invertido/Beneficio de `renderHoldings()`, columna "Beneficio vs. precio actual" de `renderTransactions()` (peticion explicita del usuario); tarjetas resumen y columnas "Precio (EUR)"/"Precio (USD)" (con simbolo literal desde `v2.25`) sin tocar.
+- `Services/PortfolioCsvExporter.php`: mismas columnas de precio de la exportacion CSV pasan a `formatMoney()`/`formatNullableMoney()` con la divisa de cada ticker, para que CSV y tabla web sigan siendo coherentes (mismo criterio que `v2.26`); las columnas "Precio (EUR)"/"Precio (USD)" del CSV se dejan igual que estaban (sin simbolo, ya lo indica el nombre de columna).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 8 ficheros tocados/creados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde. Con un usuario de prueba nuevo (registrado, verificado a mano en BD, login por `curl` con cookie jar y CSRF real, datos borrados al terminar): ficha de detalle de AAPL (USD) confirma `308,91 $` en Precio/SMA/EMA/Bollinger/ATR/Stop/Objetivo/Maximo/Minimo/EPS y sin simbolo en RSI/MACD/PER/PEG/EV-EBITDA/ratios; ficha de SAN.MC (EUR) confirma el mismo patron con `€`; Home muestra `12,32 €`/`308,91 $` en la columna de precio y en los chips "SMA 20"; comprando 2 AAPL y 5 SAN.MC en la cartera de prueba, "Posiciones abiertas" muestra Precio medio/actual/Invertido/Beneficio con el simbolo correcto por fila y las tarjetas resumen sin simbolo; "Historial de operaciones" muestra `0,00 €` para la fila de SAN.MC y `0,00 $` para la de AAPL en "Beneficio vs. precio actual"; los CSV exportados (`?export=holdings`/`?export=transactions`) se parsearon con `python3 -m csv` (delimitador `;`, `utf-8-sig`) confirmando que el simbolo pegado al numero dentro de la misma celda entrecomillada no rompe ninguna columna.
+
+Resultado esperado:
+
+Todo precio mostrado en la app (ranking, ficha de detalle, watchlist, cartera y su exportacion CSV) lleva el simbolo de su divisa nativa, sin afectar a porcentajes, ratios adimensionales, MACD ni a las tarjetas resumen de cartera que suman varias divisas.
+
+---
+
+## v2.28 - MACD visible en el grafico de la ficha de detalle
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El grafico de precio de `StockDetailPage` ya pinta SMA20/SMA50 y bandas de Bollinger superpuestas desde `v0.6.2`. El usuario pide que tambien se vea el MACD, que hasta ahora solo se mostraba como valor numerico (value boxes), no en ningun grafico.
+
+Decisiones de arquitectura:
+
+- **Reutilizar `TechnicalAnalyzer::macdFromEma()` tal cual, no duplicar la formula.** `buildChartSeries()` ya calculaba `bollingerSeries()` pero no `emaSeries()`/`macdFromEma()`; se añaden esas dos llamadas (las mismas que ya usa `analyze()`) y se pasa la serie completa (`macd`, `signal`, `histogram`) al DTO, en vez de recalcular el indicador con otra formula.
+- **`DTO\PriceChartSeries` gana tres campos nuevos** (`macd`, `macdSignal`, `macdHistogram`, cada uno `list<float|null>`) con default `[]` en el constructor: el unico punto de construccion del DTO es `TechnicalAnalyzer::buildChartSeries()` (verificado por grep, no hay otro sitio), asi que el default es solo para no romper compatibilidad si en el futuro se instancia en un test sin pasar estos campos.
+- **Panel de grafico nuevo, no un dataset mas del grafico de precio.** El MACD vive en su propia escala (oscila alrededor de 0, no es un nivel de precio comparable a la cotizacion), asi que se anade un tercer `chart-wrap` debajo de "Volumen", mismo patron de canvas + Chart.js. Es un chart mixto de Chart.js (`type: 'bar'` para el histograma, dos datasets `type: 'line'` superpuestos para MACD y su señal), con su propia funcion `setMacdDataset(next)` analoga a `setVolumeDataset()`.
+- **Sin simbolo de divisa en el grafico ni su leyenda**, coherente con la decision de `v2.27`: MACD y su señal estan en unidades de precio pero se tratan como oscilador en toda la app.
+- **En velas intradia se limpia a `[]`**, igual que ya se hacia con `sma20`/`sma50`/`bbUpper`/`bbLower` en `applyIntraday()`: el endpoint `?page=intraday` no calcula MACD, asi que no se intenta rellenar con datos a medias.
+
+Incluye:
+
+- `Analyzer/TechnicalAnalyzer.php`: `buildChartSeries()` calcula `emaSeries()`/`macdFromEma()` y los pasa al DTO.
+- `DTO/PriceChartSeries.php`: `macd`, `macdSignal`, `macdHistogram` con sus getters.
+- `Web/StockDetailPage.php` (`renderCharts()`): panel "MACD" nuevo bajo "Volumen"; `sliceSince()` recorta tambien las tres series nuevas; grafico mixto `macdChart` (barras + 2 lineas); `setMacdDataset()` nuevo, llamado desde `applyDailyRange()`; en `applyIntraday()` se limpia a `[]` junto al resto de series no disponibles en intradia.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros tocados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde (sin tests nuevos: no hay suite automatizada para `TechnicalAnalyzer`/graficos todavia). Cargando la ficha de detalle de AAPL contra el proveedor Yahoo real en ddev, el HTML devuelto confirma la seccion `<h2>MACD</h2>` presente, el canvas `macdChart_AAPL` presente dos veces (definicion + referencia en el script), y los arrays `macd`/`macdHistogram` incrustados con valores numericos no vacios (`[null,null,...,6.89,...]` acorde al valor de la value box "MACD" de la misma pagina). Confirmado por lectura del codigo (no se pudo simular un clic real de boton sin navegador) que `applyIntraday()` llama a `setMacdDataset()` con arrays vacios, mismo patron ya verificado para SMA/Bollinger desde `v2.9`.
+
+Resultado esperado:
+
+La ficha de detalle de cualquier ticker muestra un tercer grafico "MACD" (histograma + lineas MACD/señal) debajo del grafico de volumen, recortado igual que el resto de series al cambiar de rango temporal, y vacio (sin romper) al activar velas intradia.
+
+---
+
+## v2.29 - Stop-loss/objetivo compactos en Watchlist y Cartera
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Cerrar la idea que estaba anotada sin version asignada en la seccion "Ideas adicionales sugeridas" de este mismo fichero (ya validada por `analista-mercado`/`diseno-usabilidad`/`fiabilidad-datos-mercado` durante la sesion de `v2.19`): extender el stop-loss/objetivo sugerido (basado en ATR14) de la ficha de detalle a una version resumida en `WatchlistPage.php`/`PortfolioPage.php`, para poder gestionar posiciones abiertas sin entrar a cada ficha.
+
+Decisiones de arquitectura:
+
+- **`Web/RiskLevelsBadge.php` (nuevo), componente reutilizable, mismo patron que `Web/WatchlistStar.php` (v2.16).** Un unico metodo estatico `render(?RiskLevels $riskLevels, string $currency): string` usado identico desde `WatchlistPage` y `PortfolioPage`, en vez de duplicar el marcado en las dos paginas. Devuelve `<span class="muted">-</span>` si `$riskLevels` es `null` (datos insuficientes para ATR14, ver `Services\RiskLevelsCalculator`).
+- **Formato de dos badges pequeños en una sola celda** (`SL 165,20 €` / `Obj 195,80 €`), no dos columnas separadas: las tablas de Watchlist/Cartera ya son densas (motivo por el que la idea original quedo pendiente de "pensar el formato compacto"). Clases CSS nuevas en `Layout.php` (`.risk-badge-compact`, `.risk-badge-stop`, `.risk-badge-target`), variante compacta de `.value-box-risk`/`.value-box-target` ya existentes (v2.19) en vez de reutilizarlas tal cual, que estan pensadas para el `value-box` grande de la ficha de detalle.
+- **Con simbolo de divisa** (`Layout::formatMoney()`, ver `v2.27`), usando `$analysis->getStock()->getCompany()->getCurrency()` en Watchlist y `Portfolio::getCurrencyFor()` (tambien de `v2.27`) en Cartera.
+- **`WatchlistPage`: sin wiring nuevo.** `render()` ya recibe `array<string,StockAnalysis> $analyses` completo, y `StockAnalysis::getRiskLevels()` ya estaba disponible sin cambios en `Application.php`.
+- **`PortfolioPage`: si hace falta wiring nuevo, sin llamar dos veces al analisis por ticker.** `Application::analyzeHoldingsForAlerts()` ya recorria cada posicion abierta llamando a `$this->analysisService->analyze($ticker)` pero solo se quedaba con la recomendacion (`string`), descartando el resto del `StockAnalysis`. Se cambia su valor de retorno a `array{recommendations: array<string,string>, riskLevels: array<string,?RiskLevels>}` capturando tambien `getRiskLevels()` en la misma llamada ya existente, en vez de anadir una segunda pasada por las posiciones. `PortfolioPage::render()` gana el parametro nuevo `array<string,?RiskLevels> $riskLevels = []`.
+
+Incluye:
+
+- `Web/RiskLevelsBadge.php` (nuevo): `render(?RiskLevels, string): string`.
+- `Web/Layout.php`: CSS `.risk-badge-compact`/`.risk-badge-stop`/`.risk-badge-target`.
+- `Web/WatchlistPage.php`: columna "Stop/Objetivo" nueva en la tabla (cabecera y celda); `colspan` de la fila de error pasa de 3 a 4.
+- `Web/PortfolioPage.php`: columna "Stop/Objetivo" nueva en `renderHoldings()`; `render()`/`renderHoldings()` reciben `$riskLevels`.
+- `Services/Application.php`: `analyzeHoldingsForAlerts()` devuelve tambien `riskLevels` por ticker; `renderPortfolio()` lo pasa a `PortfolioPage::render()`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 5 ficheros tocados/creados. `vendor/bin/phpunit`: 26 tests, 80 assertions, todos en verde. Con un usuario de prueba nuevo (registrado, verificado a mano en BD, datos borrados al terminar): siguiendo NVDA en la watchlist, la tabla muestra la columna "Stop/Objetivo" con `SL 182,07 $` / `Obj 238,11 $`; comprando 2 AAPL y 5 SAN.MC en la cartera de prueba, "Posiciones abiertas" muestra la misma columna compacta con `SL 284,23 $`/`Obj 358,27 $` para AAPL y `SL 11,55 €`/`Obj 13,86 €` para SAN.MC, sin romper el ancho de las demas columnas (la tabla sigue dentro de `.table-wrap` con `overflow-x: auto`, verificado leyendo el HTML devuelto, no hubo oportunidad de captura visual en navegador real dentro de este entorno). No se probo en esta sesion el caso "ticker sin historico suficiente para ATR14" con un ticker real (todos los tickers usados en la verificacion tenian suficiente historico); el comportamiento para ese caso (`RiskLevelsBadge::render(null, ...)` devuelve `-`) se confirmo por lectura del codigo, no por observacion en vivo.
+
+Resultado esperado:
+
+Watchlist y Cartera muestran, por cada ticker con historico suficiente, un badge compacto con el stop-loss y el objetivo sugeridos (ATR14) sin necesidad de entrar a la ficha de detalle, con guion cuando no hay datos suficientes para calcularlos, sin romper el ancho de tablas ya densas.
+
+---
+
+## v2.30 - RSI visible en el grafico de la ficha de detalle
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El grafico de la ficha de detalle ya muestra Precio (con SMA/Bollinger/stop-objetivo), Volumen y MACD (`v2.28`). El usuario pide sumar tambien el RSI, que hasta ahora solo se mostraba como value box numerica ("RSI (14)"), no en ningun grafico.
+
+Decisiones de arquitectura:
+
+- **Serie nueva `TechnicalAnalyzer::rsiSeries()`, coherente con el valor ya mostrado.** El RSI de un solo valor (`rsi()`, usado por `analyze()` desde `v0.4`) calcula una media simple de ganancias/perdidas sobre la ventana de 14 cambios que termina en el ultimo dato. `buildChartSeries()` necesitaba la serie completa, asi que se añade `rsiSeries()` aplicando exactamente la misma formula en cada indice del historico (no un suavizado de Wilder recursivo), para que el ultimo punto del grafico coincida con el valor ya mostrado en la value box. Verificado en ddev con SAN.MC: ultimo valor de la serie `56,514...`, igual al "RSI(14) esta en 56,5" que ya generaba la señal existente.
+- **`DTO\PriceChartSeries` gana un campo `rsi14`** (`list<float|null>`, default `[]`), mismo patron que los tres campos de MACD de `v2.28`.
+- **Panel de grafico nuevo entre "Volumen" y "MACD"**, no un dataset mas de otro grafico: el RSI vive en su propia escala fija (0-100), asi que se fija `scales.y.min=0`/`max=100` y se colocan dos lineas de referencia horizontales constantes en 30 (sobreventa) y 70 (sobrecompra) reutilizando la funcion `flatLine()` que ya existia para las lineas de Stop/Objetivo del grafico de precio (`v2.19`), en vez de anadir un plugin de anotaciones nuevo a Chart.js.
+- **Sin disponibilidad en velas intradia**, igual que MACD: `applyIntraday()` limpia `rsi14` a `[]` porque `?page=intraday` no calcula el indicador.
+
+Incluye:
+
+- `Analyzer/TechnicalAnalyzer.php`: `rsiSeries()` nuevo; `buildChartSeries()` lo pasa al DTO.
+- `DTO/PriceChartSeries.php`: `rsi14` con su getter.
+- `Web/StockDetailPage.php` (`renderCharts()`): panel "RSI (14)" nuevo entre "Volumen" y "MACD", con nota explicando el rango 0-100 y las lineas de referencia; `sliceSince()` recorta tambien la serie nueva; `setRsiDataset()` analogo a `setMacdDataset()`, llamado desde `applyDailyRange()`; limpiado a `[]` en `applyIntraday()`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros tocados. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. Peticion real a la ficha de detalle de SAN.MC (historico ya cacheado, sin red saliente a Yahoo): la serie `rsi14` incrustada tiene 511 puntos, `null` en los primeros 14 (esperado) y valores numericos en toda la segunda mitad, con el ultimo punto coincidiendo con el valor ya mostrado en la value box "RSI (14)".
+
+Resultado esperado:
+
+La ficha de detalle de cualquier ticker muestra un cuarto grafico "RSI (14)" entre Volumen y MACD, con lineas de referencia en 30/70, recortado igual que el resto de series al cambiar de rango temporal, y vacio (sin romper) al activar velas intradia.
+
+---
+
+## v2.31 - Backtest con muestras no solapadas
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Cerrar la idea marcada "prioridad al alza" en la seccion "Ideas adicionales sugeridas" de este mismo fichero: `BacktestingService::backtestTicker()` usaba `step=5` fijo con `horizonDays` tipicamente 20, asi que cada muestra compartia hasta 15 de sus 20 dias de retorno futuro con la siguiente (autocorrelacion). Relevante porque un hallazgo sobre RSI/Bollinger reportado al usuario en una sesion anterior se apoyaba en varios miles de esas muestras "en bruto", que en realidad eran solo unos cientos de episodios independientes.
+
+Hallazgo al validar (`analista-mercado`, backtests reales antes de tocar codigo):
+
+Con `step=20` (no solapado) en `largecap60`/`financials`/`ibex35`, `samples`/`buy_signals` caen ~4x tal cual predice la teoria (p.ej. `largecap60`: 124 → 29 señales BUY), pero las medias (`avg_buy_forward_return`/`avg_sell_forward_return`) no cambian de signo en ningun universo: los hallazgos previos siguen siendo validos, aunque las cifras de "miles de muestras" citadas en su momento eran en realidad unos cientos de episodios independientes, confirmando la sospecha original.
+
+Decisiones de arquitectura:
+
+- **`$step` pasa a ser parametro, no constante local**, en `run()`, `runForTicker()` y `backtestTicker()` (`int $step = 5` en los tres). El valor por defecto NO cambia: `runForTicker()` lo usa para el historial de señal interactivo de la ficha de detalle (`v2.23`), y subirlo a 20 degradaria esa granularidad de semanal a mensual sin que el usuario lo haya pedido.
+- **`bin/backtest.php` gana `--step`**, mismo patron de acotado que `--horizon`, con un comentario explicando que para muestras no solapadas hay que ejecutar con `--step=<igual a --horizon>`.
+- **Campo nuevo `effective_independent_samples` en el resultado de cada ticker**, calculado como `floor(samples / ceil(horizonDays / step))` con el `step` real usado: queda expuesto incluso cuando se ejecuta con el `step=5` por defecto, sin necesidad de relanzar nada para saber cuantas muestras son estadisticamente independientes.
+
+Incluye:
+
+- `Services/BacktestingService.php`: `$step` como parametro en las tres firmas; `effective_independent_samples` en el resultado.
+- `bin/backtest.php`: opcion `--step` nueva.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones (la suite existente llama con los parametros por defecto). `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20 --step=20`: `samples=21`/`effective_independent_samples=21` por ticker, `buy_signals` total 29 frente a 124 con el `step=5` por defecto, confirmando la caida ~4x esperada.
+
+Resultado esperado:
+
+Se puede validar cualquier hallazgo de backtesting con muestras no solapadas ejecutando `bin/backtest.php --step=<horizon>`, y el numero de episodios independientes queda visible en cualquier ejecucion (incluida la que ya usaba la ficha de detalle) sin cambiar el comportamiento por defecto que ve el usuario.
+
+---
+
+## v2.32 - Modo de backtesting "solo tecnico"
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Cerrar la otra idea marcada "prioridad al alza" en "Ideas adicionales sugeridas": en el backtest, los fundamentales usados para fechas pasadas son siempre los de HOY (el proveedor no tiene historico de fundamentales), asi que actuan como un "suelo" casi fijo durante todo el periodo. Se pedia una forma de aislar el poder predictivo del bloque tecnico/momentum de ese suelo fundamental.
+
+Hallazgo al validar (`analista-mercado`, backtests reales antes de tocar codigo):
+
+Confirmado en `largecap60`: con el score completo, 12 valores grandes (AAPL, NVDA, AMZN, TSLA, AVGO, BRK-B, V, XOM, UNH, MA, COST, WMT) no generan NINGUNA señal BUY en 2 años pese a subidas fuertes, porque su valoracion (PER/PEG/EV-EBITDA altos y fijos durante todo el backtest) los mantiene siempre por debajo del umbral del 75%. Sumando solo TECHNICAL+MOMENTUM+RISK sobre sus propios maximos, esos 12 valores pasan a generar entre 13 y 31 señales BUY cada uno; agregado en todo el universo, `buy_signals` sube de 124 a 1351 (de 8 a 60 tickers con al menos una señal) y `avg_buy_forward_return` pasa de -1,75% a +0,18%. El resultado mezclado por ticker (positivo en AAPL/NVDA/AVGO/XOM/TSLA, negativo en UNH/COST/MA) no se interpreta aqui como "el bloque tecnico funciona mejor": es justo el tipo de dato en bruto que este modo debe permitir investigar en sesiones futuras.
+
+Decisiones de arquitectura:
+
+- **No se toca `ScoreCalculator::calculate()` ni el pipeline real** que ven `DashboardPage`/`StockDetailPage`/`WatchlistPage`/`PortfolioPage`: el score completo que decide las recomendaciones reales del usuario no cambia. El modo "solo tecnico" es una herramienta de investigacion via CLI, no una opcion visible en la app.
+- **`Score::recommendationFor(float $percentage): string` nuevo, estatico**, extraido de `getRecommendation()` (que ahora lo llama internamente) para reutilizar los mismos 5 umbrales (90/75/60/40) sobre un porcentaje alternativo sin duplicarlos.
+- **`$mode = 'full'|'technical'` como parametro** en `run()`/`runForTicker()`/`backtestTicker()`. En modo `'technical'`, dentro de `backtestTicker()` se calcula un porcentaje alternativo sumando `$score->getScores()['technical'|'momentum'|'risk']` dividido entre la suma de sus maximos reales via `ScoreWeights::getMax()` (no un 50 fijo, para respetar overrides de `config/weights.php`), y se usa ese porcentaje/recomendacion alternativos tanto para clasificar la muestra como para decidir si se simula la gestion de salida por stop-loss/objetivo. Un modo desconocido lanza `\InvalidArgumentException` (fallar rapido, es un valor pasado explicitamente por CLI). `runForTicker()` (historial real de señal, `v2.23`) sigue sin exponer este parametro: siempre usa `'full'`.
+- **`bin/backtest.php` gana `--mode=full|technical`**, con validacion (sale por STDERR si el valor no es uno de los dos).
+
+Incluye:
+
+- `Models/Score.php`: `recommendationFor()` estatico nuevo.
+- `Services/BacktestingService.php`: parametro `$mode`; calculo alternativo de percentage/recomendacion cuando `$mode === 'technical'`.
+- `bin/backtest.php`: opcion `--mode` nueva.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20 --mode=technical` frente a `--mode=full`: `buy_signals` sube de 124 a 1351 y los 12 tickers citados arriba pasan de 0 a entre 13-31 señales BUY cada uno, misma direccion que valido `analista-mercado` (los valores exactos pueden variar con datos de mercado mas recientes).
+
+Resultado esperado:
+
+`bin/backtest.php --mode=technical` permite investigar el poder predictivo del bloque tecnico/momentum aislado del suelo fundamental fijo del backtest, sin afectar en ningun caso a las recomendaciones reales que ve el usuario en la aplicacion.
+
+---
+
+## v2.33 - Universos por sector menos heterogeneos (Consumo y Financieras)
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Cerrar la ultima idea pendiente de "Ideas adicionales sugeridas": `consumer` mezclaba consumo discrecional (AMZN, BKNG, CMG...) con defensivo/staples (KO, PEP, PG, CL...), y `financials` mezclaba banca, aseguradoras y pagos/gestion de activos (V, MA, PYPL, BX, KKR...) en `config/universes.php`.
+
+Decisiones de arquitectura (`fiabilidad-datos-mercado`):
+
+- **Los grupos combinados originales (`consumer`, `financials`) se mantienen tal cual**, con exactamente los mismos tickers de siempre, como alias de comparativa amplia: hay precedente en el propio fichero (solape deliberado entre `tech40` y `semiconductors_global`). Verificado por script que la union de cada par/trio de subgrupos nuevos coincide ticker a ticker con la lista combinada original, sin faltar ni sobrar ninguno.
+- **`consumer` se divide en `consumer_discretionary`** (14 tickers: retail generalista, mejora del hogar, restauracion, viajes/ocio y moda — incluye `ITX.MC`) **y `consumer_staples`** (17 tickers: alimentacion, higiene/hogar, bebidas y tabaco). `WMT`/`COST`/`DG` van en `staples`, no en discrecional, siguiendo la reclasificacion GICS de 2018 que movio a los grandes distribuidores a "Consumer Staples Distribution & Retail"; `EL` (Estee Lauder) tambien va en `staples` por ser cosmetica/cuidado personal segun GICS pese a percibirse como "lujo".
+- **`financials` se divide en tres**: `financials_banking` (19 tickers: banca comercial/inversion/regional, incluidos los 4 tickers `.MC` — `SAN`/`BBVA`/`CABK`/`UNI` — y `SCHW`/`SYF`/`ALLY` por tener banco propio pese a su origen brokerage/tarjetas/auto), `financials_insurance` (10 tickers: aseguradoras directas mas `WTW`/`AON`/`AJG` como brokers de seguros) y `financials_payments_asset_mgmt` (15 tickers: redes de pago, exchanges/datos financieros y gestoras de activos — incluye `AXP`, cuyo negocio se parece mas a V/MA que a un banco comercial).
+- **Ningun ticker nuevo inventado**: los subgrupos solo reorganizan los tickers que ya estaban en las listas combinadas, sin pedir nada nuevo a Yahoo.
+
+Incluye:
+
+- `config/universes.php`: `consumer_discretionary`, `consumer_staples`, `financials_banking`, `financials_insurance`, `financials_payments_asset_mgmt` nuevos, con comentarios explicando cada corte; `consumer`/`financials` sin cambios.
+
+Verificado en ddev con...:
+
+`php -l config/universes.php` sin errores. Script de comprobacion (`php -r`): ningun grupo nuevo supera 50 tickers, sin duplicados dentro de cada grupo, sin solapamiento entre subgrupos hermanos, union de subgrupos == lista combinada original en ambos casos. `ddev exec php bin/analyze.php --universe=<clave>` contra Yahoo real para los 5 grupos nuevos: `financials_banking` (19/0 errores), `financials_insurance` (10/0), `financials_payments_asset_mgmt` (15/0), `consumer_discretionary` (14/0), `consumer_staples` (17/0). Los 5 rankings de prueba generados durante la verificacion se borraron de `daily_rankings` al terminar.
+
+Resultado esperado:
+
+Analizar `consumer_discretionary`/`consumer_staples`/`financials_banking`/`financials_insurance`/`financials_payments_asset_mgmt` desde el Home da un "mejores del grupo" mas honesto que compara empresas con modelos de negocio realmente comparables, sin perder la posibilidad de seguir analizando `consumer`/`financials` completos cuando interese la vision de sector amplio.
+
+---
+
+## v2.34 - Prediccion del movimiento por grupo sectorial en el historial de señal
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El usuario pide dos cosas relacionadas, con enfasis en que el analisis sea "lo mas fiable posible": (1) revisar si los pesos de `config/weights.php` son los mas adecuados, y (2) añadir, si es posible, una prediccion sobre el movimiento de la accion en la ficha de detalle.
+
+Hallazgo sobre los pesos (`analista-mercado`, sin cambio de codigo):
+
+Backtests reales no solapados (`--step=20`) en 6 universos (`largecap60`, `financials`, `ibex35`, `healthcare`, `energy`, `consumer`, `industrials`) muestran que, con los pesos actuales, `STRONG BUY` casi no aparece y `BUY` es raro, y en TODOS los universos el retorno futuro medio tras `SELL`/`STRONG SELL` supera al de `BUY` (p.ej. `largecap60`: BUY -1,14% vs SELL +1,82%; `ibex35`: BUY +0,59% vs STRONG SELL +7,79%). Se probaron varias hipotesis de recalibracion: aislar el bloque tecnico (`--mode=technical`) sube el numero de señales BUY pero no corrige la inversion en la mayoria de universos; aislar FUNDAMENTAL+VALUATION+QUALITY+DIVIDEND muestra el MISMO patron invertido que el score completo (no es "fundamentales mal, tecnico bien"); un reajuste moderado (VALUATION 20→12, TECHNICAL 30→38) apenas mueve el numero de señales y no mejora el spread BUY-SELL de forma consistente. **Conclusion: no se recomienda tocar `config/weights.php`.** El problema real es un efecto de regimen de mercado (~2 años alcistas donde lo caro/sobrecomprado siguio subiendo mas que lo barato/sobrevendido) combinado con umbrales de valoracion fijos no ajustados por sector (la idea ya abierta "Ratios fundamentales sensibles al sector", ver mas abajo) — ningun reparto de pesos lo corrige de forma limpia con los datos disponibles. Confirmado ademas que `NEWS` (10 puntos) es hoy peso muerto: `news_items` tiene 0 filas en produccion, la categoria siempre cae en el placeholder neutro de `ScoreCalculator::newsPlaceholder()`; no es un problema de calibracion sino de falta de datos (coordinar con `fiabilidad-datos-mercado` si se quiere activar).
+
+Decisiones de arquitectura para la prediccion (`analista-mercado` valida, `desarrollador-php` implementa):
+
+- **Se descarta la opcion obvia** (condicionar la prediccion en la recomendacion actual completa STRONG BUY/BUY/HOLD/SELL/STRONG SELL): validado con datos que el orden esperado (mejor retorno cuanto mas "compra" es la recomendacion) NO se cumple en la mayoria de universos, y la mayoria de tickers grandes individuales nunca generan BUY en el historico no solapado disponible. Implementarla habria mostrado, precisamente para los tickers en BUY, o bien "sin datos" o bien una cifra historica que no respalda la señal actual — el tipo exacto de falsa fiabilidad que el usuario pidio evitar.
+- **Se aprueba una extension acotada del panel "Historial de la señal de compra" ya existente (`v2.23`)**, no una feature nueva independiente: cuando el propio historico de señales BUY de un ticker es insuficiente (`buy_managed_samples < 5`, mismo umbral que ya usaba `v2.23`), se amplia la base de muestras a todas las señales BUY historicas del universo sectorial mas especifico al que pertenece ese ticker (validado que el retorno medio agregado varia de forma coherente por sector — `financials` -1,46%, `healthcare` -0,04%, `consumer` +0,53%, `energy` +0,92% — no es ruido plano). El panel individual de `v2.23` no cambia; el bloque de grupo es un añadido opcional, nunca un sustituto.
+- **`Config\UniverseConfig::narrowestSectorFor(string $ticker): ?string`** (nuevo): busca el ticker en una lista priorizada de universos sectoriales homogeneos (los subgrupos de `v2.33` primero, despues los sectores mas amplios), excluyendo deliberadamente los universos por indice/geografia (`general`, `largecap60`, `ibex35`, los ADR...) porque mezclarian empresas sin relacion de negocio.
+- **`Services\BacktestingService::runForPeerGroup(array $tickers, ...): ?array`** (nuevo): agrega el historial de señal de un grupo de tickers ya resuelto por el llamador, ponderando el retorno medio gestionado por el numero de muestras de cada ticker. Deliberadamente SIN dependencia de `UniverseConfig` (misma separacion de responsabilidades que `run()`: quien construye la lista de tickers es siempre el llamador).
+- **Solo se calcula bajo demanda y solo cuando hace falta**: `Application::renderSignalHistory()` unicamente llama a `runForPeerGroup()` cuando el propio ticker tiene menos de 5 muestras, y solo publica el bloque `peer_group` si el grupo alcanza esas mismas 5 muestras; en caso contrario queda `null` sin coste visible para el usuario. Medido en ddev: ~1,17s cuando SI calcula el grupo (backtestea ~10 tickers de golpe, historico ya cacheado, sin red a Yahoo) frente a ~0,54s cuando no hace falta.
+- **Disclaimer explicito en el bloque de grupo**, ademas del ya existente de `v2.23`: dejando claro que es una cifra agregada de varias empresas, no del ticker en particular.
+
+Incluye:
+
+- `Config/UniverseConfig.php`: `narrowestSectorFor()` nuevo.
+- `Services/BacktestingService.php`: `runForPeerGroup()` nuevo.
+- `Services/Application.php` (`renderSignalHistory()`): calcula y publica `peer_group` cuando aplica.
+- `Web/StockDetailPage.php` (`renderSignalHistory()`): bloque JS nuevo que renderiza `data.peer_group` cuando esta presente.
+- `config/weights.php`: sin cambios (decision documentada arriba).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 4 ficheros tocados. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. Pruebas reales con historico ya cacheado: `?page=signal-history&ticker=CB` (Chubb, `financials_insurance`, 1 señal BUY propia) devuelve `peer_group` con `sector_label="Financieras - Seguros"`, 111 muestras agregadas y retorno medio -1,34% (1,17s); `?page=signal-history&ticker=TRV` (mismo sector, 46 señales BUY propias, suficiente) devuelve `peer_group: null` sin activar el calculo de grupo (0,54s); `?page=signal-history&ticker=XOM` con 0 señales propias mantiene la respuesta identica a la de antes de este cambio (`{"buy_managed_samples":0}`, sin clave `peer_group`).
+
+Resultado esperado:
+
+Cuando el historico propio de un ticker no basta para fiarse del "Historial de la señal de compra", la ficha de detalle ofrece una segunda cifra, mas fiable estadisticamente por venir de mas muestras, claramente etiquetada como agregado de grupo sectorial y no como el comportamiento especifico de esa accion. Los pesos del score no se tocan: la investigacion concluyo que no hay una recalibracion respaldada por datos limpios en el periodo disponible.
+
+---
+
+## v2.35 - Formulario de backtesting: universo "Manual" por defecto y campo de tickers coherente
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Al entrar en `?page=backtest` sin haber enviado el formulario todavia, el desplegable "Universo" aparecia con "Busqueda general" ya seleccionado (en vez de "Manual", la primera opcion) y el campo "Tickers" aparecia precargado con la lista completa de esa busqueda general (40 tickers separados por espacio), dando la impresion equivocada de que ese texto era una entrada manual. El usuario pide que el universo por defecto sea "Manual" y que el campo de tickers se vacie o se adapte al universo que se elija.
+
+Causa raiz:
+
+`Application::renderBacktest()` llamaba siempre a `resolveTickerRequest()` (el mismo metodo que usa el Home para resolver un universo por defecto cuando no hay parametros, `v2.12`), aunque mas abajo el propio metodo ya comprobaba si habia parametros reales antes de ejecutar el backtest en si. Es decir: en la carga inicial el backtest nunca se ejecutaba, pero el formulario igualmente se rellenaba con el universo/tickers resueltos, generando la confusion visual.
+
+Decisiones de arquitectura:
+
+- **`renderBacktest()` calcula `$hasSubmission` primero** (`tickers` o `universe` presentes en la query) y solo llama a `resolveTickerRequest()` cuando es `true`; si no hay parametros, `$rawTickers`/`$tickers`/`$universe` quedan vacios (`''`, `[]`, `''`), sin tocar `resolveTickerRequest()` en si (el Home lo sigue usando exactamente igual). Con `$universe = ''`, `BacktestPage::renderUniverseOptions()` deja el `<option value="">Manual</option>` como unico seleccionado por defecto (no hace falta marcarlo explicitamente: es el unico `<option>` sin `selected`).
+- **Script inline nuevo en `BacktestPage.php`** (mismo patron sin frameworks que el resto de la app): al cambiar la seleccion de `#universe`, vacia `#tickers`. Resuelve el caso silencioso que ya existia en `resolveTickerRequest()`: si el campo de tickers tiene contenido, la seleccion de universo se ignora sin ningun aviso (rama `$hasManualTickers`); vaciar el campo al cambiar de universo deja claro cual de los dos manda.
+- **Sin cambios en el flujo que ya funcionaba**: seleccionar un universo y pulsar "Probar" con el campo de tickers vacio sigue resolviendo y ejecutando el backtest exactamente igual que antes.
+
+Incluye:
+
+- `Services/Application.php` (`renderBacktest()`): `$hasSubmission` nuevo, `resolveTickerRequest()` condicional.
+- `Web/BacktestPage.php`: script inline que vacia `#tickers` al cambiar `#universe`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 2 ficheros. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. `curl` a `?page=backtest` sin parametros confirma `<option value="">Manual</option>` como unico seleccionado y `<input id="tickers" ... value="">`; `curl` a `?page=backtest&universe=largecap60` confirma la opcion `largecap60` seleccionada, el campo de tickers relleno con los 60 tickers resueltos, y una tabla de resultados con filas no vacias, igual que antes del cambio.
+
+Resultado esperado:
+
+Al entrar en la pantalla de backtesting sin haber pulsado nada, el desplegable muestra "Manual" y el campo de tickers esta vacio; si el usuario cambia de universo despues de haber escrito tickers a mano, el campo se vacia automaticamente para que quede claro que se usara ese universo.
+
+---
+
+## v2.36 - Tabla de ranking del Home mas simple: sin columnas tecnicas ni de categorias
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+La tabla "Ranking completo" del Home mostraba, ademas de precio/score/recomendacion, dos columnas densas por fila: "Tecnicos" (chips con SMA20/SMA50/RSI/MACD/Momentum/Volatilidad/Sesiones) y "Categorias" (desglose del score por categoria). El usuario pide quitarlas: esa informacion ya esta disponible, con mas espacio y contexto, en la ficha de detalle de cada accion.
+
+Decisiones de arquitectura:
+
+- **Solo se toca `DashboardPage.php`.** `StockDetailPage.php` sigue mostrando exactamente los mismos value boxes tecnicos y el mismo desglose de categorias que ya tenia (tiene su propia copia privada de `renderScoreBreakdown()`/`percentOrDash()`, independiente de las del Home); `WatchlistPage.php`/`PortfolioPage.php` tampoco se tocan.
+- **Limpieza completa, no solo ocultar.** Se borran los dos `<th>`, los dos `<td>` correspondientes en el `sprintf()` de cada fila, la variable `$technical` (quedaba sin uso), el `use TechnicalSnapshot` (sin uso en el resto del fichero) y los cuatro metodos que se quedaban sin ningun llamador tras el cambio: `renderTechnicalChips()`, `chip()`, `percentOrDash()` y `renderScoreBreakdown()` (las versiones de `DashboardPage`, no las de `StockDetailPage`).
+- **Colspan del mensaje "sin resultados" ajustado** de `8`/`7` a `6`/`5` (con/sin estrella de watchlist), acorde a las dos columnas menos.
+- **De paso, `DashboardPage::APP_VERSION` se sincroniza** (se habia quedado en `v2.29` desde esa version, pese al comentario que avisa de sincronizarla al cerrar cada version).
+
+Incluye:
+
+- `Web/DashboardPage.php`: cabecera y filas de la tabla sin las columnas "Tecnicos"/"Categorias"; `renderTechnicalChips()`/`chip()`/`percentOrDash()`/`renderScoreBreakdown()` eliminados; `APP_VERSION` actualizada a `v2.36`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. `curl` real a `?universe=largecap60`: el `<thead>` ya no contiene "Tecnicos"/"Categorias" (solo `#`/Accion/Precio/Score/Recomendacion, mas la estrella si hay usuario logueado); cada fila tiene el numero correcto de `<td>`; `grep -c` de "Tecnicos"/"Categorias" en el HTML completo da 0. `curl` a `?ticker=AAPL` confirma que la ficha de detalle sigue mostrando SMA/RSI/MACD y el desglose de categorias con normalidad.
+
+Resultado esperado:
+
+La tabla de ranking del Home queda mas legible y menos densa (solo posicion, accion, precio, score y recomendacion), y quien quiera el detalle tecnico/por categoria de una accion concreta lo encuentra igual que siempre en su ficha de detalle.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; se anotan aqui porque encajan de forma natural con `v2.1`/`v2.2` y pueden valer la pena mas adelante. No tienen version asignada.
 
-- **Stop/objetivo compactos en Watchlist y Cartera.** Extender el stop-loss/objetivo sugerido (basado en ATR14) de la ficha de detalle a una version resumida (badge o columna corta) en `WatchlistPage.php`/`PortfolioPage.php`, para gestionar posiciones abiertas sin entrar a cada ficha; requiere pensar el formato compacto porque esas tablas ya son densas.
-- **Ratios fundamentales sensibles al sector.** `FundamentalAnalyzer::fundamentalHealth()`/`valuation()` usan los mismos umbrales de Deuda/Patrimonio, FCF-yield y EV/EBITDA para cualquier empresa; validado con datos reales, esto penaliza a bancos/aseguradoras del universo `financials` como si fueran industriales sobreendeudadas (Goldman Sachs con D/E=6,47 cae en el peor tramo; MetLife con FCF-yield=-27,9% recibe "señal de alerta" cuando es un artefacto del dato). Simulando el backtest de GS (`--tickers=GS --horizon=20`), neutralizar solo el componente D/E habria hecho cruzar de HOLD a BUY 12 de 81 muestras historicas. **Actualizacion:** revisado el codigo real del proveedor (sesion posterior), `Company::getSector()`/`getIndustry()` estan hoy siempre a `''` en produccion — `YahooParser::parseStock()` los hardcodea vacios (lineas 60-61) y `YahooFundamentalsFetcher::MODULES` (linea 35) ni siquiera pide el modulo `assetProfile` de Yahoo, que es donde vive el sector. Esta idea ya NO es "dato disponible, falta usarlo": requiere primero un cambio de proveedor (pedir `assetProfile`, parsear `sector`/`industry`, cablearlo en `Company`) coordinado con `fiabilidad-datos-mercado` antes de que `FundamentalAnalyzer` pueda consumirlo.
-- **Contexto de tendencia en el RSI — investigada y descartada con datos.** La premisa original (alinear el RSI con el mismo criterio de Bollinger, dar por bueno un RSI>70 cuando `SMA20 > SMA50`) se probo con un backtest instrumentado (retorno futuro a 10/20/40 dias agrupado por banda de RSI x `SMA20 vs SMA50`, 6 universos sectoriales). El resultado no la respalda: dentro de cada banda de RSI, el retorno medio/mediano a futuro con `SMA20 > SMA50` no es sistematicamente mejor que sin tendencia confirmada; en la mayoria de combinaciones universo/horizonte es igual o peor. Aplicar esta idea tal como se planteo habria extendido a una segunda señal una premisa que los propios datos no sostienen (ver hallazgo sobre Bollinger reportado directamente al usuario en la sesion que descarta esta idea). No se recomienda implementarla salvo que aparezca evidencia nueva en otro periodo/regimen de mercado.
-- **Modo de backtesting "solo tecnico" — prioridad al alza.** Sumar unicamente TECHNICAL+MOMENTUM+RISK en `ScoreCalculator` (variante o flag) para aislar el poder predictivo del bloque tecnico del "suelo" fundamental, que en el backtest actual queda practicamente fijo porque se usan los fundamentales de HOY para fechas pasadas (el proveedor no tiene historico de fundamentales). Confirmado con datos: en el universo `largecap60` (81 muestras/ticker, 2 años), la mayoria de los grandes valores (AAPL, NVDA, AMZN, TSLA, AVGO, BRK-B, V, XOM, UNH, MA, COST, WMT...) no generan NINGUNA señal BUY en todo el periodo pese a subidas fuertes, porque su VALORACION (PER/PEG/EV-EBITDA elevados, fijos durante todo el backtest) los mantiene permanentemente por debajo del umbral del 75%; el bloque tecnico/momentum casi nunca llega a compensarlo. Sin este modo, cualquier recalibracion de señales tecnicas (incluida la de Bollinger de mas abajo) solo se puede validar con retornos futuros en bruto agrupados por indicador, no con las recomendaciones BUY/SELL reales de la app.
-- **Universos por sector menos heterogeneos.** `consumer` mezcla consumo discrecional (AMZN, BKNG, CMG) con defensivo (KO, PEP, PG, CL); `financials` mezcla banca, aseguradoras y medios de pago (V, MA, PYPL). Separarlos en subgrupos haria mas honesto comparar "las mejores del sector" y es un prerrequisito natural de la idea de ratios sensibles al sector.
-- **Backtest con muestras no solapadas — prioridad al alza.** `BacktestingService::backtestTicker()` usa `step=5` con `horizonDays` tipicamente 20: cada muestra comparte hasta 15 dias de retorno futuro con la siguiente, autocorrelacionando `avg_buy_forward_return`/`avg_sell_forward_return`. Cambiar a ventanas no solapadas (`step >= horizonDays`) o exponer el numero de muestras efectivamente independientes junto a `samples`. Relevante ahora mismo: el hallazgo sobre Bollinger/RSI reportado al usuario (retornos futuros mayores tras `SMA20 < SMA50` que tras `SMA20 > SMA50` en 5-6 de 6 universos sectoriales) se apoya en varios miles de muestras "en bruto" que en realidad son solo unos cientos de episodios independientes; sigue siendo una señal consistente entre universos y horizontes, pero conviene confirmarla con muestras no solapadas antes de tocar mas umbrales basados en el mismo patron.
+- **Recalibracion de `config/weights.php` — investigada y descartada con datos (sesion `v2.34`).** Backtests no solapados en 6 universos, aislando bloques (tecnico solo, fundamental+valoracion+calidad+dividendo solo) y probando un reajuste moderado (VALUATION 20→12, TECHNICAL 30→38): ninguna variante corrige de forma limpia y consistente la inversion observada (retorno tras SELL/STRONG SELL mayor que tras BUY en 6/6 universos). El problema parece ser efecto de regimen de mercado + umbrales de valoracion fijos no ajustados por sector, no reparto de pesos. No se recomienda tocar los pesos salvo que aparezca evidencia nueva en otro periodo/regimen, o que primero se resuelva la idea de "Ratios fundamentales sensibles al sector" de aqui abajo.
+- **Activar la categoria NEWS — bloqueada, falta de datos, no de calibracion.** Confirmado en la sesion `v2.34` que `news_items` tiene 0 filas en produccion: los 10 puntos maximos de la categoria `news` son hoy peso muerto, `ScoreCalculator` siempre usa el placeholder neutro de `newsPlaceholder()`. Requiere primero una fuente de noticias real (coordinar con `fiabilidad-datos-mercado`), no un cambio de pesos.
+- **Ratios fundamentales sensibles al sector.** `FundamentalAnalyzer::fundamentalHealth()`/`valuation()` usan los mismos umbrales de Deuda/Patrimonio, FCF-yield y EV/EBITDA para cualquier empresa; validado con datos reales, esto penaliza a bancos/aseguradoras del universo `financials` como si fueran industriales sobreendeudadas (Goldman Sachs con D/E=6,47 cae en el peor tramo; MetLife con FCF-yield=-27,9% recibe "señal de alerta" cuando es un artefacto del dato). Simulando el backtest de GS (`--tickers=GS --horizon=20`), neutralizar solo el componente D/E habria hecho cruzar de HOLD a BUY 12 de 81 muestras historicas. **Actualizacion:** revisado el codigo real del proveedor (sesion posterior), `Company::getSector()`/`getIndustry()` estan hoy siempre a `''` en produccion — `YahooParser::parseStock()` los hardcodea vacios (lineas 60-61) y `YahooFundamentalsFetcher::MODULES` (linea 35) ni siquiera pide el modulo `assetProfile` de Yahoo, que es donde vive el sector. Esta idea ya NO es "dato disponible, falta usarlo": requiere primero un cambio de proveedor (pedir `assetProfile`, parsear `sector`/`industry`, cablearlo en `Company`) coordinado con `fiabilidad-datos-mercado` antes de que `FundamentalAnalyzer` pueda consumirlo. Sigue pendiente, sin version asignada: es la unica idea de esta lista que no se ha cerrado en la sesion de `v2.30`-`v2.33`.
+- **Contexto de tendencia en el RSI — investigada y descartada con datos.** La premisa original (alinear el RSI con el mismo criterio de Bollinger, dar por bueno un RSI>70 cuando `SMA20 > SMA50`) se probo con un backtest instrumentado (retorno futuro a 10/20/40 dias agrupado por banda de RSI x `SMA20 vs SMA50`, 6 universos sectoriales). El resultado no la respalda: dentro de cada banda de RSI, el retorno medio/mediano a futuro con `SMA20 > SMA50` no es sistematicamente mejor que sin tendencia confirmada; en la mayoria de combinaciones universo/horizonte es igual o peor. Aplicar esta idea tal como se planteo habria extendido a una segunda señal una premisa que los propios datos no sostienen (ver hallazgo sobre Bollinger reportado directamente al usuario en la sesion que descarta esta idea). No se recomienda implementarla salvo que aparezca evidencia nueva en otro periodo/regimen de mercado. Nota: el grafico de RSI de `v2.30` es una visualizacion del mismo indicador ya existente, no reabre esta idea descartada (no se anade ningun contexto de tendencia al calculo, solo se dibuja la serie).
 

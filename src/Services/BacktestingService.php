@@ -7,10 +7,12 @@ namespace StockAnalyzer\Services;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\DTO\RiskLevels;
+use StockAnalyzer\Enums\ScoreCategory;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\HistoricalQuote;
 use StockAnalyzer\Models\Quote;
+use StockAnalyzer\Models\Score;
 use StockAnalyzer\Models\Stock;
 
 class BacktestingService
@@ -25,16 +27,26 @@ class BacktestingService
 
     /**
      * @param list<string> $tickers
+     * @param int $step Tamaño del paso entre muestras consecutivas. Con el
+     *        $step por defecto (5) y un horizonte tipico de 20 dias, cada
+     *        muestra comparte hasta 15 de sus 20 dias de retorno futuro con
+     *        la siguiente (autocorrelacion). Para obtener muestras
+     *        estadisticamente independientes hay que ejecutar con
+     *        $step = $horizonDays (ver tambien 'effective_independent_samples'
+     *        en el resultado de cada ticker).
+     * @param string $mode 'full' (score completo, el que ve el usuario real)
+     *        o 'technical' (solo TECHNICAL+MOMENTUM+RISK, herramienta de
+     *        investigacion via CLI que no afecta al pipeline real).
      * @return array<string,mixed>
      */
-    public function run(array $tickers, int $horizonDays = 20): array
+    public function run(array $tickers, int $horizonDays = 20, int $step = 5, string $mode = 'full'): array
     {
         $results = [];
         $errors = [];
 
         foreach ($tickers as $ticker) {
             try {
-                $results[] = $this->backtestTicker($ticker, $horizonDays);
+                $results[] = $this->backtestTicker($ticker, $horizonDays, $step, $mode);
             } catch (\Throwable $exception) {
                 $errors[$ticker] = $exception->getMessage();
             }
@@ -57,24 +69,64 @@ class BacktestingService
      *
      * @return array<string,mixed>|null
      */
-    public function runForTicker(string $ticker, int $horizonDays = 20): ?array
+    public function runForTicker(string $ticker, int $horizonDays = 20, int $step = 5): ?array
     {
         try {
-            return $this->backtestTicker($ticker, $horizonDays);
+            return $this->backtestTicker($ticker, $horizonDays, $step);
         } catch (\Throwable $exception) {
             return null;
         }
     }
 
     /**
+     * Agrega el historial de señal de compra (mismo criterio que
+     * backtestTicker()/runForTicker()) de un grupo de tickers, ponderando
+     * por el numero de muestras gestionadas de cada uno. Pensado para dar
+     * una cifra con mas soporte estadistico cuando el historico de un
+     * ticker individual es corto (ver v2.34): un grupo de tickers del mismo
+     * sector, NUNCA una mezcla arbitraria (la homogeneidad la decide el
+     * llamador via UniverseConfig::narrowestSectorFor()).
+     *
+     * @param list<string> $tickers
+     * @return array{buy_managed_samples: int, avg_buy_managed_return: ?float}|null
+     */
+    public function runForPeerGroup(array $tickers, int $horizonDays = 20, int $step = 5): ?array
+    {
+        $run = $this->run($tickers, $horizonDays, $step);
+        $totalSamples = 0;
+        $weightedReturnSum = 0.0;
+
+        foreach ($run['results'] as $result) {
+            $samples = (int) $result['buy_managed_samples'];
+
+            if ($samples > 0 && $result['avg_buy_managed_return'] !== null) {
+                $totalSamples += $samples;
+                $weightedReturnSum += $result['avg_buy_managed_return'] * $samples;
+            }
+        }
+
+        if ($totalSamples === 0) {
+            return null;
+        }
+
+        return [
+            'buy_managed_samples' => $totalSamples,
+            'avg_buy_managed_return' => round($weightedReturnSum / $totalSamples, 2),
+        ];
+    }
+
+    /**
      * @return array<string,mixed>
      */
-    private function backtestTicker(string $ticker, int $horizonDays): array
+    private function backtestTicker(string $ticker, int $horizonDays, int $step, string $mode = 'full'): array
     {
+        if (!in_array($mode, ['full', 'technical'], true)) {
+            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical'.");
+        }
+
         $stock = $this->marketDataProvider->getStock($ticker);
         $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
         $samples = [];
-        $step = 5;
         $minimumLookback = 80;
         $count = count($history);
 
@@ -87,11 +139,27 @@ class BacktestingService
             $score = $this->scoreCalculator->calculate($synthetic, $technical)->getScore();
             $forwardReturn = (($future->getClose() / $current->getClose()) - 1) * 100;
 
+            if ($mode === 'technical') {
+                $weights = $this->scoreCalculator->getWeights();
+                $scores = $score->getScores();
+                $technicalMax = $weights->getMax(ScoreCategory::TECHNICAL)
+                    + $weights->getMax(ScoreCategory::MOMENTUM)
+                    + $weights->getMax(ScoreCategory::RISK);
+                $technicalTotal = ($scores[ScoreCategory::TECHNICAL->value] ?? 0)
+                    + ($scores[ScoreCategory::MOMENTUM->value] ?? 0)
+                    + ($scores[ScoreCategory::RISK->value] ?? 0);
+                $percentage = $technicalMax > 0 ? round(($technicalTotal / $technicalMax) * 100, 2) : 0.0;
+                $recommendation = Score::recommendationFor($percentage);
+            } else {
+                $percentage = $score->getPercentage();
+                $recommendation = $score->getRecommendation();
+            }
+
             $managedReturn = null;
             $exitReason = null;
             $exitDay = null;
 
-            if (in_array($score->getRecommendation(), ['STRONG BUY', 'BUY'], true)) {
+            if (in_array($recommendation, ['STRONG BUY', 'BUY'], true)) {
                 $riskLevels = $this->riskLevelsCalculator->compute($technical, $current->getClose());
 
                 if ($riskLevels !== null) {
@@ -108,8 +176,8 @@ class BacktestingService
 
             $samples[] = [
                 'date' => $current->getDate()->format('Y-m-d'),
-                'recommendation' => $score->getRecommendation(),
-                'percentage' => $score->getPercentage(),
+                'recommendation' => $recommendation,
+                'percentage' => $percentage,
                 'forward_return' => round($forwardReturn, 2),
                 'managed_return' => $managedReturn,
                 'exit_reason' => $exitReason,
@@ -127,6 +195,9 @@ class BacktestingService
         return [
             'ticker' => strtoupper($ticker),
             'samples' => count($samples),
+            'effective_independent_samples' => (int) floor(
+                count($samples) / max(1, (int) ceil($horizonDays / $step))
+            ),
             'buy_signals' => count($buyReturns),
             'sell_signals' => count($sellReturns),
             'avg_buy_forward_return' => $this->average($buyReturns),

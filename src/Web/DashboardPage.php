@@ -6,7 +6,6 @@ namespace StockAnalyzer\Web;
 
 use DateTimeImmutable;
 use StockAnalyzer\DTO\StockAnalysis;
-use StockAnalyzer\DTO\TechnicalSnapshot;
 use StockAnalyzer\Models\User;
 
 /**
@@ -22,7 +21,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.17';
+    private const APP_VERSION = 'v2.36';
 
     /**
      * @param list<StockAnalysis> $results
@@ -113,8 +112,6 @@ class DashboardPage
                             <th>Precio</th>
                             <th>Score</th>
                             <th>Recomendacion</th>
-                            <th>Tecnicos</th>
-                            <th>Categorias</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -135,7 +132,7 @@ HTML;
     private static function renderRows(array $results, string $rawTickers, ?User $currentUser, string $csrfToken, array $watched, string $redirectTo): string
     {
         if ($results === []) {
-            $colspan = $currentUser instanceof User ? 8 : 7;
+            $colspan = $currentUser instanceof User ? 6 : 5;
 
             return sprintf('<tr><td colspan="%d">No hay resultados para mostrar.</td></tr>', $colspan);
         }
@@ -147,7 +144,6 @@ HTML;
             $company = $stock->getCompany();
             $quote = $stock->getQuote();
             $score = $analysis->getScore();
-            $technical = $analysis->getTechnicalSnapshot();
             $recommendation = $score->getRecommendation();
             $detailHref = self::detailHref($company->getTicker(), $rawTickers);
             $starCell = $currentUser instanceof User
@@ -155,21 +151,18 @@ HTML;
                 : '';
 
             $rows[] = sprintf(
-                '<tr><td class="rank-cell">%d</td>%s<td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s %s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td><div class="chips">%s</div></td><td><div class="chips">%s</div></td></tr>',
+                '<tr><td class="rank-cell">%d</td>%s<td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td></tr>',
                 $position + 1,
                 $starCell,
                 $detailHref,
                 Layout::escape($company->getTicker()),
                 Layout::escape($company->getName()),
                 Layout::escape($company->getMarket()),
-                Layout::formatNumber($quote->getPrice()),
-                Layout::escape($company->getCurrency()),
+                Layout::escape(Layout::formatMoney($quote->getPrice(), $company->getCurrency())),
                 number_format($quote->getVolume(), 0, ',', '.'),
                 Layout::formatNumber($score->getPercentage()),
                 Layout::recommendationClass($recommendation),
-                Layout::escape($recommendation),
-                self::renderTechnicalChips($technical),
-                self::renderScoreBreakdown($score->toArray()['categories'])
+                Layout::escape($recommendation)
             );
         }
 
@@ -305,57 +298,6 @@ HTML;
                 Layout::escape($value),
                 $value === $selected ? ' selected' : '',
                 Layout::escape($label)
-            );
-        }
-
-        return implode('', $items);
-    }
-
-    private static function renderTechnicalChips(TechnicalSnapshot $technical): string
-    {
-        return implode('', [
-            self::chip('SMA 20', Layout::formatNullable($technical->getSma20())),
-            self::chip('SMA 50', Layout::formatNullable($technical->getSma50())),
-            self::chip('RSI (14)', Layout::formatNullable($technical->getRsi14())),
-            self::chip('MACD', Layout::formatNullable($technical->getMacd())),
-            self::chip('Momentum 30d', self::percentOrDash($technical->getMomentum30())),
-            self::chip('Volatilidad 20d', self::percentOrDash($technical->getVolatility20())),
-            self::chip('Sesiones analizadas', (string) $technical->getHistoryCount()),
-        ]);
-    }
-
-    private static function chip(string $label, string $value): string
-    {
-        return sprintf(
-            '<span title="%s">%s %s</span>',
-            Layout::escape(IndicatorGlossary::describe($label)),
-            Layout::escape($label),
-            Layout::escape($value)
-        );
-    }
-
-    private static function percentOrDash(?float $value): string
-    {
-        return $value === null ? '-' : Layout::formatNumber($value) . '%';
-    }
-
-    /**
-     * @param array<int,array<string,float|string>> $categories
-     */
-    private static function renderScoreBreakdown(array $categories): string
-    {
-        $items = [];
-
-        foreach ($categories as $category) {
-            if (($category['score'] ?? 0) <= 0) {
-                continue;
-            }
-
-            $items[] = sprintf(
-                '<span>%s %s/%s</span>',
-                Layout::escape((string) ($category['label'] ?? '')),
-                Layout::formatNumber((float) ($category['score'] ?? 0)),
-                Layout::formatNumber((float) ($category['max'] ?? 0))
             );
         }
 

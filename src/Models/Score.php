@@ -82,11 +82,23 @@ class Score
 
     public function getRecommendation(): string
     {
+        return self::recommendationFor($this->getPercentage());
+    }
+
+    /**
+     * Umbrales de recomendacion aplicados a un porcentaje ya calculado.
+     * Extraido de getRecommendation() para poder reutilizarlos sobre
+     * porcentajes alternativos (p.ej. el modo 'technical' de
+     * BacktestingService, que puntua solo TECHNICAL+MOMENTUM+RISK) sin
+     * duplicar los umbrales en dos sitios.
+     */
+    public static function recommendationFor(float $percentage): string
+    {
         return match (true) {
-            $this->getPercentage() >= 90 => 'STRONG BUY',
-            $this->getPercentage() >= 75 => 'BUY',
-            $this->getPercentage() >= 60 => 'HOLD',
-            $this->getPercentage() >= 40 => 'SELL',
+            $percentage >= 90 => 'STRONG BUY',
+            $percentage >= 75 => 'BUY',
+            $percentage >= 60 => 'HOLD',
+            $percentage >= 40 => 'SELL',
             default => 'STRONG SELL',
         };
     }

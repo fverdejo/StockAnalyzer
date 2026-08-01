@@ -117,7 +117,8 @@ class Application
         $this->alertService = new AlertService($this->alertRepository, new TickerAlertStateRepository($this->connection));
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
-            $this->marketDataProvider
+            $this->marketDataProvider,
+            new ExchangeRateService($this->marketDataProvider)
         );
     }
 
@@ -151,6 +152,12 @@ class Application
 
         if ($page === 'account') {
             echo $this->renderAccount();
+
+            return;
+        }
+
+        if ($page === 'portfolio' && $this->queryString('export') !== '') {
+            echo $this->renderPortfolioExport($this->queryString('export'));
 
             return;
         }
@@ -625,6 +632,8 @@ class Application
             $user = $this->auth->requireUser();
             $portfolio = $this->portfolioService->getPortfolio($user);
 
+            $holdingsAnalysis = $this->analyzeHoldingsForAlerts($user, $portfolio->getHoldings());
+
             return PortfolioPage::render(
                 $user,
                 $portfolio,
@@ -632,9 +641,10 @@ class Application
                 $message,
                 $error,
                 $this->portfolioService->getValueHistory($user),
-                $this->analyzeHoldingsForAlerts($user, $portfolio->getHoldings()),
+                $holdingsAnalysis['recommendations'],
                 $this->alertRepository->countUnread($user),
-                $this->watchedTickers($user)
+                $this->watchedTickers($user),
+                $holdingsAnalysis['riskLevels']
             );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
@@ -646,18 +656,55 @@ class Application
     }
 
     /**
+     * Exportacion CSV de la cartera (ver versions.md v2.26), misma
+     * filosofia de ruta que `?page=api`/`renderApiRanking()`: GET de solo
+     * lectura, sin CSRF, que hace `header(...)` y devuelve el body como
+     * string para que el dispatcher haga `echo`.
+     */
+    private function renderPortfolioExport(string $type): string
+    {
+        try {
+            $user = $this->auth->requireUser();
+            $portfolio = $this->portfolioService->getPortfolio($user);
+
+            $csv = match ($type) {
+                'holdings' => PortfolioCsvExporter::holdings($portfolio),
+                'transactions' => PortfolioCsvExporter::transactions($portfolio),
+                default => throw new \InvalidArgumentException('Exportacion no reconocida.'),
+            };
+
+            $filename = ($type === 'holdings' ? 'cartera-' : 'historial-operaciones-') . date('Y-m-d') . '.csv';
+
+            header('Content-Type: text/csv; charset=UTF-8');
+            header('Content-Disposition: attachment; filename="' . $filename . '"');
+
+            return $csv;
+        } catch (Throwable $exception) {
+            if ($this->auth->currentUser() === null) {
+                $this->redirect('?page=login');
+            }
+
+            return $this->renderMessage('No se pudo exportar la cartera', $exception->getMessage(), 'portfolio');
+        }
+    }
+
+    /**
      * Analiza cada posicion abierta para saber su recomendacion actual
-     * (se muestra en "Mi cartera" y ademas alimenta las alertas de v2.15).
-     * Un fallo al analizar un ticker concreto no rompe el resto de la
-     * cartera: simplemente no se muestra recomendacion ni se actualiza su
-     * estado de alerta esa vez.
+     * (se muestra en "Mi cartera" y ademas alimenta las alertas de v2.15)
+     * y de paso captura su stop-loss/objetivo sugeridos (ver versions.md,
+     * columna compacta "Stop/Objetivo" de la cartera) sin volver a llamar
+     * al analisis por ticker. Un fallo al analizar un ticker concreto no
+     * rompe el resto de la cartera: simplemente no se muestra
+     * recomendacion/niveles de riesgo ni se actualiza su estado de alerta
+     * esa vez.
      *
      * @param list<\StockAnalyzer\Models\Holding> $holdings
-     * @return array<string,string> ticker => recomendacion actual
+     * @return array{recommendations: array<string,string>, riskLevels: array<string,?\StockAnalyzer\DTO\RiskLevels>}
      */
     private function analyzeHoldingsForAlerts(User $user, array $holdings): array
     {
         $recommendations = [];
+        $riskLevels = [];
 
         foreach ($holdings as $holding) {
             $ticker = $holding->getTicker();
@@ -666,16 +713,17 @@ class Application
                 $analysis = $this->analysisService->analyze($ticker);
                 $recommendation = $analysis->getScore()->getRecommendation();
                 $recommendations[$ticker] = $recommendation;
+                $riskLevels[$ticker] = $analysis->getRiskLevels();
                 $this->alertService->checkRecommendationChange($user, $ticker, $recommendation);
             } catch (Throwable) {
                 // Fallo puntual del proveedor para este ticker: no se
-                // muestra recomendacion ni se actualiza su estado de
-                // alerta esta vez, pero el resto de la cartera sigue
-                // funcionando.
+                // muestra recomendacion ni niveles de riesgo, ni se
+                // actualiza su estado de alerta esta vez, pero el resto de
+                // la cartera sigue funcionando.
             }
         }
 
-        return $recommendations;
+        return ['recommendations' => $recommendations, 'riskLevels' => $riskLevels];
     }
 
     private function renderProviderConfig(?string $message, ?string $error): string
@@ -712,12 +760,21 @@ class Application
 
     private function renderBacktest(): string
     {
-        [$rawTickers, $tickers, $universe] = $this->resolveTickerRequest();
+        $hasSubmission = $this->queryString('tickers') !== '' || $this->queryString('universe') !== '';
+
+        if ($hasSubmission) {
+            [$rawTickers, $tickers, $universe] = $this->resolveTickerRequest();
+        } else {
+            $rawTickers = '';
+            $tickers = [];
+            $universe = '';
+        }
+
         $horizon = max(5, min(120, (int) ($this->queryString('horizon') ?: 20)));
         $result = null;
         $error = null;
 
-        if ($this->queryString('tickers') !== '' || $this->queryString('universe') !== '') {
+        if ($hasSubmission) {
             try {
                 $service = new BacktestingService(
                     $this->marketDataProvider,
@@ -843,6 +900,27 @@ class Application
             'target_rate' => $result['target_rate'],
             'horizon_rate' => $result['horizon_rate'],
         ];
+
+        $peerGroup = null;
+
+        if ($result['buy_managed_samples'] < 5) {
+            $sectorKey = $this->universeConfig->narrowestSectorFor((string) $result['ticker']);
+
+            if ($sectorKey !== null) {
+                $peerTickers = $this->universeConfig->tickers($sectorKey);
+                $peerResult = $service->runForPeerGroup($peerTickers, 20);
+
+                if ($peerResult !== null && $peerResult['buy_managed_samples'] >= 5) {
+                    $peerGroup = [
+                        'sector_label' => $this->universeConfig->label($sectorKey),
+                        'buy_managed_samples' => $peerResult['buy_managed_samples'],
+                        'avg_buy_managed_return' => $peerResult['avg_buy_managed_return'],
+                    ];
+                }
+            }
+        }
+
+        $payload['peer_group'] = $peerGroup;
 
         return json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '{}';
     }

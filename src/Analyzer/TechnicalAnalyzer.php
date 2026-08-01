@@ -71,6 +71,8 @@ class TechnicalAnalyzer
         $labels = $this->column($quotes, static fn (HistoricalQuote $q): string => $q->getDate()->format('Y-m-d'));
         $volumes = $this->column($quotes, static fn (HistoricalQuote $q): int => $q->getVolume());
         $bollinger = $this->bollingerSeries($closes, 20);
+        $macd = $this->macdFromEma($this->emaSeries($closes, 12), $this->emaSeries($closes, 26));
+        $rsi14 = $this->rsiSeries($closes, 14);
 
         return new PriceChartSeries(
             labels: $labels,
@@ -81,7 +83,11 @@ class TechnicalAnalyzer
             sma50: $this->smaSeries($closes, 50),
             bollingerUpper: $bollinger['upper'],
             bollingerLower: $bollinger['lower'],
-            volumes: $volumes
+            volumes: $volumes,
+            macd: $macd['macd'],
+            macdSignal: $macd['signal'],
+            macdHistogram: $macd['histogram'],
+            rsi14: $rsi14
         );
     }
 
@@ -340,6 +346,48 @@ class TechnicalAnalyzer
         $relativeStrength = ($gains / $period) / ($losses / $period);
 
         return 100 - (100 / (1 + $relativeStrength));
+    }
+
+    /**
+     * Serie completa de RSI: aplica en cada indice la misma formula que
+     * rsi() sobre la ventana de $period cambios terminada en ese indice, de
+     * forma que el ultimo valor de esta serie coincide con rsi($closes,
+     * $period) para el array completo.
+     *
+     * @param list<float> $closes
+     * @return list<float|null>
+     */
+    private function rsiSeries(array $closes, int $period): array
+    {
+        $count = count($closes);
+        $result = array_fill(0, $count, null);
+
+        for ($index = $period; $index < $count; $index++) {
+            $slice = array_slice($closes, $index - $period, $period + 1);
+            $gains = 0.0;
+            $losses = 0.0;
+
+            for ($i = 1; $i < count($slice); $i++) {
+                $change = $slice[$i] - $slice[$i - 1];
+
+                if ($change >= 0) {
+                    $gains += $change;
+                } else {
+                    $losses += abs($change);
+                }
+            }
+
+            if ($losses === 0.0) {
+                $result[$index] = 100.0;
+
+                continue;
+            }
+
+            $relativeStrength = ($gains / $period) / ($losses / $period);
+            $result[$index] = 100 - (100 / (1 + $relativeStrength));
+        }
+
+        return $result;
     }
 
     /**

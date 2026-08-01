@@ -18,7 +18,8 @@ class PortfolioService
 {
     public function __construct(
         private readonly TransactionRepository $transactions,
-        private readonly MarketDataProviderInterface $marketDataProvider
+        private readonly MarketDataProviderInterface $marketDataProvider,
+        private readonly ExchangeRateService $exchangeRates
     ) {
     }
 
@@ -84,6 +85,7 @@ class PortfolioService
         }
 
         $currentPrices = [];
+        $currencies = [];
 
         foreach ($transactions as $transaction) {
             $ticker = $transaction->getTicker();
@@ -93,11 +95,17 @@ class PortfolioService
             }
 
             try {
-                $currentPrices[$ticker] = $this->marketDataProvider->getStock($ticker)->getQuote()->getPrice();
+                $stock = $this->marketDataProvider->getStock($ticker);
+                $currentPrices[$ticker] = $stock->getQuote()->getPrice();
+                $currencies[$ticker] = $stock->getCompany()->getCurrency();
             } catch (Throwable) {
                 $currentPrices[$ticker] = null;
             }
         }
+
+        $usdToEurRate = in_array('USD', $currencies, true)
+            ? $this->exchangeRates->getRateToEur('USD')
+            : null;
 
         $holdings = [];
 
@@ -120,7 +128,14 @@ class PortfolioService
             static fn (Holding $left, Holding $right): int => strcmp($left->getTicker(), $right->getTicker())
         );
 
-        return new Portfolio($holdings, array_reverse($transactions), round($realizedProfit, 2), $currentPrices);
+        return new Portfolio(
+            $holdings,
+            array_reverse($transactions),
+            round($realizedProfit, 2),
+            $currentPrices,
+            $currencies,
+            $usdToEurRate
+        );
     }
 
     public function getCurrentMarketPrice(string $ticker): float

@@ -58,6 +58,16 @@ return [
         'tickers' => ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'ORCL', 'AMD', 'ADBE', 'CRM', 'CSCO', 'INTC', 'IBM', 'QCOM', 'TXN', 'NOW', 'AMAT', 'MU', 'LRCX', 'PANW', 'SNOW', 'SHOP'],
     ],
     // Grupos por sector/categoria (no por indice), maximo 50 tickers cada uno.
+    // 'financials' mezcla tres modelos de negocio muy distintos (banca con
+    // balance apalancado y riesgo de credito, aseguradoras con riesgo de
+    // suscripcion, y pagos/gestion de activos con negocio de comisiones sin
+    // apenas balance). Se mantiene como alias amplio (misma lista de siempre,
+    // sin cambios) para comparativas de todo el sector financiero, pero desde
+    // 2026-08-01 conviven con 3 subgrupos mas homogeneos justo debajo
+    // ('financials_banking', 'financials_insurance',
+    // 'financials_payments_asset_mgmt') pensados para comparar "las mejores
+    // del grupo" de forma mas honesta; mismo precedente que el solape
+    // deliberado entre 'tech40' y 'semiconductors_global' de mas abajo.
     'financials' => [
         'label' => 'Finanzas',
         'tickers' => [
@@ -66,6 +76,47 @@ return [
             'MET', 'PRU', 'AIG', 'ALL', 'TRV', 'CB', 'PGR', 'WTW', 'AON', 'BX',
             'KKR', 'APO', 'MCO', 'FIS', 'GPN', 'SYF', 'ALLY', 'RJF', 'AJG', 'AMP',
             'SAN.MC', 'BBVA.MC', 'CABK.MC', 'UNI.MC',
+        ],
+    ],
+    // Banca comercial, banca de inversion/brokers y bancos regionales: balance
+    // apalancado financiado con depositos/deuda y riesgo de credito como
+    // motor principal del negocio. SCHW (Charles Schwab), SYF (Synchrony) y
+    // ALLY (Ally Financial) son entidades con banco propio (deposit-taking)
+    // aunque su origen sea brokerage/tarjetas/auto, por eso van aqui y no en
+    // el grupo de pagos. RJF (Raymond James) se incluye junto a GS/MS por ser
+    // banca de inversion/brokerage, no gestora de activos pura. Los 4 tickers
+    // '.MC' (SAN, BBVA, CABK, UNI) son bancos comerciales espanoles.
+    'financials_banking' => [
+        'label' => 'Financieras - Banca',
+        'tickers' => [
+            'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'SCHW', 'COF', 'USB', 'PNC',
+            'TFC', 'STT', 'SYF', 'ALLY', 'RJF',
+            'SAN.MC', 'BBVA.MC', 'CABK.MC', 'UNI.MC',
+        ],
+    ],
+    // Aseguradoras (riesgo de suscripcion) y brokers de seguros (comision
+    // sobre polizas colocadas, sin asumir riesgo de suscripcion ellos
+    // mismos): WTW, AON y AJG son brokers, el resto son aseguradoras
+    // directas. Sin tickers '.MC' en este grupo.
+    'financials_insurance' => [
+        'label' => 'Financieras - Seguros',
+        'tickers' => [
+            'MET', 'PRU', 'AIG', 'ALL', 'TRV', 'CB', 'PGR', 'WTW', 'AON', 'AJG',
+        ],
+    ],
+    // Pagos, exchanges/datos financieros y gestion de activos: negocio de
+    // comisiones intensivo en escala y capital-light frente al balance
+    // apalancado de la banca. Incluye redes/procesadores de pago (V, MA,
+    // PYPL, FIS, GPN), AXP (aunque emite tarjeta y presta, su negocio se
+    // parece mas a la red de pagos V/MA que a un banco comercial), exchanges
+    // y proveedores de rating/datos (ICE, CME, SPGI, MCO), y gestoras de
+    // activos tradicionales y alternativas (BLK, AMP, BX, KKR, APO). Sin
+    // tickers '.MC' en este grupo.
+    'financials_payments_asset_mgmt' => [
+        'label' => 'Financieras - Pagos y gestion de activos',
+        'tickers' => [
+            'V', 'MA', 'PYPL', 'AXP', 'FIS', 'GPN', 'SPGI', 'ICE', 'CME', 'MCO',
+            'BLK', 'AMP', 'BX', 'KKR', 'APO',
         ],
     ],
     'healthcare' => [
@@ -85,6 +136,15 @@ return [
             'NOV', 'APA', 'REP.MC',
         ],
     ],
+    // 'consumer' mezcla consumo discrecional (gasto que el consumidor puede
+    // aplazar/recortar: retail generalista, ocio, viajes, restauracion) con
+    // consumo defensivo/staples (gasto recurrente poco sensible al ciclo:
+    // alimentacion, higiene, tabaco, bebidas). Se mantiene como alias amplio
+    // (misma lista de siempre, sin cambios) para comparativas de todo el
+    // sector consumo, pero desde 2026-08-01 convive con 2 subgrupos mas
+    // homogeneos justo debajo ('consumer_discretionary',
+    // 'consumer_staples'); mismo precedente que el solape deliberado entre
+    // 'tech40' y 'semiconductors_global' de mas abajo.
     'consumer' => [
         'label' => 'Consumo',
         'tickers' => [
@@ -92,6 +152,34 @@ return [
             'BKNG', 'CMG', 'MAR', 'YUM', 'DG', 'ROST', 'KO', 'PEP', 'PG', 'PM',
             'MO', 'MDLZ', 'CL', 'KMB', 'GIS', 'STZ', 'EL', 'KHC', 'HSY', 'CLX',
             'ITX.MC',
+        ],
+    ],
+    // Consumo discrecional: retail generalista y de mejora del hogar,
+    // restauracion, ocio/viajes y moda, gasto que el consumidor puede
+    // aplazar o recortar en un ciclo bajista. ITX.MC (Inditex/Zara) es moda
+    // de consumo discrecional, va aqui. Nota: WMT, COST y DG estan en
+    // 'consumer_staples' y no aqui, siguiendo la clasificacion GICS vigente
+    // desde 2018 que reclasifico a los grandes distribuidores/hipermercados
+    // como "Consumer Staples Distribution & Retail" en vez de discrecional.
+    'consumer_discretionary' => [
+        'label' => 'Consumo discrecional',
+        'tickers' => [
+            'AMZN', 'HD', 'MCD', 'NKE', 'SBUX', 'TGT', 'LOW', 'TJX', 'BKNG', 'CMG',
+            'MAR', 'YUM', 'ROST', 'ITX.MC',
+        ],
+    ],
+    // Consumo defensivo/staples: alimentacion, higiene/hogar, bebidas y
+    // tabaco, gasto recurrente poco sensible al ciclo economico. Incluye WMT,
+    // COST y DG (grandes distribuidores/hipermercados y descuento, ver nota
+    // en 'consumer_discretionary' sobre la reclasificacion GICS 2018) y EL
+    // (Estee Lauder, cosmetica de higiene/cuidado personal clasificada como
+    // staples pese a la percepcion de "lujo/discrecional"). Sin tickers
+    // '.MC' en este grupo.
+    'consumer_staples' => [
+        'label' => 'Consumo defensivo',
+        'tickers' => [
+            'WMT', 'COST', 'DG', 'KO', 'PEP', 'PG', 'PM', 'MO', 'MDLZ', 'CL',
+            'KMB', 'GIS', 'STZ', 'EL', 'KHC', 'HSY', 'CLX',
         ],
     ],
     'industrials' => [
