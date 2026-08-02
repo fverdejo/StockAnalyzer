@@ -1892,12 +1892,350 @@ La tabla de ranking del Home queda mas legible y menos densa (solo posicion, acc
 
 ---
 
+## v2.37 - Categoria NEWS retirada del score
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El usuario pide "si noticias no funciona, quitemosla", buscando el indicador mas certero posible. `NEWS` teniaa un maximo de 10 puntos (de 125 en total), pero `NewsAnalyzer::analyze()` (via `NewsRepository::sentimentForTicker()`) devuelve siempre `null` porque `news_items` tiene 0 filas en produccion (confirmado en `v2.34`): en la practica, TODAS las acciones reciben siempre +5 puntos constantes de NEWS, sin ninguna diferenciacion entre ellas.
+
+Hallazgo al validar (`analista-mercado`, backtests reales antes de tocar codigo):
+
+Aunque la constante es igual para todas las acciones (no cambia el ORDEN relativo), si desplaza el PORCENTAJE final de cada una de forma no lineal, porque `getPercentage()` es `total/maxTotal` y quitar NEWS cambia ambos numeros (numerador -5, denominador -10, de 125 a 115). En 4242 muestras no solapadas de 5 universos (`largecap60`, `financials`, `ibex35`, `healthcare`, `energy`), entre el 4,4% y el 8,7% de las muestras cruzan de categoria de recomendacion al quitar NEWS, y las señales BUY/STRONG BUY suben un 66% en conjunto (179→297), con calidad mixta segun universo (mejora el retorno medio de las compras en 2 de 5 universos, empeora en 3 de 5 — el caso mas notable, `healthcare`, pasa de +1,53% a -0,03%). Ningun caso cruzo el umbral de STRONG BUY (desplazamiento maximo ±4 puntos porcentuales). Conclusion: no es un cambio "neutro", pero se recomienda proceder igualmente porque el problema de fondo (una categoria constante e identica para todas las acciones, sin ninguna señal diferenciadora, interactuando de forma desigual con umbrales fijos) es peor que no tener la categoria.
+
+Decisiones de arquitectura:
+
+- **`ScoreCategory::NEWS::maxScore()` pasa de 10 a 0**, con `config/weights.php` sin la linea `'news' => 10` (si se dejara esa linea con un valor positivo, `ScoreWeights::loadFile()` la usaria como override y anularia el cambio — habia que tocar los dos ficheros). Con `getMax(NEWS) = 0`, `NewsAnalyzer::analyze()`, `ScoreCalculator::newsPlaceholder()`, `Score::add()`/`getMaxTotal()` se resuelven solos a 0 sin tocarlos: el maximo total pasa de 125 a 115 automaticamente.
+- **La infraestructura de noticias se queda intacta**: `NewsAnalyzer`, `NewsRepository`, `NewsSentimentScorer`, `DTO/NewsSentiment`, `bin/import-news.php` no se tocan. Si en el futuro se importan noticias reales (sigue en el backlog, "Proveedor oficial de noticias/datos"), basta con volver a poner un valor positivo en `config/weights.php` para reactivar la categoria sin mas cambios de codigo.
+- **`StockDetailPage::renderScoreBreakdown()`** filtra las categorias con `max <= 0` para no pintar una fila "Noticias 0/0" confusa en el desglose de la ficha de detalle. La señal individual "Noticias" (el mensaje "No hay noticias recientes importadas...") sigue apareciendo en la lista general de señales, sin cambios.
+
+Incluye:
+
+- `Enums/ScoreCategory.php`: `NEWS::maxScore()` a 0.
+- `config/weights.php`: linea `'news' => 10` retirada.
+- `Web/StockDetailPage.php` (`renderScoreBreakdown()`): filtra categorias con maximo 0.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. `curl` a la ficha de detalle de AAPL: el desglose de categorias ya no muestra "Noticias", 7 filas en vez de 8. `bin/analyze.php --tickers=AAPL` confirma en el JSON `{"key":"news","score":0,"max":0}` y `max_total=115` (antes 125).
+
+Resultado esperado:
+
+El score y las recomendaciones de toda la app dejan de incluir una categoria que no aportaba ninguna señal real, con el maximo total ajustado de 125 a 115 puntos. El numero de señales BUY/STRONG BUY sube de forma notable a partir de ahora (efecto esperado y validado, no un error).
+
+---
+
+## v2.38 - Cache de backtesting por ticker (evita el coste de recalcular un grupo sectorial entero)
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El bloque de "prediccion por grupo sectorial" del historial de señal (`v2.34`) recalculaba un backtest completo de hasta ~50 tickers de un sector, de forma sincrona dentro de la misma peticion web que esperaba el usuario. El usuario, preocupado por el coste en una Raspberry Pi de produccion, pide no calcular por grupos de golpe sino "de una en una", y hacer lo necesario para que sea mas fiable.
+
+Decisiones de arquitectura (`fiabilidad-datos-mercado` diseña, `desarrollador-php` implementa):
+
+- **Cache lazy + calentamiento CLI combinados**, mismo patron que `market_data_cache`/`market_movers_cache` ya existentes en el proyecto. Tabla nueva `ticker_backtest_cache` (migracion `010_create_ticker_backtest_cache.sql`), clave `(ticker, horizon_days, step)`, payload JSON con el resultado completo de `backtestTicker()` en modo `full`, TTL de 24h (misma cadencia que el resto de la cache de mercado: un backtest sobre ~2 años de historico no cambia de forma relevante en un dia).
+- **`BacktestingService::runForTickerCached()`** (nuevo): envoltorio cache-first sobre `runForTicker()` (consulta cache, si falla o esta caducada calcula y guarda). `runForTicker()`/`run()` NO se tocan y siguen sin cache: los sigue usando `bin/backtest.php` para investigacion (incluido `--mode=technical`), que no debe contaminar la cache de produccion con resultados que no son el modo `full` que ve el usuario real.
+- **`runForPeerGroup()` reescrito para recorrer el grupo ticker a ticker via `runForTickerCached()`** en vez de recalcular todos de golpe, con un limite de `maxLiveComputations = 5` calculos en vivo por peticion: los tickers sin cache que superen ese limite se excluyen del agregado de esa respuesta concreta, en vez de bloquear la peticion esperando calcular un grupo entero.
+- **`bin/backtest.php --persist`** (nuevo): en vez de imprimir el JSON del backtest a stdout, recorre los tickers uno a uno con `runForTickerCached()` para poblar/refrescar la cache — pensado como job de "calentamiento" ejecutado a mano o por cron (mismo patron que `bin/analyze.php`), nunca disparado por una peticion web real.
+- **`Repository\TickerBacktestCacheRepository`** (nuevo): mismo patron exacto que `MarketDataCacheRepository` (`find()`/`save()`, `isFresh()`, `ON DUPLICATE KEY UPDATE`).
+
+Incluye:
+
+- `database/migrations/010_create_ticker_backtest_cache.sql` (nueva).
+- `Repository/TickerBacktestCacheRepository.php` (nuevo).
+- `Services/BacktestingService.php`: `runForTickerCached()` nuevo; `runForPeerGroup()` reescrito con cache y limite de calculos en vivo.
+- `Services/Application.php` (`renderSignalHistory()`): usa las variantes cacheadas.
+- `bin/backtest.php`: flag `--persist` nuevo.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. Migracion aplicada (`bin/migrate.php`). `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. `bin/backtest.php --universe=financials_insurance --persist` puebla 10 filas en `ticker_backtest_cache` (confirmado por consulta directa). Medicion real en `?page=signal-history&ticker=WTW` (WTW recurre al grupo sectorial, pocas señales propias): primera peticion "en frio" ~0,41s (calcula y cachea WTW mas 5 tickers del grupo, el resto queda fuera del agregado de esa respuesta por el limite); tras completar el calentamiento con `--persist`, la misma peticion ya "caliente" baja a ~0,013-0,02s (~20-30x mas rapida) con el agregado completo.
+
+Resultado esperado:
+
+El coste de calcular el historial de señal de un ticker con poco histórico propio ya no se paga de golpe recalculando todo un sector: se reparte en calculos individuales por ticker, cacheados 24h, con un limite estricto de cuanto se puede calcular en vivo dentro de una sola peticion.
+
+---
+
+## v2.39 - Sin ningun rastro visible de "Noticias" mientras la categoria este a 0
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+`v2.37` puso `ScoreCategory::NEWS::maxScore()` a 0 y filtro la categoria del desglose de puntuacion, pero dejo deliberadamente la señal individual "Noticias" ("No hay noticias recientes importadas para este ticker; la categoria se mantiene neutra.") en la lista general de señales de la ficha de detalle. El usuario reporta que la sigue viendo y pide quitar toda referencia, no solo la del desglose: si se quito el indicador, no debe quedar ningun rastro.
+
+Causa raiz:
+
+`ScoreCalculator::calculate()` seguia añadiendo SIEMPRE un resultado de NEWS (via `NewsAnalyzer::analyze()` o `newsPlaceholder()`) al array de categorias, independientemente de su maximo de puntos. Ese resultado incluye un `Signal` con label `'Noticias'` que se muestra en cualquier sitio que liste todas las señales generadas (no solo el desglose de puntos, que ya se habia filtrado en `v2.37`).
+
+Decisiones de arquitectura:
+
+- **`ScoreCalculator::calculate()` solo añade el resultado de NEWS cuando `$this->weights->getMax(ScoreCategory::NEWS) > 0`.** Es una condicion, no un borrado fijo: si en el futuro se reactiva NEWS con un peso positivo en `config/weights.php` (tal y como se dejo preparado en `v2.37`), la señal volveria a generarse automaticamente sin tocar mas codigo.
+- **`IndicatorEducation::expand()` pierde la entrada `'Noticias'`**, que quedaba muerta tras el cambio anterior (nunca se genera ya un `Signal` con ese label mientras el peso siga en 0, y `expand()` solo se invoca con señales realmente generadas).
+- **`NewsAnalyzer`, `NewsRepository`, `bin/import-news.php`, `ScoreCalculator::newsPlaceholder()` se dejan intactos**, simplemente dejan de invocarse mientras el peso sea 0 — misma decision de `v2.37` de conservar la infraestructura por si se reactiva en el futuro.
+
+Incluye:
+
+- `Analyzer/ScoreCalculator.php` (`calculate()`): resultado de NEWS condicionado a `getMax(NEWS) > 0`.
+- `Web/IndicatorEducation.php` (`expand()`): entrada `'Noticias'` eliminada.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 2 ficheros. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. `curl` a la ficha de detalle de AAPL (1451 lineas de HTML) con `grep -ic "noticias"` da 0 coincidencias: ni en el desglose de categorias ni en la lista general de señales/explicacion.
+
+Resultado esperado:
+
+Mientras la categoria NEWS tenga peso 0, no queda ningun rastro visible de "Noticias" en ninguna parte de la app, mientras la infraestructura subyacente sigue lista para reactivarse sin cambios de codigo si algun dia se importan noticias reales.
+
+---
+
+## v2.40 - Finnhub como proveedor alternativo (integrado, limitaciones documentadas)
+
+Estado: implementado y verificado en ddev; NO recomendado como proveedor activo con el plan gratuito actual.
+
+Objetivo:
+
+El usuario consiguio una API key de Finnhub y pidio integrarlo como proveedor de datos alternativo a Yahoo Finance, aprovechando que `MarketDataProviderInterface` ya estaba pensada para esto desde el diseño original del proyecto.
+
+Hallazgo al validar (`fiabilidad-datos-mercado`, contra la API real, no mocks):
+
+Probado con AAPL (EEUU) y SAN.MC (IBEX): `/quote`, `/stock/profile2` y `/stock/metric?metric=all` funcionan en el plan gratuito para tickers de EEUU (sin descripcion de texto libre en `/stock/profile2`, solo `finnhubIndustry`). Pero **`/stock/candle` (velas historicas e intradia) devuelve HTTP 403 para CUALQUIER simbolo y resolucion, incluido AAPL, sin excepcion** — el plan gratuito de Finnhub simplemente no incluye historico de precios. Los tickers `.MC` ademas devuelven 403 en casi todos los endpoints al usar el sufijo de mercado explicito. Rate limit observado: 60 peticiones/minuto.
+
+Decisiones de arquitectura:
+
+- **`Providers\FinnhubProvider implements MarketDataProviderInterface` implementado igualmente**, siguiendo el mismo patron que `YahooFinanceProvider` (mismo `HttpClient`, mismo envoltorio `CachedMarketDataProvider`, `Application::createMarketDataProvider()` gana el case `'finnhub'`). `getHistoricalQuotes()`/`getIntradayQuotes()` documentan honestamente la limitacion y lanzan `MarketDataException` con el motivo real de Finnhub en vez de fingir que funcionan.
+- **La API key se guarda en `config/provider.local.php`** (ya en `.gitignore` desde antes de esta sesion), usando el mecanismo ya existente (`ProviderConfig::save()`). `'active'` se deja en `'yahoo'`: activar Finnhub hoy romperia ranking, analisis tecnico y backtesting (todos dependen del historico de precios).
+- **Aviso explicito en `Web/ProviderConfigPage.php`**: la opcion "Finnhub" ya no aparece como "sin implementacion" (SI la tiene), pero se le añade una nota en rojo (`form-error`) explicando la limitacion del plan gratuito, para que nadie la active por error pensando que esta lista para produccion. De paso se corrige un bug preexistente en esa pantalla: `$active` estaba hardcodeado a `'yahoo'` en vez de leer `$config['active']`, asi que el radio button nunca reflejaba de verdad el proveedor activo guardado.
+
+Incluye:
+
+- `Providers/FinnhubProvider.php`, `Providers/FinnhubParser.php` (nuevos).
+- `Services/Application.php` (`createMarketDataProvider()`): case `finnhub` nuevo.
+- `Web/ProviderConfigPage.php`: Finnhub habilitado con aviso de limitacion; `$active` corregido para leer el valor real guardado.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. Pruebas reales contra la API de Finnhub con AAPL y SAN.MC confirmando la tabla de endpoints que funcionan/no funcionan citada arriba. `config/provider.local.php` con la key guardada, confirmado fuera del control de versiones.
+
+Resultado esperado:
+
+Finnhub queda disponible como opcion tecnica en la pantalla de configuracion, con la limitacion real de su plan gratuito documentada tanto en el codigo como en la propia UI, para que la decision de activarlo (cuando el usuario lo considere, por ejemplo con un plan de pago) sea informada y no accidental.
+
+---
+
+## v2.41 - Informacion de empresa (descripcion, sector, proximos resultados y dividendo) en la ficha de detalle
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El usuario pide ver, al principio del todo de la ficha de detalle, informacion de la empresa (a que se dedica) y cuando son los proximos reportes financieros y el proximo reparto de dividendos.
+
+Decisiones de arquitectura:
+
+- **Los 3 datos nuevos vienen siempre de Yahoo** (modulo `assetProfile,calendarEvents` de `quoteSummary`, separado de los modulos que ya se pedian, `YahooFundamentalsFetcher::PROFILE_MODULES`), independientemente del proveedor de mercado activo (Yahoo o Finnhub): validado en `v2.40` que Finnhub no tiene descripcion de texto libre en el plan gratuito y bloquea por completo su endpoint de dividendos.
+- **`Models\Company` gana `description` opcional** (default `''`, no rompe ninguna construccion existente); ya tenia `getSector()`/`getIndustry()` (vacios hasta ahora en produccion porque nunca se pedia `assetProfile`, hallazgo de `v2.34`).
+- **`DTO\CorporateEvents` nuevo** (`nextEarningsDate`, `nextExDividendDate`, `isEarningsDateEstimate`), con un aviso critico documentado en el propio DTO: la fecha ex-dividendo de Yahoo NO siempre es futura (puede devolver la del ultimo reparto ya pasado si el proximo aun no se ha anunciado, observado con SAN.MC). Cualquier consumidor debe comprobar que la fecha es posterior a hoy antes de tratarla como "proxima".
+- **`Providers\YahooCorporateProfileProvider` nuevo**, deliberadamente FUERA de `MarketDataProviderInterface`/`CachedMarketDataProvider` (no es intercambiable por proveedor, ver punto anterior) y solo invocado para el ticker que se esta viendo en detalle, nunca para un ranking completo.
+- **Cache dedicada** (`corporate_profile_cache`, TTL 24h, mismo patron que la cache de backtesting de `v2.38`): el endpoint `quoteSummary` de Yahoo es, segun el propio codigo del proveedor, "la pieza mas fragil de todo el proveedor"; sin cache, cada visita a una ficha de detalle (y cada ticker de una watchlist, ver `v2.42`) volveria a pedirselo. Medido en ddev: AAPL 1,58s en frio -> 0,036s en caliente; SAN.MC 0,93s -> 0,053s.
+- **UI**: nueva seccion "Sobre la empresa" insertada justo despues del titulo/ticker/precio y antes del grafico (el sitio exacto que pedia el usuario, "al principio del todo"). Omite silenciosamente cualquier dato que falte (sin mensajes de error); si la fecha ex-dividendo ya paso, se muestra como "Ultimo dividendo conocido (fecha pasada)", nunca como si fuera la proxima.
+
+Incluye:
+
+- `Models/Company.php`: `description` nuevo.
+- `DTO/CorporateEvents.php` (nuevo).
+- `Providers/YahooCorporateProfileProvider.php` (nuevo, con `fetchCached()`).
+- `Repository/CorporateProfileCacheRepository.php` (nuevo).
+- `database/migrations/011_create_corporate_profile_cache.sql` (nueva).
+- `Providers/YahooFundamentalsFetcher.php`: `fetchProfile()` nuevo (modulos `assetProfile,calendarEvents`).
+- `Providers/YahooParser.php`: `parseCompanyProfile()`/`parseCorporateEvents()` nuevos.
+- `Services/Application.php` (`renderDetail()`): usa `fetchCached()` y pasa los datos nuevos a `StockDetailPage`.
+- `Web/StockDetailPage.php`: `renderCompanyOverview()` nuevo.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. HTML real de AAPL y SAN.MC confirma la seccion "Sobre la empresa" en el sitio correcto; AAPL muestra sector/industria/proximos resultados (estimada)/proxima fecha ex-dividendo (2026-08-10, futura); SAN.MC muestra correctamente "Ultimo dividendo conocido (fecha pasada)" con 2026-04-30 en vez de presentarla como proxima.
+
+Resultado esperado:
+
+La ficha de detalle de cualquier ticker muestra, nada mas entrar, a que se dedica la empresa (cuando Yahoo lo tiene), su proxima fecha de resultados y su proxima fecha ex-dividendo real (nunca una fecha pasada disfrazada de proxima), sin sobrecargar el endpoint mas fragil de Yahoo gracias a la cache de 24h.
+
+---
+
+## v2.42 - Alerta de dividendo proximo en la watchlist
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Objetivo:
+
+El usuario pide un aviso con antelacion cuando un ticker en watchlist va a repartir dividendo, para poder decidir comprar antes de la fecha ex-dividendo y tener derecho al reparto (su ejemplo: "puede compensar comprar acciones una semana antes").
+
+Decisiones de arquitectura:
+
+- **Mismo patron reactivo ya usado por las alertas de cambio de recomendacion (`v2.15`)**: se comprueba al visitar "Mi watchlist" (`Application::renderWatchlist()`), sin cron nuevo, reutilizando la tabla `alerts` ya existente para el mensaje.
+- **`AlertService::checkUpcomingDividend(User, string, ?CorporateEvents, int $leadDays = 10)`**: no hace nada si no hay fecha ex-dividendo, si esa fecha ya paso (misma comprobacion obligatoria del DTO citada en `v2.41`), o si faltan mas de `leadDays` dias (10 por defecto, margen por encima de la "semana antes" del ejemplo del usuario).
+- **`ticker_dividend_alert_state` nueva** (mismo patron que `ticker_alert_state` de `v2.15`): guarda la ultima fecha ex-dividendo por la que ya se aviso a cada usuario/ticker, para no repetir la alerta cada dia dentro de la misma ventana — solo una alerta por fecha ex-dividendo distinta.
+- **Los `CorporateEvents` de cada ticker de la watchlist se obtienen siempre via la variante cacheada** (`YahooCorporateProfileProvider::fetchCached()`, `v2.41`): sin esto, visitar la watchlist dispararia una peticion al endpoint mas fragil de Yahoo por cada ticker seguido en cada visita.
+- **Alcance deliberadamente limitado a watchlist**, tal como pidio el usuario explicitamente; extenderlo a "Mi cartera" queda anotado como mejora natural futura, no implementada ahora.
+
+Incluye:
+
+- `database/migrations/012_create_ticker_dividend_alert_state.sql` (nueva).
+- `Repository/TickerDividendAlertStateRepository.php` (nuevo).
+- `Services/AlertService.php`: `checkUpcomingDividend()` nuevo.
+- `Services/Application.php` (`renderWatchlist()`): engancha la comprobacion junto a `checkRecommendationChange()`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. Prueba real (no sintetica): usuario de prueba con AAPL en watchlist (ex-dividendo real 2026-08-10, 8 dias vista desde el 2026-08-02) visitando `?page=watchlist` 3 veces seguidas — la primera genera exactamente 1 alerta nueva ("AAPL reparte dividendo (fecha ex-dividendo 10/08/2026, en 8 dias)..."), la segunda y tercera no generan duplicados. Usuario y datos de prueba borrados al terminar.
+
+Resultado esperado:
+
+Cualquier ticker en watchlist con una fecha ex-dividendo real dentro de los proximos 10 dias genera una alerta (visible en "Mi watchlist" y en `?page=alerts`) una unica vez por fecha, dando tiempo a decidir si comprar antes del reparto.
+
+---
+
+## v2.43 - Alerta de dividendo proximo tambien en Mi cartera
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Extender la alerta de dividendo proximo (`v2.42`, hasta ahora solo en watchlist) a las posiciones abiertas de "Mi cartera", tal como pide el usuario.
+
+Decisiones de arquitectura:
+
+- **Mismo mecanismo que `v2.42`, sin duplicar logica**: `AlertService::checkUpcomingDividend()` y `ticker_dividend_alert_state` ya existian; solo hacia falta engancharlos tambien en `Application::analyzeHoldingsForAlerts()` (el mismo bucle que ya llama a `checkRecommendationChange()` por cada posicion abierta), usando siempre `YahooCorporateProfileProvider::fetchCached()` (nunca la version sin cache) para no sobrecargar el endpoint mas fragil de Yahoo.
+
+Incluye:
+
+- `Services/Application.php` (`analyzeHoldingsForAlerts()`): llama tambien a `checkUpcomingDividend()` por cada posicion abierta.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones.
+
+Resultado esperado:
+
+Cualquier accion en cartera (no solo en watchlist) con una fecha ex-dividendo real dentro de los proximos 10 dias genera una alerta, igual que ya pasaba en watchlist desde `v2.42`.
+
+---
+
+## v2.44 - Descripcion de empresa en español: investigado, no es posible sin traduccion externa
+
+Estado: investigado, sin cambios de codigo (decision pendiente del usuario).
+
+Objetivo:
+
+El usuario pregunta si la descripcion de la empresa de `v2.41` (siempre en ingles, `longBusinessSummary` de Yahoo) se puede obtener en español.
+
+Hallazgo al investigar (`fiabilidad-datos-mercado`, peticiones reales contra Yahoo, no mocks):
+
+Probado con AAPL y SAN.MC: ni los parametros `lang=es-ES/es-US/es-MX`, `region=ES/US/MX`, `corsDomain=es.finance.yahoo.com` con cabeceras `Origin`/`Referer` de `es.finance.yahoo.com`, ni la cabecera `Accept-Language` (ya presente hoy) cambian el idioma de `longBusinessSummary`: siempre devuelve el mismo texto en ingles. Es coherente con que ese campo es texto libre suministrado por el proveedor de datos fundamentales de la propia empresa, no generado ni traducido por Yahoo. Confirmado ademas que la web en español de Yahoo (`es.finance.yahoo.com`) no tiene esta descripcion embebida en ningun sitio: cuando la muestra, la pide al mismo `quoteSummary` que ya se probo, en ingles.
+
+Conclusion:
+
+No es posible obtener esta descripcion en español sin un servicio de traduccion automatica externo (nueva dependencia, normalmente con coste y API key propia). Opciones sugeridas sin implementar: DeepL API (tier gratuito ~500k caracteres/mes, mejor calidad para español) o Google Cloud Translation (mas caro, calidad similar); ninguna libreria PHP local es una opcion seria para traducir texto libre con calidad aceptable. Si se decide seguir este camino, el volumen es bajo (una traduccion por ticker, cacheable indefinidamente igual que ya se cachea el resto del perfil de empresa desde `v2.41`, ya que el texto cambia poco).
+
+Resultado esperado:
+
+Decision pendiente del usuario: añadir DeepL (con su propia API key) o mantener la descripcion en ingles. No se ha tocado ningun fichero de codigo para esta idea.
+
+---
+
+## v2.45 - Ajustes de diseño: espaciado en "Sobre la empresa" y tabla "Posiciones abiertas" mas compacta
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+El usuario reporta, con capturas reales, dos problemas visuales: la seccion "Sobre la empresa" (`v2.41`) se ve con las cajas de datos pegadas al texto de la descripcion; y la tabla "Posiciones abiertas" de "Mi cartera" tiene celdas que se parten en dos lineas porque no caben en una fila (sugiere: campo de cantidad mas estrecho, boton "Vender" como icono, y fuente algo mas pequeña). De paso, tambien pide fusionar la columna "%" del historial de operaciones dentro de la celda de "Beneficio" (formato "25,10 $ (1,01%)"), como ya hacia la tabla de posiciones abiertas.
+
+Decisiones de arquitectura (`diseno-usabilidad` propone cambios CSS/marcado exactos, `desarrollador-php` implementa):
+
+- **Espaciado "Sobre la empresa"**: `margin-top: 16px` en `.summary-box + .values-grid` (combinador de hermano adyacente, no una regla general de `.values-grid`): esa combinacion de clases solo se da en `renderCompanyOverview()`, asi que el fix es quirurgico y no duplica margen en otros sitios donde `.values-grid` va detras de un `<h2>` con su propio espaciado (Tecnicos/Fundamentales de la misma ficha).
+- **Tabla "Posiciones abiertas" mas compacta**: input de cantidad mas estrecho (`.mini-form` de `minmax(96px, 1fr)` a `minmax(64px, 1fr)`), boton "Vender" convertido en icono (`&#8595;`, mismo patron de entidad HTML numerica que la estrella de watchlist) con `title`/`aria-label="Vender"` obligatorios para no perder el nombre accesible del boton, y clase nueva `.table-compact` (fuente 13px, padding reducido) aplicada SOLO a esta tabla, no globalmente. En movil (`max-width:640px`), el boton-icono de ancho fijo se centra (`justify-self: center`) para no quedar descuadrado en el layout de una columna que usa `.mini-form` ahi.
+- **Columna "%" fusionada en "Beneficio" del historial de operaciones**: reutiliza el helper `PortfolioPage::nullableProfitMoney()` que ya existia para el mismo patron en "Posiciones abiertas", en vez de crear uno nuevo; se retira el metodo `nullablePercent()` que quedaba sin uso.
+
+Incluye:
+
+- `Web/Layout.php`: `.summary-box + .values-grid`, `.icon-button`/`.mini-form .icon-button`, `.table-compact`, ajuste movil de `.icon-button`, `.mini-form` mas estrecho.
+- `Web/PortfolioPage.php`: `renderHoldings()` usa `table-compact`; `sellForm()` con boton-icono accesible; `renderTransactions()` fusiona Beneficio+%; `nullablePercent()` eliminado.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. HTML real de AAPL confirma `.summary-box`/`.values-grid` como hermanos directos con el CSS nuevo aplicado; render de prueba de "Mi cartera" con 4 posiciones confirma `table-compact`, el boton-icono con `title`/`aria-label` y mas espacio disponible por fila.
+
+Resultado esperado:
+
+La seccion "Sobre la empresa" queda claramente separada de sus cajas de datos; la tabla "Posiciones abiertas" cabe mejor en una fila sin perder accesibilidad; el historial de operaciones pierde una columna sin perder informacion.
+
+---
+
+## v2.45.1 - Fix: "Mi cartera" rota tras fusionar la columna % del historial
+
+Estado: corregido y verificado en ddev.
+
+Objetivo:
+
+Al fusionar en `v2.45` la columna "%" dentro de "Beneficio" en `renderTransactions()`, la cadena de formato del `sprintf()` que construye cada fila no se actualizo a la vez que los argumentos: seguia teniendo dos bloques `<td class="%s">%s</td>` (el viejo par de Beneficio y el viejo par de %), pero solo se le pasaban los argumentos del bloque fusionado. Resultado: `ArgumentCountError` ("13 arguments are required, 11 given") en cualquier visita a "Mi cartera" con al menos una operacion registrada, capturado por el `catch (Throwable)` de `Application::renderPortfolio()` y mostrado como "No se pudo abrir la cartera".
+
+Encontrado por el usuario al usar la app tras `v2.45`. Reproducido de forma aislada (invocando `PortfolioPage::render()` con datos reales via reflexion, sin depender de una sesion de navegador) para confirmar el punto exacto del fallo antes de tocar nada.
+
+Incluye:
+
+- `Web/PortfolioPage.php` (`renderTransactions()`): cadena de formato del `sprintf()` corregida a un solo `<td class="%s">%s</td>` final, coherente con los 10 argumentos que ya se le pasaban desde `v2.45`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones. Reproducido el fallo exacto de forma aislada antes del fix (mismo `ArgumentCountError` que reporto el usuario) y confirmado que desaparece despues, con una fila real de la tabla renderizando correctamente el formato fusionado (`0,00 $ (0,00%)`).
+
+Resultado esperado:
+
+"Mi cartera" vuelve a abrir con normalidad para cualquier usuario con operaciones registradas.
+
+---
+
+## v2.45.2 - Fix: porcentaje de beneficio/perdida con el color correcto
+
+Estado: corregido y verificado en ddev.
+
+Objetivo:
+
+El usuario reporta que el porcentaje entre parentesis junto al beneficio/perdida (en "Posiciones abiertas", "Historial de operaciones" y las tarjetas resumen de "Mi cartera") se veia siempre en gris (`class="muted"`), en vez de heredar el verde/rojo de la celda que lo contiene.
+
+Incluye:
+
+- `Web/PortfolioPage.php` (`nullableProfitMoney()`, `nullableProfit()`): se quita `class="muted"` del `<span>` del porcentaje en ambos helpers, para que herede el color de `profit-positive`/`profit-negative` ya aplicado en el elemento contenedor.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `vendor/bin/phpunit`: 26 tests, 80 assertions, sin regresiones.
+
+Resultado esperado:
+
+El porcentaje de beneficio/perdida se ve del mismo color (verde o rojo) que el importe al que acompaña, en cualquier sitio de "Mi cartera" donde aparece este patron.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; se anotan aqui porque encajan de forma natural con `v2.1`/`v2.2` y pueden valer la pena mas adelante. No tienen version asignada.
 
+- **Eliminar la integracion de Finnhub (`v2.40`) en una version futura — anotado, no ejecutado todavia.** Confirmado en `v2.40` que el plan gratuito de Finnhub bloquea con HTTP 403 el historico de precios (velas diarias e intradia) para CUALQUIER ticker, incluido AAPL: `FinnhubProvider` no puede cumplir de verdad `MarketDataProviderInterface` con esta clave, y activarlo como proveedor activo rompe ranking, analisis tecnico y backtesting (ya avisado en la propia UI de `?page=provider`). El usuario pide dejarlo anotado para retirarlo en una version futura, no borrarlo ahora. Lista exacta de referencias a tocar cuando se decida (comprobado por grep en toda la base de codigo, actualizar esta lista si algo cambia antes de ejecutarlo):
+  - **Borrar por completo**: `src/Providers/FinnhubProvider.php`, `src/Providers/FinnhubParser.php`.
+  - **`src/Services/Application.php`**: quitar `use StockAnalyzer\Providers\FinnhubProvider;` (linea ~26), el case `'finnhub' => new FinnhubProvider(...)` del `match` de `createMarketDataProvider()` (linea ~1028), y simplificar el comentario sobre `CorporateEvents`/proveedor activo (linea ~330) que hoy nombra a Finnhub explicitamente como contraste.
+  - **`src/Web/ProviderConfigPage.php`**: revertir `$implemented = $key === 'yahoo' || $key === 'finnhub';` a solo `$key === 'yahoo'`, y quitar la rama del aviso de "Plan gratuito sin historico de precios..." en el `match` de la nota por proveedor.
+  - **`config/provider.php`**: quitar la entrada `'finnhub' => ['label' => 'Finnhub', 'api_key' => ''],` (o dejarla como placeholder "sin implementacion", igual que `alpha_vantage`/`twelve_data`, segun se decida entonces). Ojo: si `config/provider.local.php` (gitignored, tiene la API key real del usuario) sigue teniendo una entrada `finnhub`, `ProviderConfig::load()` la seguiria fusionando en el array de proveedores aunque se borre de `provider.php` (usa `array_replace_recursive`); limpiar tambien `config/provider.local.php` a mano si se quiere una eliminacion completa.
+  - **Docblocks a simplificar** (mencionan Finnhub solo como contexto/justificacion, no rompen nada si se dejan, pero quedarian desactualizados): `src/DTO/CorporateEvents.php` (justificacion de por que los eventos corporativos usan siempre Yahoo), `src/Providers/YahooCorporateProfileProvider.php`, `src/Models/Company.php` (comentario del campo `description`), `src/Providers/YahooFundamentalsFetcher.php` (mencion generica como ejemplo de proveedor alternativo).
+  - **No hace falta tocar**: `project.md` (menciona "Finnhub" solo como ejemplo generico de proveedor alternativo en la filosofia de arquitectura, no referencia la implementacion real).
 - **Recalibracion de `config/weights.php` — investigada y descartada con datos (sesion `v2.34`).** Backtests no solapados en 6 universos, aislando bloques (tecnico solo, fundamental+valoracion+calidad+dividendo solo) y probando un reajuste moderado (VALUATION 20→12, TECHNICAL 30→38): ninguna variante corrige de forma limpia y consistente la inversion observada (retorno tras SELL/STRONG SELL mayor que tras BUY en 6/6 universos). El problema parece ser efecto de regimen de mercado + umbrales de valoracion fijos no ajustados por sector, no reparto de pesos. No se recomienda tocar los pesos salvo que aparezca evidencia nueva en otro periodo/regimen, o que primero se resuelva la idea de "Ratios fundamentales sensibles al sector" de aqui abajo.
-- **Activar la categoria NEWS — bloqueada, falta de datos, no de calibracion.** Confirmado en la sesion `v2.34` que `news_items` tiene 0 filas en produccion: los 10 puntos maximos de la categoria `news` son hoy peso muerto, `ScoreCalculator` siempre usa el placeholder neutro de `newsPlaceholder()`. Requiere primero una fuente de noticias real (coordinar con `fiabilidad-datos-mercado`), no un cambio de pesos.
+- **Categoria NEWS — cerrada en `v2.37`, en direccion contraria a como se anoto aqui.** Se habia anotado como "bloqueada, falta de datos" (confirmado en `v2.34` que `news_items` tiene 0 filas en produccion). En vez de esperar a un proveedor de noticias real, el usuario pidio quitarla directamente del score (`v2.37`): `ScoreCategory::NEWS::maxScore()` a 0, sin tocar la infraestructura de importacion CSV (`NewsAnalyzer`/`NewsRepository`/`bin/import-news.php`), que queda lista para reactivarse con un simple cambio de peso si en el futuro se importan noticias reales.
 - **Ratios fundamentales sensibles al sector.** `FundamentalAnalyzer::fundamentalHealth()`/`valuation()` usan los mismos umbrales de Deuda/Patrimonio, FCF-yield y EV/EBITDA para cualquier empresa; validado con datos reales, esto penaliza a bancos/aseguradoras del universo `financials` como si fueran industriales sobreendeudadas (Goldman Sachs con D/E=6,47 cae en el peor tramo; MetLife con FCF-yield=-27,9% recibe "señal de alerta" cuando es un artefacto del dato). Simulando el backtest de GS (`--tickers=GS --horizon=20`), neutralizar solo el componente D/E habria hecho cruzar de HOLD a BUY 12 de 81 muestras historicas. **Actualizacion:** revisado el codigo real del proveedor (sesion posterior), `Company::getSector()`/`getIndustry()` estan hoy siempre a `''` en produccion — `YahooParser::parseStock()` los hardcodea vacios (lineas 60-61) y `YahooFundamentalsFetcher::MODULES` (linea 35) ni siquiera pide el modulo `assetProfile` de Yahoo, que es donde vive el sector. Esta idea ya NO es "dato disponible, falta usarlo": requiere primero un cambio de proveedor (pedir `assetProfile`, parsear `sector`/`industry`, cablearlo en `Company`) coordinado con `fiabilidad-datos-mercado` antes de que `FundamentalAnalyzer` pueda consumirlo. Sigue pendiente, sin version asignada: es la unica idea de esta lista que no se ha cerrado en la sesion de `v2.30`-`v2.33`.
+- **Señal de "sobreextension" (momentum/RSI/PEG altos sin contrapeso) — investigada y descartada con datos.** El usuario observo que TRV daba BUY (84,89%) en la app mientras Interactive Brokers mostraba Hold, y pregunto si era un problema de datos o de metodologia. Verificado en codigo (`TechnicalScoreAnalyzer`): el momentum de 30 dias se satura al maximo de puntos a partir de +12,5% (un +22% puntua igual que un +50%), el RSI 50-70 es un unico tramo "positivo" sin gradiente interno, y el PEG (`FundamentalAnalyzer::valuation()`) nunca puede emitir un veredicto NEGATIVE por alto que sea. Root cause confirmada: no hay ninguna señal que penalice "esto ha subido demasiado, demasiado rapido". Sin embargo, el backtesting (`--step=20`, 6 universos) NO respalda que penalizarlo mejoraria los resultados: las situaciones similares a TRV (momentum fuerte + RSI alto + cero señales negativas) tuvieron retorno medio MEJOR que el conjunto de señales BUY normales (+2,96% vs +0,43% agregado, mas aciertos), no peor. Coherente con el hallazgo ya cerrado de `v2.34` (en este regimen alcista, lo caro/sobrecomprado siguio subiendo mas que lo barato/sobrevendido) y con la idea de "contexto de tendencia en RSI" de aqui abajo, descartada por el mismo motivo. No se recomienda implementar esta señal salvo que aparezca evidencia nueva en otro regimen de mercado. Confirmado que NO es el mismo problema que "Ratios fundamentales sensibles al sector" (los fundamentales de TRV, incluido D/E=0,3, son genuinamente buenos, sin distorsion de umbral generico visible en este caso). Queda como hallazgo secundario, sin accion todavia: el PEG nunca puede ser NEGATIVE en el codigo actual (miscalibracion real), pero los datos por banda de PEG no son lo bastante limpios/monotonicos hoy para fijar un umbral concreto.
 - **Contexto de tendencia en el RSI — investigada y descartada con datos.** La premisa original (alinear el RSI con el mismo criterio de Bollinger, dar por bueno un RSI>70 cuando `SMA20 > SMA50`) se probo con un backtest instrumentado (retorno futuro a 10/20/40 dias agrupado por banda de RSI x `SMA20 vs SMA50`, 6 universos sectoriales). El resultado no la respalda: dentro de cada banda de RSI, el retorno medio/mediano a futuro con `SMA20 > SMA50` no es sistematicamente mejor que sin tendencia confirmada; en la mayoria de combinaciones universo/horizonte es igual o peor. Aplicar esta idea tal como se planteo habria extendido a una segunda señal una premisa que los propios datos no sostienen (ver hallazgo sobre Bollinger reportado directamente al usuario en la sesion que descarta esta idea). No se recomienda implementarla salvo que aparezca evidencia nueva en otro periodo/regimen de mercado. Nota: el grafico de RSI de `v2.30` es una visualizacion del mismo indicador ya existente, no reabre esta idea descartada (no se anade ningun contexto de tendencia al calculo, solo se dibuja la serie).
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StockAnalyzer\Providers;
 
 use DateTimeImmutable;
+use StockAnalyzer\DTO\CorporateEvents;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\Fundamentals;
@@ -156,6 +157,71 @@ class YahooParser
             netMargin: $this->toPercentage($this->numeric($financialData['profitMargins'] ?? null)),
             revenueGrowth: $this->toPercentage($this->numeric($financialData['revenueGrowth'] ?? null)),
             currentRatio: $this->numeric($financialData['currentRatio'] ?? null)
+        );
+    }
+
+    /**
+     * Sector, industria y descripcion de a que se dedica la empresa, desde
+     * el modulo assetProfile de quoteSummary (ver YahooFundamentalsFetcher
+     * ::fetchProfile()). No forma parte de parseFundamentals() a proposito:
+     * assetProfile no se pide en cada getStock() (ver comentario en
+     * PROFILE_MODULES), asi que este metodo solo lo invoca
+     * YahooCorporateProfileProvider para la ficha de detalle de un ticker
+     * concreto.
+     *
+     * @param array<string,mixed> $payload Respuesta de v10/finance/quoteSummary
+     *        (modulo assetProfile)
+     * @return array{sector: string, industry: string, description: string}
+     */
+    public function parseCompanyProfile(array $payload): array
+    {
+        $result = $payload['quoteSummary']['result'][0] ?? null;
+
+        if (!is_array($result)) {
+            return ['sector' => '', 'industry' => '', 'description' => ''];
+        }
+
+        $assetProfile = is_array($result['assetProfile'] ?? null) ? $result['assetProfile'] : [];
+
+        return [
+            'sector' => (string) ($assetProfile['sector'] ?? ''),
+            'industry' => (string) ($assetProfile['industry'] ?? ''),
+            'description' => (string) ($assetProfile['longBusinessSummary'] ?? ''),
+        ];
+    }
+
+    /**
+     * Proxima fecha de resultados y proxima fecha ex-dividendo, desde el
+     * modulo calendarEvents de quoteSummary. Ver DTO\CorporateEvents para
+     * el porque de usar siempre Yahoo (independientemente del proveedor de
+     * mercado activo) para estos dos campos.
+     *
+     * @param array<string,mixed> $payload Respuesta de v10/finance/quoteSummary
+     *        (modulo calendarEvents)
+     */
+    public function parseCorporateEvents(array $payload): CorporateEvents
+    {
+        $result = $payload['quoteSummary']['result'][0] ?? null;
+
+        if (!is_array($result)) {
+            return CorporateEvents::empty();
+        }
+
+        $calendarEvents = is_array($result['calendarEvents'] ?? null) ? $result['calendarEvents'] : [];
+        $earnings = is_array($calendarEvents['earnings'] ?? null) ? $calendarEvents['earnings'] : [];
+        $earningsDates = is_array($earnings['earningsDate'] ?? null) ? $earnings['earningsDate'] : [];
+
+        $nextEarningsTimestamp = $this->numeric($earningsDates[0] ?? null);
+        $nextExDividendTimestamp = $this->numeric($calendarEvents['exDividendDate'] ?? null);
+
+        return new CorporateEvents(
+            $nextEarningsTimestamp !== null
+                ? (new DateTimeImmutable())->setTimestamp((int) $nextEarningsTimestamp)
+                : null,
+            $nextExDividendTimestamp !== null
+                ? (new DateTimeImmutable())->setTimestamp((int) $nextExDividendTimestamp)
+                : null,
+            (bool) ($earnings['isEarningsDateEstimate'] ?? false)
         );
     }
 

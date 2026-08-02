@@ -34,6 +34,18 @@ class YahooFundamentalsFetcher
 
     private const MODULES = 'defaultKeyStatistics,financialData,summaryDetail';
 
+    /**
+     * Modulos para la ficha de detalle (descripcion de la empresa, sector,
+     * industria, proxima fecha de resultados y proxima fecha ex-dividendo;
+     * ver versions.md, integracion Finnhub). Deliberadamente separados de
+     * MODULES: solo se piden para el ticker que se esta viendo en detalle
+     * (ver YahooCorporateProfileProvider), nunca para toda una lista de
+     * ranking, para no engordar ni ralentizar aun mas la llamada de
+     * quoteSummary (ya de por si el punto mas fragil de todo el proveedor)
+     * en el caso de uso mas frecuente.
+     */
+    private const PROFILE_MODULES = 'assetProfile,calendarEvents';
+
     private ?string $crumb = null;
     private bool $crumbFetchAttempted = false;
 
@@ -47,12 +59,29 @@ class YahooFundamentalsFetcher
      */
     public function fetch(string $ticker): array
     {
+        return $this->fetchModules($ticker, self::MODULES);
+    }
+
+    /**
+     * @return array<string,mixed> Payload JSON de quoteSummary ya decodificado
+     *         (modulos assetProfile y calendarEvents).
+     */
+    public function fetchProfile(string $ticker): array
+    {
+        return $this->fetchModules($ticker, self::PROFILE_MODULES);
+    }
+
+    /**
+     * @return array<string,mixed> Payload JSON de quoteSummary ya decodificado.
+     */
+    private function fetchModules(string $ticker, string $modules): array
+    {
         $crumb = $this->getCrumb();
 
         $url = sprintf(
             'https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=%s&crumb=%s',
             rawurlencode($ticker),
-            self::MODULES,
+            $modules,
             rawurlencode($crumb)
         );
 

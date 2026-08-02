@@ -104,7 +104,6 @@ class IndicatorEducation
             'Margen neto', 'Margen operativo' => 'Los margenes fundamentales indican que porcentaje de cada venta se queda la empresa como beneficio. Margenes altos y estables suelen reflejar ventaja competitiva.',
             'Deuda/Patrimonio', 'Ratio de liquidez' => 'Estas metricas fundamentales resumen fortaleza financiera. Una deuda contenida y liquidez suficiente reducen fragilidad en fases complicadas.',
             'Dividendos', 'Rentabilidad por dividendo', 'Payout ratio' => 'El dividendo fundamental solo suma cuando parece sostenible. Una rentabilidad alta con payout excesivo puede ser una senal de riesgo, no de calidad.',
-            'Noticias' => 'El sentimiento de las noticias recientes complementa a lo tecnico y lo fundamental con el contexto cualitativo que ninguno de los dos captura por si solo.',
             default => 'Esta senal procede del mismo calculo que aporta puntos al score, por eso la explicacion y la cifra salen de una unica fuente.',
         };
     }

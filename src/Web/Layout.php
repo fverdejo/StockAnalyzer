@@ -287,7 +287,7 @@ class Layout
 
         .mini-form {
             display: grid;
-            grid-template-columns: minmax(96px, 1fr) auto;
+            grid-template-columns: minmax(64px, 1fr) auto;
             gap: 6px;
         }
 
@@ -364,6 +364,9 @@ class Layout
         .secondary-button:hover {
             background: #e5edf1;
         }
+
+        .icon-button { padding: 0; font-size: 16px; line-height: 1; }
+        .mini-form .icon-button { width: 38px; min-width: 38px; }
 
         .danger-button {
             background: var(--bad);
@@ -465,6 +468,8 @@ class Layout
             vertical-align: top;
             overflow-wrap: anywhere;
         }
+
+        .table-compact th, .table-compact td { font-size: 13px; padding: 9px 8px; }
 
         th {
             background: var(--surface-alt);
@@ -715,6 +720,10 @@ class Layout
             font-size: 15px;
             line-height: 1.5;
             overflow-wrap: anywhere;
+        }
+
+        .summary-box + .values-grid {
+            margin-top: 16px;
         }
 
         .chart-wrap {
@@ -973,6 +982,13 @@ class Layout
             .footer-shell,
             .score-bar-head {
                 grid-template-columns: 1fr;
+            }
+
+            /* Con .mini-form en una sola columna, el boton-icono (width fijo
+               de 38px) queda anclado a la izquierda en su propia fila; se
+               centra para que no parezca un elemento suelto/roto. */
+            .mini-form .icon-button {
+                justify-self: center;
             }
 
             .footer-shell,

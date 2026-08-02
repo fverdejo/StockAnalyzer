@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Web;
 
+use DateTimeImmutable;
+use StockAnalyzer\DTO\CorporateEvents;
 use StockAnalyzer\DTO\Explanation;
 use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\StockAnalysis;
+use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\User;
 
 /**
@@ -16,13 +19,26 @@ use StockAnalyzer\Models\User;
  */
 class StockDetailPage
 {
+    /**
+     * @param ?Company $companyProfile Company enriquecida con descripcion,
+     *        sector e industria (via YahooCorporateProfileProvider, ver
+     *        Application::renderDetail()); null si no se pudo obtener. Se
+     *        renderiza en renderCompanyOverview(), al principio del cuerpo
+     *        de la pagina.
+     * @param ?CorporateEvents $corporateEvents Proxima fecha de resultados y
+     *        proxima fecha ex-dividendo; null si no se pudo obtener. Se
+     *        renderiza en renderCompanyOverview() (la logica de alerta de
+     *        watchlist vive en Services\AlertService, no aqui).
+     */
     public static function render(
         StockAnalysis $analysis,
         Explanation $explanation,
         string $backHref,
         ?User $currentUser = null,
         string $csrfToken = '',
-        bool $isWatched = false
+        bool $isWatched = false,
+        ?Company $companyProfile = null,
+        ?CorporateEvents $corporateEvents = null
     ): string
     {
         $stock = $analysis->getStock();
@@ -142,10 +158,12 @@ class StockDetailPage
             ])
         );
 
+        $companyOverview = self::renderCompanyOverview($companyProfile, $corporateEvents);
+
         $body = sprintf(
             '<header class="topbar detail-topbar">%s</header>%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
-            '',
+            $companyOverview,
             $charts,
             $signalHistory,
             $tradePanel,
@@ -190,6 +208,79 @@ class StockDetailPage
             $action,
             $class,
             Layout::escape($label)
+        );
+    }
+
+    /**
+     * "Sobre la empresa" (ver versions.md): descripcion, sector/industria y
+     * proximas fechas de resultados/ex-dividendo, al principio del todo de
+     * la ficha de detalle. $companyProfile/$corporateEvents pueden venir
+     * null (fallo de red hacia Yahoo) o con campos vacios (Yahoo no los
+     * tenia para ese ticker): en ambos casos se omite la parte afectada sin
+     * mostrar ningun error, y si no queda nada que mostrar no se renderiza
+     * la seccion en absoluto.
+     *
+     * IMPORTANTE (ver DTO\CorporateEvents): nextExDividendDate de Yahoo no
+     * siempre es una fecha futura, asi que aqui SIEMPRE se comprueba que es
+     * posterior a hoy antes de presentarla como "proxima"; si ya paso, se
+     * muestra como fecha del ultimo dividendo conocido, nunca como proxima.
+     */
+    private static function renderCompanyOverview(?Company $companyProfile, ?CorporateEvents $corporateEvents): string
+    {
+        $description = $companyProfile?->getDescription() ?? '';
+        $sector = $companyProfile?->getSector() ?? '';
+        $industry = $companyProfile?->getIndustry() ?? '';
+
+        $descriptionHtml = $description !== ''
+            ? sprintf('<div class="summary-box">%s</div>', Layout::escape($description))
+            : '';
+
+        $boxes = [];
+
+        if ($sector !== '') {
+            $boxes[] = self::overviewValue('Sector', $sector);
+        }
+
+        if ($industry !== '') {
+            $boxes[] = self::overviewValue('Industria', $industry);
+        }
+
+        $nextEarnings = $corporateEvents?->getNextEarningsDate();
+
+        if ($nextEarnings !== null) {
+            $label = $corporateEvents->isEarningsDateEstimate()
+                ? 'Proximos resultados (estimada)'
+                : 'Proximos resultados';
+            $boxes[] = self::overviewValue($label, $nextEarnings->format('Y-m-d'));
+        }
+
+        $nextExDividend = $corporateEvents?->getNextExDividendDate();
+
+        if ($nextExDividend !== null) {
+            if ($nextExDividend > new DateTimeImmutable('today')) {
+                $boxes[] = self::overviewValue('Proxima fecha ex-dividendo', $nextExDividend->format('Y-m-d'));
+            } else {
+                $boxes[] = self::overviewValue('Ultimo dividendo conocido (fecha pasada)', $nextExDividend->format('Y-m-d'));
+            }
+        }
+
+        if ($descriptionHtml === '' && $boxes === []) {
+            return '';
+        }
+
+        return sprintf(
+            '<section class="panel"><h2>Sobre la empresa</h2>%s%s</section>',
+            $descriptionHtml,
+            $boxes !== [] ? '<div class="values-grid">' . implode('', $boxes) . '</div>' : ''
+        );
+    }
+
+    private static function overviewValue(string $label, string $value): string
+    {
+        return sprintf(
+            '<div class="value-box"><span class="muted">%s</span><strong>%s</strong></div>',
+            Layout::escape($label),
+            Layout::escape($value)
         );
     }
 
@@ -754,9 +845,16 @@ HTML;
         $items = [];
 
         foreach ($categories as $category) {
-            $score = (float) ($category['score'] ?? 0);
             $max = (float) ($category['max'] ?? 0);
-            $ratio = $max > 0 ? min(100, max(0, ($score / $max) * 100)) : 0;
+
+            if ($max <= 0) {
+                // Categoria sin puntos maximos (p.ej. NEWS, sin señal real
+                // detras): no pintar una fila "0 / 0" que no aporta nada.
+                continue;
+            }
+
+            $score = (float) ($category['score'] ?? 0);
+            $ratio = min(100, max(0, ($score / $max) * 100));
 
             $items[] = sprintf(
                 '<div class="score-bar-row"><div class="score-bar-head"><span>%s</span><span class="muted">%s / %s</span></div><div class="score-bar-track"><div class="score-bar-fill" style="width:%s%%"></div></div></div>',

@@ -44,8 +44,11 @@ class ScoreCalculator
         $categoryResults = [
             ...$this->technicalScoreAnalyzer->analyze($stock, $technical),
             ...$this->fundamentalAnalyzer->analyze($stock->getFundamentals()),
-            $this->newsAnalyzer?->analyze($stock) ?? $this->newsPlaceholder(),
         ];
+
+        if ($this->weights->getMax(\StockAnalyzer\Enums\ScoreCategory::NEWS) > 0) {
+            $categoryResults[] = $this->newsAnalyzer?->analyze($stock) ?? $this->newsPlaceholder();
+        }
 
         $score = new Score($this->weights);
 

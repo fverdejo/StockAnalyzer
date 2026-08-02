@@ -22,7 +22,10 @@ return [
     'technical' => 30,
     'fundamental' => 30,
     'valuation' => 20,
-    'news' => 10,
+    // 'news' deliberadamente ausente: sin señal real detras (news_items
+    // vacia en produccion), su maximo se dejo a 0 en ScoreCategory::maxScore().
+    // No la reactives aqui con un valor > 0: ScoreWeights::loadFile() lo
+    // tomaria como override y anularia ese cambio (ver versions.md).
     'momentum' => 10,
     'risk' => 10,
     'quality' => 10,

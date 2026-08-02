@@ -23,13 +23,18 @@ use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\CachedMarketMoversProvider;
+use StockAnalyzer\Providers\FinnhubProvider;
+use StockAnalyzer\Providers\YahooCorporateProfileProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Providers\YahooMarketMoversProvider;
 use StockAnalyzer\Repository\AlertRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\MarketMoversCacheRepository;
+use StockAnalyzer\Repository\CorporateProfileCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
 use StockAnalyzer\Repository\TickerAlertStateRepository;
+use StockAnalyzer\Repository\TickerBacktestCacheRepository;
+use StockAnalyzer\Repository\TickerDividendAlertStateRepository;
 use StockAnalyzer\Repository\TransactionRepository;
 use StockAnalyzer\Repository\UserRepository;
 use StockAnalyzer\Repository\WatchlistRepository;
@@ -84,6 +89,8 @@ class Application
     private UniverseConfig $universeConfig;
     private AnalysisJsonPresenter $jsonPresenter;
     private bool $generalUniverseIsLive = false;
+    private YahooCorporateProfileProvider $corporateProfileProvider;
+    private CorporateProfileCacheRepository $corporateProfileCache;
 
     public function __construct()
     {
@@ -106,6 +113,11 @@ class Application
         $this->tickerNormalizer = new TickerNormalizer(CompanyDirectory::names());
         $this->explainer = new RecommendationExplainer();
         $this->jsonPresenter = new AnalysisJsonPresenter();
+        // Siempre Yahoo, independientemente del proveedor de mercado activo
+        // (ver DTO\CorporateEvents para la justificacion). Deliberadamente
+        // fuera de $this->marketDataProvider: solo se consulta para el
+        // ticker en la ficha de detalle, nunca para un ranking completo.
+        $this->corporateProfileProvider = new YahooCorporateProfileProvider();
 
         $this->auth = new AuthService(
             new UserRepository($this->connection),
@@ -114,7 +126,12 @@ class Application
         );
         $this->watchlistRepository = new WatchlistRepository($this->connection);
         $this->alertRepository = new AlertRepository($this->connection);
-        $this->alertService = new AlertService($this->alertRepository, new TickerAlertStateRepository($this->connection));
+        $this->alertService = new AlertService(
+            $this->alertRepository,
+            new TickerAlertStateRepository($this->connection),
+            new TickerDividendAlertStateRepository($this->connection)
+        );
+        $this->corporateProfileCache = new CorporateProfileCacheRepository($this->connection);
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
             $this->marketDataProvider,
@@ -308,7 +325,30 @@ class Application
         $currentUser = $this->auth->currentUser();
         $isWatched = $currentUser !== null && $this->watchlistRepository->isWatched($currentUser, $ticker);
 
-        return StockDetailPage::render($analysis, $explanation, $backHref, $currentUser, CsrfToken::get(), $isWatched);
+        // Descripcion/sector/industria y proximas fechas de resultados y
+        // ex-dividendo (ver fiabilidad-datos-mercado, integracion
+        // Finnhub): siempre via Yahoo, solo para el ticker en detalle. Un
+        // fallo aqui nunca debe tumbar la ficha (ver
+        // YahooCorporateProfileProvider::fetch()), por eso no hay try/catch
+        // adicional. Version cacheada (TTL 24h, ver
+        // CorporateProfileCacheRepository) para no pedir quoteSummary a
+        // Yahoo cada vez que alguien mira el mismo ticker.
+        [$companyProfile, $corporateEvents] = $this->corporateProfileProvider->fetchCached(
+            $ticker,
+            $analysis->getStock()->getCompany(),
+            $this->corporateProfileCache
+        );
+
+        return StockDetailPage::render(
+            $analysis,
+            $explanation,
+            $backHref,
+            $currentUser,
+            CsrfToken::get(),
+            $isWatched,
+            $companyProfile,
+            $corporateEvents
+        );
     }
 
     private function renderDetailError(string $ticker, string $message, string $backHref): string
@@ -550,6 +590,17 @@ class Application
                     $analysis = $this->analysisService->analyze($item->getTicker());
                     $analyses[$item->getTicker()] = $analysis;
                     $this->alertService->checkRecommendationChange($user, $item->getTicker(), $analysis->getScore()->getRecommendation());
+
+                    // Version cacheada (ver CorporateProfileCacheRepository,
+                    // TTL 24h): sin cache, esto pediria quoteSummary a Yahoo
+                    // una vez por cada ticker de la watchlist en cada
+                    // visita, sobre el endpoint mas fragil del proveedor.
+                    [, $corporateEvents] = $this->corporateProfileProvider->fetchCached(
+                        $item->getTicker(),
+                        $analysis->getStock()->getCompany(),
+                        $this->corporateProfileCache
+                    );
+                    $this->alertService->checkUpcomingDividend($user, $item->getTicker(), $corporateEvents);
                 } catch (Throwable $exception) {
                     $errors[$item->getTicker()] = $exception->getMessage();
                 }
@@ -715,6 +766,19 @@ class Application
                 $recommendations[$ticker] = $recommendation;
                 $riskLevels[$ticker] = $analysis->getRiskLevels();
                 $this->alertService->checkRecommendationChange($user, $ticker, $recommendation);
+
+                // Version cacheada (ver CorporateProfileCacheRepository,
+                // TTL 24h, v2.41): sin cache, esto pediria quoteSummary a
+                // Yahoo una vez por cada posicion abierta en cada visita a
+                // "Mi cartera", sobre el endpoint mas fragil del proveedor.
+                // Mismo patron que renderWatchlist() (v2.42), ahora tambien
+                // para posiciones en cartera, no solo watchlist.
+                [, $corporateEvents] = $this->corporateProfileProvider->fetchCached(
+                    $ticker,
+                    $analysis->getStock()->getCompany(),
+                    $this->corporateProfileCache
+                );
+                $this->alertService->checkUpcomingDividend($user, $ticker, $corporateEvents);
             } catch (Throwable) {
                 // Fallo puntual del proveedor para este ticker: no se
                 // muestra recomendacion ni niveles de riesgo, ni se
@@ -860,11 +924,14 @@ class Application
     /**
      * Endpoint AJAX ligero (ver versions.md v2.23) que da el historial real
      * de la señal de compra de un ticker concreto: reutiliza
-     * `BacktestingService::runForTicker()` (misma simulacion de
+     * `BacktestingService::runForTickerCached()` (misma simulacion de
      * stop-loss/objetivo de v2.21, sin recalibrar nada del motor de
      * puntuacion). Recorre buena parte del historico recalculando analisis
      * tecnico en cada muestra, por lo que solo se invoca cuando el usuario
-     * pulsa el boton en StockDetailPage, nunca al cargar la ficha.
+     * pulsa el boton en StockDetailPage, nunca al cargar la ficha. Desde
+     * v2.34 el resultado (y el del grupo sectorial de respaldo) se cachea
+     * en `ticker_backtest_cache` (TTL 1 dia) para no recalcular hasta ~50
+     * backtests completos de forma sincrona dentro de la misma peticion.
      */
     private function renderSignalHistory(): string
     {
@@ -884,8 +951,9 @@ class Application
             $this->scoreCalculator,
             new RiskLevelsCalculator(new RiskLevelsConfig())
         );
+        $backtestCache = new TickerBacktestCacheRepository($this->connection);
 
-        $result = $service->runForTicker($ticker, 20);
+        $result = $service->runForTickerCached($ticker, $backtestCache, 20);
 
         if ($result === null || $result['buy_managed_samples'] === 0) {
             return json_encode(['buy_managed_samples' => 0], JSON_UNESCAPED_SLASHES) ?: '{}';
@@ -908,7 +976,7 @@ class Application
 
             if ($sectorKey !== null) {
                 $peerTickers = $this->universeConfig->tickers($sectorKey);
-                $peerResult = $service->runForPeerGroup($peerTickers, 20);
+                $peerResult = $service->runForPeerGroup($peerTickers, $backtestCache, 20);
 
                 if ($peerResult !== null && $peerResult['buy_managed_samples'] >= 5) {
                     $peerGroup = [
@@ -953,9 +1021,11 @@ class Application
 
     private function createMarketDataProvider(ProviderConfig $config, Connection $connection): MarketDataProviderInterface
     {
-        $active = $config->getActiveProvider();
+        $loaded = $config->load();
+        $active = $loaded['active'];
 
         $provider = match ($active) {
+            'finnhub' => new FinnhubProvider((string) ($loaded['providers']['finnhub']['api_key'] ?? '')),
             'yahoo' => new YahooFinanceProvider(),
             default => new YahooFinanceProvider(),
         };

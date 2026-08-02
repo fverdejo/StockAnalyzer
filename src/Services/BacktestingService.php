@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Services;
 
+use DateInterval;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\DTO\RiskLevels;
@@ -14,6 +15,7 @@ use StockAnalyzer\Models\HistoricalQuote;
 use StockAnalyzer\Models\Quote;
 use StockAnalyzer\Models\Score;
 use StockAnalyzer\Models\Stock;
+use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 
 class BacktestingService
 {
@@ -79,6 +81,38 @@ class BacktestingService
     }
 
     /**
+     * Version cacheada de `runForTicker()` (ver versions.md v2.34,
+     * `TickerBacktestCacheRepository`): solo cachea resultados en modo
+     * 'full' (el que ve el usuario real), nunca los de `--mode=technical`
+     * de `bin/backtest.php`, que es una herramienta de investigacion y no
+     * debe contaminar la cache de produccion.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function runForTickerCached(
+        string $ticker,
+        TickerBacktestCacheRepository $cache,
+        int $horizonDays = 20,
+        int $step = 5,
+        ?DateInterval $ttl = null
+    ): ?array {
+        $ttl ??= new DateInterval('P1D');
+        $cached = $cache->find($ticker, $horizonDays, $step, $ttl);
+
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $result = $this->runForTicker($ticker, $horizonDays, $step);
+
+        if ($result !== null) {
+            $cache->save($ticker, $horizonDays, $step, $result);
+        }
+
+        return $result;
+    }
+
+    /**
      * Agrega el historial de señal de compra (mismo criterio que
      * backtestTicker()/runForTicker()) de un grupo de tickers, ponderando
      * por el numero de muestras gestionadas de cada uno. Pensado para dar
@@ -87,21 +121,51 @@ class BacktestingService
      * sector, NUNCA una mezcla arbitraria (la homogeneidad la decide el
      * llamador via UniverseConfig::narrowestSectorFor()).
      *
+     * Recorre los tickers uno a uno via `runForTickerCached()` en vez de
+     * `run()` (que recalcula TODOS los tickers de golpe sin cache): la
+     * mayoria vendran de cache tras un primer "calentamiento" (ver
+     * `bin/backtest.php --persist`). Como mucho `$maxLiveComputations`
+     * tickers sin cachear se calculan de verdad en una misma llamada; el
+     * resto de tickers sin cache se excluyen del agregado de esta respuesta
+     * concreta para no bloquear la peticion esperando calcular un grupo
+     * entero (hasta ~50 tickers).
+     *
      * @param list<string> $tickers
      * @return array{buy_managed_samples: int, avg_buy_managed_return: ?float}|null
      */
-    public function runForPeerGroup(array $tickers, int $horizonDays = 20, int $step = 5): ?array
-    {
-        $run = $this->run($tickers, $horizonDays, $step);
+    public function runForPeerGroup(
+        array $tickers,
+        TickerBacktestCacheRepository $cache,
+        int $horizonDays = 20,
+        int $step = 5,
+        int $maxLiveComputations = 5
+    ): ?array {
         $totalSamples = 0;
         $weightedReturnSum = 0.0;
+        $liveComputations = 0;
+        $ttl = new DateInterval('P1D');
 
-        foreach ($run['results'] as $result) {
-            $samples = (int) $result['buy_managed_samples'];
+        foreach ($tickers as $ticker) {
+            $cached = $cache->find($ticker, $horizonDays, $step, $ttl);
 
-            if ($samples > 0 && $result['avg_buy_managed_return'] !== null) {
+            if ($cached === null) {
+                if ($liveComputations >= $maxLiveComputations) {
+                    continue;
+                }
+
+                $liveComputations++;
+                $cached = $this->runForTickerCached($ticker, $cache, $horizonDays, $step, $ttl);
+            }
+
+            if ($cached === null) {
+                continue;
+            }
+
+            $samples = (int) $cached['buy_managed_samples'];
+
+            if ($samples > 0 && $cached['avg_buy_managed_return'] !== null) {
                 $totalSamples += $samples;
-                $weightedReturnSum += $result['avg_buy_managed_return'] * $samples;
+                $weightedReturnSum += $cached['avg_buy_managed_return'] * $samples;
             }
         }
 

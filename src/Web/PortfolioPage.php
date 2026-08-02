@@ -143,7 +143,7 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact"><thead><tr><th>&#9733;</th><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
     }
 
     /**
@@ -180,7 +180,7 @@ HTML;
     private static function sellForm(Holding $holding, string $csrfToken): string
     {
         return sprintf(
-            '<form method="post" action="?page=portfolio" class="mini-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><input name="quantity" type="number" min="0.000001" max="%s" step="0.000001" value="%s"><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender</button></form>',
+            '<form method="post" action="?page=portfolio" class="mini-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><input name="quantity" type="number" min="0.000001" max="%s" step="0.000001" value="%s"><button type="submit" name="trade_action" value="sell" class="secondary-button icon-button" title="Vender" aria-label="Vender">&#8595;</button></form>',
             $csrfToken,
             Layout::escape($holding->getTicker()),
             Layout::escape((string) $holding->getQuantity()),
@@ -204,7 +204,7 @@ HTML;
             $percent = $portfolio->getTransactionProfitPercent($transaction);
             $currency = $portfolio->getCurrencyFor($transaction->getTicker());
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td><td class="%s">%s</td></tr>',
+                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s</td><td class="%s">%s</td></tr>',
                 Layout::escape($transaction->getExecutedAt()->format('Y-m-d H:i')),
                 $type === TransactionType::BUY ? 'buy' : 'sell',
                 Layout::escape($type->label()),
@@ -214,13 +214,11 @@ HTML;
                 self::nullableEur($portfolio->getTransactionPriceEur($transaction)),
                 self::nullableUsd($portfolio->getTransactionPriceUsd($transaction)),
                 self::profitClass($profit),
-                Layout::formatNullableMoney($profit, $currency),
-                self::profitClass($profit),
-                self::nullablePercent($percent)
+                self::nullableProfitMoney($profit, $percent, $currency)
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio (EUR)</th><th>Precio (USD)</th><th>Beneficio vs. precio actual</th><th>%</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas. Las columnas de precio muestran el valor convertido a euros y dolares para comparar de un vistazo; el guion indica que esa operacion no aplica en esa divisa (por ejemplo, una accion del IBEX no tiene precio en dolares).</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio (EUR)</th><th>Precio (USD)</th><th>Beneficio vs. precio actual</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas (importe y porcentaje entre parentesis en la misma celda). Las columnas de precio muestran el valor convertido a euros y dolares para comparar de un vistazo; el guion indica que esa operacion no aplica en esa divisa (por ejemplo, una accion del IBEX no tiene precio en dolares).</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a></p>';
     }
 
     /**
@@ -281,18 +279,13 @@ HTML;
 HTML;
     }
 
-    private static function nullablePercent(?float $value): string
-    {
-        return $value === null ? '-' : Layout::formatNumber($value) . '%';
-    }
-
     private static function nullableProfit(?float $profit, ?float $percent): string
     {
         if ($profit === null || $percent === null) {
             return '-';
         }
 
-        return self::money($profit) . '<span class="muted"> (' . Layout::formatNumber($percent) . '%)</span>';
+        return self::money($profit) . '<span> (' . Layout::formatNumber($percent) . '%)</span>';
     }
 
     /**
@@ -307,7 +300,7 @@ HTML;
             return '-';
         }
 
-        return Layout::formatMoney($profit, $currency) . '<span class="muted"> (' . Layout::formatNumber($percent) . '%)</span>';
+        return Layout::formatMoney($profit, $currency) . '<span> (' . Layout::formatNumber($percent) . '%)</span>';
     }
 
     private static function nullableMoney(?float $value): string
