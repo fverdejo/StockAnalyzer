@@ -10,20 +10,8 @@ use DateTimeImmutable;
  * Proxima fecha de resultados financieros y proxima fecha EX-DIVIDENDO de
  * una empresa, pensadas para alimentar una futura alerta de watchlist ("te
  * avisamos antes de que toque comprar para tener derecho al dividendo").
- * Ver fiabilidad-datos-mercado, integracion Finnhub, para el informe
- * completo de por que ambos campos se obtienen siempre de Yahoo Finance
- * (modulo calendarEvents de quoteSummary) independientemente del proveedor
- * de mercado activo (Yahoo o Finnhub):
- *
- *  - Finnhub bloquea /stock/dividend en su plan gratuito con HTTP 403
- *    ("You don't have access to this resource.") incluso para tickers de
- *    EEUU como AAPL, tanto en rango pasado como futuro: no hay forma de
- *    obtener la fecha ex-dividendo desde Finnhub gratis.
- *  - Finnhub /calendar/earnings SI funciona en el plan gratuito para
- *    tickers de EEUU, pero bloquea con el mismo 403 cualquier ticker con
- *    sufijo de mercado explicito (".MC", etc.), lo que lo deja fuera para
- *    universos como ibex35. Yahoo calendarEvents funciona igual de bien
- *    para EEUU y para tickers ".MC" (comprobado con AAPL, MSFT y SAN.MC).
+ * Ambos campos se obtienen siempre de Yahoo Finance (modulo calendarEvents
+ * de quoteSummary), independientemente del proveedor de mercado activo.
  *
  * IMPORTANTE: nextExDividendDate de Yahoo no es siempre estrictamente
  * futura. Cuando la empresa aun no ha anunciado el proximo reparto, Yahoo

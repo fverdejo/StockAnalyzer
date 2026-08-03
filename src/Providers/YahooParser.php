@@ -17,9 +17,19 @@ class YahooParser
 {
     /**
      * @param array<string,mixed> $payload Respuesta de v8/finance/chart
+     * @param string $sector assetProfile.sector (ver YahooFundamentalsFetcher::MODULES),
+     *        o '' si Yahoo no lo devolvio para este ticker o si la obtencion de
+     *        fundamentales fallo por completo (mismo criterio que el resto de campos
+     *        opcionales de este proveedor: nunca debe romper el resto del analisis)
+     * @param string $industry assetProfile.industry, mismo criterio de fallback que $sector
      */
-    public function parseStock(array $payload, string $ticker, Fundamentals $fundamentals): Stock
-    {
+    public function parseStock(
+        array $payload,
+        string $ticker,
+        Fundamentals $fundamentals,
+        string $sector = '',
+        string $industry = ''
+    ): Stock {
         $error = $payload['chart']['error'] ?? null;
 
         if (is_array($error)) {
@@ -58,8 +68,8 @@ class YahooParser
         $company = new Company(
             strtoupper($ticker),
             (string) ($meta['shortName'] ?? $meta['symbol'] ?? strtoupper($ticker)),
-            '',
-            '',
+            $sector,
+            $industry,
             (string) ($meta['exchangeName'] ?? ''),
             (string) ($meta['currency'] ?? '')
         );
@@ -162,12 +172,13 @@ class YahooParser
 
     /**
      * Sector, industria y descripcion de a que se dedica la empresa, desde
-     * el modulo assetProfile de quoteSummary (ver YahooFundamentalsFetcher
-     * ::fetchProfile()). No forma parte de parseFundamentals() a proposito:
-     * assetProfile no se pide en cada getStock() (ver comentario en
-     * PROFILE_MODULES), asi que este metodo solo lo invoca
-     * YahooCorporateProfileProvider para la ficha de detalle de un ticker
-     * concreto.
+     * el modulo assetProfile de quoteSummary. El modulo assetProfile se pide
+     * tanto en YahooFundamentalsFetcher::fetch() (MODULES, para cada
+     * getStock()) como en fetchProfile() (PROFILE_MODULES, para la ficha de
+     * detalle), asi que este metodo se reutiliza desde ambos payloads: la
+     * forma de assetProfile dentro de quoteSummary es identica en los dos
+     * casos. No forma parte de parseFundamentals() porque sector/industria
+     * son datos de Company, no de Fundamentals.
      *
      * @param array<string,mixed> $payload Respuesta de v10/finance/quoteSummary
      *        (modulo assetProfile)

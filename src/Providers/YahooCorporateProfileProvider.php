@@ -17,7 +17,7 @@ use Throwable;
  * resultados y proxima fecha ex-dividendo, para la ficha de detalle de un
  * unico ticker (ver DTO\CorporateEvents para la justificacion completa de
  * por que esto usa siempre Yahoo, independientemente del proveedor de
- * mercado activo -Yahoo o Finnhub-).
+ * mercado activo).
  *
  * A proposito NO implementa MarketDataProviderInterface ni se envuelve en
  * CachedMarketDataProvider: es una fuente de datos aparte, deliberadamente

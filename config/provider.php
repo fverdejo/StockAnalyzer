@@ -9,10 +9,6 @@ return [
             'label' => 'Yahoo Finance',
             'api_key' => '',
         ],
-        'finnhub' => [
-            'label' => 'Finnhub',
-            'api_key' => '',
-        ],
         'alpha_vantage' => [
             'label' => 'Alpha Vantage',
             'api_key' => '',

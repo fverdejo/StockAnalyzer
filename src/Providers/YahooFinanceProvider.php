@@ -47,9 +47,9 @@ class YahooFinanceProvider implements MarketDataProviderInterface
             throw new MarketDataException('Yahoo response is not an object.');
         }
 
-        $fundamentals = $this->fetchFundamentalsSafely($ticker);
+        [$fundamentals, $sector, $industry] = $this->fetchFundamentalsAndProfileSafely($ticker);
 
-        return $this->parser->parseStock($payload, $ticker, $fundamentals);
+        return $this->parser->parseStock($payload, $ticker, $fundamentals, $sector, $industry);
     }
 
     public function getHistoricalQuotes(string $ticker): array
@@ -120,22 +120,27 @@ class YahooFinanceProvider implements MarketDataProviderInterface
     }
 
     /**
-     * Los fundamentales viajan por un endpoint no oficial y mas fragil que
+     * Los fundamentales (y, desde que MODULES incluye assetProfile, tambien
+     * sector/industria) viajan por un endpoint no oficial y mas fragil que
      * el de cotizacion/historico (ver YahooFundamentalsFetcher). Un fallo
-     * aqui nunca debe tumbar el analisis completo de la accion: se
-     * registra como fundamentales vacios y el resto de la aplicacion ya
-     * sabe tratar los campos null como "dato no disponible".
+     * aqui nunca debe tumbar el analisis completo de la accion: se registra
+     * como fundamentales vacios y sector/industria en '', y el resto de la
+     * aplicacion ya sabe tratar esos valores como "dato no disponible".
+     *
+     * @return array{0: Fundamentals, 1: string, 2: string} Fundamentales, sector e industria.
      */
-    private function fetchFundamentalsSafely(string $ticker): Fundamentals
+    private function fetchFundamentalsAndProfileSafely(string $ticker): array
     {
         $fetcher = $this->fundamentalsFetcher ?? new YahooFundamentalsFetcher($this->httpClient);
 
         try {
             $payload = $fetcher->fetch($ticker);
+            $fundamentals = $this->parser->parseFundamentals($payload);
+            $profile = $this->parser->parseCompanyProfile($payload);
 
-            return $this->parser->parseFundamentals($payload);
+            return [$fundamentals, $profile['sector'], $profile['industry']];
         } catch (Throwable) {
-            return Fundamentals::empty();
+            return [Fundamentals::empty(), '', ''];
         }
     }
 }

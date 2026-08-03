@@ -23,7 +23,6 @@ use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\CachedMarketMoversProvider;
-use StockAnalyzer\Providers\FinnhubProvider;
 use StockAnalyzer\Providers\YahooCorporateProfileProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Providers\YahooMarketMoversProvider;
@@ -113,10 +112,11 @@ class Application
         $this->tickerNormalizer = new TickerNormalizer(CompanyDirectory::names());
         $this->explainer = new RecommendationExplainer();
         $this->jsonPresenter = new AnalysisJsonPresenter();
-        // Siempre Yahoo, independientemente del proveedor de mercado activo
-        // (ver DTO\CorporateEvents para la justificacion). Deliberadamente
-        // fuera de $this->marketDataProvider: solo se consulta para el
-        // ticker en la ficha de detalle, nunca para un ranking completo.
+        // Siempre Yahoo, aunque tambien sea el proveedor de mercado activo
+        // por defecto (ver DTO\CorporateEvents para la justificacion).
+        // Deliberadamente fuera de $this->marketDataProvider: solo se
+        // consulta para el ticker en la ficha de detalle, nunca para un
+        // ranking completo.
         $this->corporateProfileProvider = new YahooCorporateProfileProvider();
 
         $this->auth = new AuthService(
@@ -326,8 +326,7 @@ class Application
         $isWatched = $currentUser !== null && $this->watchlistRepository->isWatched($currentUser, $ticker);
 
         // Descripcion/sector/industria y proximas fechas de resultados y
-        // ex-dividendo (ver fiabilidad-datos-mercado, integracion
-        // Finnhub): siempre via Yahoo, solo para el ticker en detalle. Un
+        // ex-dividendo: siempre via Yahoo, solo para el ticker en detalle. Un
         // fallo aqui nunca debe tumbar la ficha (ver
         // YahooCorporateProfileProvider::fetch()), por eso no hay try/catch
         // adicional. Version cacheada (TTL 24h, ver
@@ -1025,7 +1024,6 @@ class Application
         $active = $loaded['active'];
 
         $provider = match ($active) {
-            'finnhub' => new FinnhubProvider((string) ($loaded['providers']['finnhub']['api_key'] ?? '')),
             'yahoo' => new YahooFinanceProvider(),
             default => new YahooFinanceProvider(),
         };

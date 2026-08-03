@@ -16,9 +16,9 @@ use Throwable;
  * cambiado varias veces en los ultimos años sin aviso previo, a veces con
  * limites de peticiones agresivos. Por eso vive aislada en su propia
  * clase: si deja de funcionar, es el unico sitio que hay que tocar, o se
- * puede sustituir el proveedor entero por otro (Finnhub, Alpha Vantage,
- * Twelve Data...) gracias a MarketDataProviderInterface sin tocar el
- * resto de la aplicacion.
+ * puede sustituir el proveedor entero por otro (Alpha Vantage, Twelve
+ * Data...) gracias a MarketDataProviderInterface sin tocar el resto de la
+ * aplicacion.
  *
  * El crumb se obtiene una sola vez por instancia y se reutiliza en las
  * siguientes llamadas, para no repetir el hallazgo de crumb en cada
@@ -32,13 +32,28 @@ class YahooFundamentalsFetcher
         'Accept-Language' => 'es-ES,es;q=0.9,en;q=0.8',
     ];
 
-    private const MODULES = 'defaultKeyStatistics,financialData,summaryDetail';
+    /**
+     * Modulos para la llamada mas frecuente (un ticker en ranking/backtest).
+     *
+     * El modulo assetProfile (sector/industria) va incluido aqui a
+     * proposito, pese al comentario de PROFILE_MODULES sobre no engordar la
+     * llamada mas frecuente: sin sector por ticker no hay forma de aplicar
+     * umbrales fundamentales sensibles a sector en un ranking/backtest
+     * completo (ver versions.md, "Ratios fundamentales sensibles al
+     * sector"), y pedirlo aparte por cada ticker de la lista (como hace
+     * fetchProfile(), pensado solo para un ticker en la ficha de detalle)
+     * multiplicaria las peticiones a quoteSummary en vez de sumar un modulo
+     * a una que ya se hace. Si esto resulta demasiado pesado para universos
+     * grandes en la practica, valorar cachear el resultado por separado en
+     * vez de revertir esto.
+     */
+    private const MODULES = 'defaultKeyStatistics,financialData,summaryDetail,assetProfile';
 
     /**
      * Modulos para la ficha de detalle (descripcion de la empresa, sector,
-     * industria, proxima fecha de resultados y proxima fecha ex-dividendo;
-     * ver versions.md, integracion Finnhub). Deliberadamente separados de
-     * MODULES: solo se piden para el ticker que se esta viendo en detalle
+     * industria, proxima fecha de resultados y proxima fecha ex-dividendo).
+     * Deliberadamente separados de MODULES: solo se piden para el ticker
+     * que se esta viendo en detalle
      * (ver YahooCorporateProfileProvider), nunca para toda una lista de
      * ranking, para no engordar ni ralentizar aun mas la llamada de
      * quoteSummary (ya de por si el punto mas fragil de todo el proveedor)

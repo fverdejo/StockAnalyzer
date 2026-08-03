@@ -11,8 +11,7 @@ class Company
      *        ej. Yahoo assetProfile.longBusinessSummary). Opcional y con valor por defecto
      *        '' para no romper las construcciones existentes de Company que no la conocen
      *        (el chart endpoint de Yahoo, usado en cada getStock(), no la trae; solo la
-     *        rellena YahooCorporateProfileProvider para la ficha de detalle, ver
-     *        fiabilidad-datos-mercado, integracion Finnhub).
+     *        rellena YahooCorporateProfileProvider para la ficha de detalle).
      */
     public function __construct(
         private readonly string $ticker,

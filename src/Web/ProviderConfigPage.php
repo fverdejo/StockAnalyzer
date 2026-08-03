@@ -21,16 +21,9 @@ class ProviderConfigPage
 
         foreach ($config['providers'] as $key => $provider) {
             $checked = $key === $active ? ' checked' : '';
-            $implemented = $key === 'yahoo' || $key === 'finnhub';
+            $implemented = $key === 'yahoo';
             $disabled = $implemented ? '' : ' disabled';
             $note = match (true) {
-                // Finnhub SI implementa la interfaz (cotizacion/perfil/fundamentales
-                // funcionan), pero su plan gratuito bloquea con HTTP 403 el
-                // historico de precios (candles) para cualquier ticker y
-                // resolucion: activarlo como proveedor rompe ranking, analisis
-                // tecnico y backtesting, que dependen todos de ese historico. Ver
-                // versions.md, integracion Finnhub, para el detalle completo.
-                $key === 'finnhub' => '<span class="form-error">Plan gratuito sin historico de precios: activarlo rompe ranking, analisis tecnico y backtesting. No recomendado como proveedor activo todavia.</span>',
                 !$implemented => '<span class="muted">Preparado, sin implementacion activa todavia</span>',
                 default => '',
             };
