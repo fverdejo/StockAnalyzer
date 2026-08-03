@@ -266,6 +266,8 @@ class BacktestingService
             'sell_signals' => count($sellReturns),
             'avg_buy_forward_return' => $this->average($buyReturns),
             'avg_sell_forward_return' => $this->average($sellReturns),
+            'win_rate_buy' => $this->winRate($buyReturns),
+            'win_rate_sell' => $this->winRate($sellReturns),
             'benchmark_return' => round($benchmark, 2),
             'recent_samples' => array_slice($samples, -10),
             'buy_managed_samples' => count($managedSamples),
@@ -273,6 +275,7 @@ class BacktestingService
                 static fn (array $sample): float => (float) $sample['managed_return'],
                 $managedSamples
             )),
+            'max_drawdown_managed' => $this->worstManagedReturn($managedSamples),
             'stop_loss_rate' => $this->rateOf($managedSamples, 'stop_loss'),
             'target_rate' => $this->rateOf($managedSamples, 'target'),
             'horizon_rate' => $this->rateOf($managedSamples, 'horizon'),
@@ -393,6 +396,53 @@ class BacktestingService
         }
 
         return $managed;
+    }
+
+    /**
+     * Porcentaje de muestras con forward_return positivo (0% exacto no
+     * cuenta como acierto: sin movimiento no hay ganancia que respalde la
+     * señal). Mismo criterio de resiliencia que average(): sin muestras,
+     * null en vez de dividir por cero.
+     *
+     * @param list<float> $returns
+     */
+    private function winRate(array $returns): ?float
+    {
+        if ($returns === []) {
+            return null;
+        }
+
+        $wins = 0;
+
+        foreach ($returns as $return) {
+            if ($return > 0) {
+                $wins++;
+            }
+        }
+
+        return round(($wins / count($returns)) * 100, 2);
+    }
+
+    /**
+     * Peor managed_return individual entre las muestras BUY gestionadas: el
+     * drawdown mas severo que habria sufrido la estrategia gestionada, no
+     * la media (avg_buy_managed_return ya la reporta). Mismo criterio de
+     * resiliencia que el resto del agregado: sin muestras, null.
+     *
+     * @param list<array<string,mixed>> $managedSamples
+     */
+    private function worstManagedReturn(array $managedSamples): ?float
+    {
+        if ($managedSamples === []) {
+            return null;
+        }
+
+        $returns = array_map(
+            static fn (array $sample): float => (float) $sample['managed_return'],
+            $managedSamples
+        );
+
+        return min($returns);
     }
 
     /**

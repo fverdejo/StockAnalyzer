@@ -602,3 +602,51 @@ El usuario pide implementar las ideas adicionales sugeridas que quedaban anotada
 Verificado en ddev: `php -l` sin errores en todos los ficheros tocados; `vendor/bin/phpunit` sigue en 26 tests/80 assertions sin regresiones tras cada cambio; prueba real contra Yahoo confirma sector/industria poblados (`AAPL→Technology`, `GS/JPM→Financial Services`, `XOM→Energy`, `SPY→''` como ETF sin sector).
 
 Detalle tecnico completo en `versions.md` (`v2.46`, `v2.47`).
+
+---
+
+## 2026-08-03 (segunda sesion: rentabilidad en EUR con efecto de cambio de divisa)
+
+El usuario (unico usuario real de la app) compra GOOGL via DCA en su banco y compara el beneficio que le muestra "Mi cartera" contra el que le reporta el banco: no coinciden. Investigado: no es un bug, es una diferencia de definicion — `Holding`/`Portfolio` calculan la rentabilidad integramente en la divisa nativa del ticker (USD para GOOGL) sin tener en cuenta el efecto del cambio EUR/USD desde cada compra, mientras que el banco da la rentabilidad total en euros mezclando ambos efectos.
+
+Se implementa como `v2.48`: nuevas metricas `Holding::getInvestedAmountEur()`/`getMarketValueEur()`/`getUnrealizedProfitEur()`/`getUnrealizedProfitEurPercent()`, adicionales a las ya existentes en divisa nativa (que no se tocan). `PortfolioService` obtiene el tipo de cambio HISTORICO del dia de cada compra (`getHistoricalQuotes('USDEUR=X')`, una peticion por divisa distinta presente en la cartera, no por transaccion) para el coste base en euros, y el tipo de cambio de HOY (`ExchangeRateService`, ya existente desde `v2.25`) para el valor de mercado actual en euros. En "Posiciones abiertas", la celda de "Beneficio" de un ticker que no cotiza en EUR gana una segunda linea con la rentabilidad equivalente en euros.
+
+Verificado en ddev con la cartera real del usuario (fvnavarro@hotmail.com, id 3, unico en BD, sin borrar ni modificar datos): `GOOGL` (0,978785 acciones a 347,750865 USD) da un coste base de 295,21 € (~301,60 €/accion con el cambio historico de esa fecha, coherente con los ~301,50 €/accion que reporta el banco del usuario) y una rentabilidad en EUR de 21,34 € (7,23%), distinta de los 24,57 $ (7,22%) en divisa nativa; `DIS` (compra de hace casi un año) confirma que el efecto de cambio puede mover el porcentaje de forma perceptible; los tickers ya en EUR (`AMS.MC`, `REP.MC`) no muestran la linea adicional (coincidiria con la nativa). `php -l` sin errores; `vendor/bin/phpunit` sigue en 26 tests/80 assertions sin regresiones.
+
+Detalle tecnico completo en `versions.md` (`v2.48`).
+
+---
+
+## 2026-08-03 (metricas de dispersion en el backtesting)
+
+El usuario aprueba, de un lote de tres ideas anotadas por `analista-mercado` el mismo dia en "Ideas adicionales sugeridas" de `versions.md`, la de "metricas de dispersion (win rate, drawdown) en el backtesting, no solo la media" (las otras dos del mismo lote — tamaño de posicion sugerido y crecimiento de ingresos/liquidez en el score — se gestionan por separado). `BacktestingService::backtestTicker()` solo reportaba medias (`avg_buy_forward_return`, `avg_sell_forward_return`, `avg_buy_managed_return`); comprobado en vivo que los `forward_return` individuales de las 9 muestras SELL de AAPL van de -6,56% a +12,10% con una media de +3,69%, ocultando la dispersion real caso a caso en la que se apoyaron conclusiones ya cerradas (`v2.34`, `v2.47`).
+
+Se implementa como `v2.49`: `win_rate_buy`/`win_rate_sell` (porcentaje de muestras BUY/SELL con `forward_return` positivo) y `max_drawdown_managed` (peor `managed_return` individual entre las muestras BUY gestionadas), calculados sobre las mismas listas que `backtestTicker()` ya construia para las medias existentes, sin bucles nuevos ni llamadas nuevas al proveedor de mercado. Cambio de observabilidad puro: no toca ningun umbral de score ni de recomendacion, ni ningun campo ya existente en el resultado. `Web/BacktestPage.php` muestra los tres campos nuevos en la tabla de resultados.
+
+Verificado en ddev: `php -l` sin errores; `vendor/bin/phpunit` sube a 27 tests/86 assertions (caso nuevo sobre el fixture de stop-loss ya existente), sin regresiones. `php bin/backtest.php --universe=largecap60 --horizon=20 --step=20` contra Yahoo real reproduce el caso citado de AAPL (`win_rate_sell=66,67`, 6 de 9 muestras positivas) y confirma valores coherentes en tickers con señales BUY (p.ej. `ADBE`: `avg_buy_managed_return=-6,54`, `max_drawdown_managed=-10,13`); ningun campo ya existente cambio de valor respecto al comportamiento anterior.
+
+Detalle tecnico completo en `versions.md` (`v2.49`).
+
+---
+
+## 2026-08-03 (tamaño de posicion sugerido en "Mi cartera")
+
+El usuario aprueba, del mismo lote de tres ideas de `analista-mercado`, la de "tamaño de posicion sugerido junto al stop-loss/objetivo, no solo niveles de precio" (position sizing). El simulador de cartera permite comprar por importe en dinero (`v2.6`) y la ficha de detalle/watchlist/cartera ya sugieren stop-loss/objetivo con ATR14 (`v2.19`/`v2.29`), pero nada conectaba ambas cosas: no habia ninguna sugerencia de cuanto comprar en funcion del riesgo que el usuario esta dispuesto a asumir por operacion (regla del 1-2% del capital por operacion, habitual en trading cuantitativo).
+
+Se implementa como `v2.50`: `Config/RiskLevelsConfig.php` gana un tercer parametro `positionRiskPercent` (1,5% por defecto, `config/risk_levels.php`), mismo patron de resiliencia que `atrMultiplier`/`rewardRatio`. `DTO/RiskLevels::suggestedQuantity(float $portfolioValue, float $riskPercent, float $price): ?float` es la formula pura (`cantidad = (portfolioValue * riskPercent/100) / (price - stopLoss)`, acotada al maximo comprable), como metodo de instancia que reutiliza el `stopLoss` ya calculado en el propio DTO. `Services/Application.php` (raiz de composicion) calcula la cantidad sugerida por ticker reutilizando `Portfolio::getMarketValue()`/`getCurrentPriceFor()`, ya calculados, sin ninguna llamada nueva a mercado. En "Mi cartera", el badge compacto `RiskLevelsBadge` (mismo componente ya usado en Watchlist y Cartera desde `v2.29`) gana una tercera etiqueta "Sugerido X acc."; `Web/WatchlistPage.php` no cambia (no tiene contexto de una cartera con valor real).
+
+Verificado en ddev: `php -l` sin errores en los 7 ficheros tocados; `vendor/bin/phpunit` sube a 33 tests/92 assertions (6 casos nuevos sobre `suggestedQuantity()`), sin regresiones. Con la cartera real del usuario (fvnavarro@hotmail.com, id 3, unico en BD, sin borrar ni modificar datos) contra Yahoo real: valor de cartera 10.397,71 €, las 10 posiciones abiertas (`DIS`, `PYPL`, `EDU`, `REP.MC`, `TRV`, `AMS.MC`, `VIPS`, `MSA`, `ADBE`, `GOOGL`) tienen ATR14 suficiente y muestran una cantidad sugerida coherente con la formula (p.ej. `ADBE`: 5,152781 acciones); renderizado completo de `PortfolioPage::render()` confirma que el badge nuevo no rompe ninguna columna existente de "Posiciones abiertas".
+
+Detalle tecnico completo en `versions.md` (`v2.50`).
+
+---
+
+## 2026-08-03 (crecimiento de ingresos/liquidez en el score: investigado y descartado)
+
+Tercera y ultima idea del mismo lote: puntuar `Fundamentals::getCurrentRatio()` en `fundamentalHealth()` y `Fundamentals::getRevenueGrowth()` en `quality()`, ambos disponibles pero sin usar en `FundamentalAnalyzer`. Antes de tocar codigo, `analista-mercado` valida con backtesting real (mismo proceso que `v2.18`/`v2.22`, `v2.34`, `v2.47`) sobre 219 tickers unicos de 8 universos.
+
+Resultado: **no se implementa ninguna de las dos piezas**. `CurrentRatio` en `fundamentalHealth()` introduce un sesgo sectorial severo confirmado con datos reales — con umbrales Graham (`>=2` solido) las señales BUY historicas de `financials` caen un 29% (penalizando aseguradoras/exchanges/gestoras de activos, cuyo balance no es comparable al de una manufacturera) y las de `consumer_staples` desaparecen por completo (9→0), penalizando a empresas de grado de inversion (`PG`, `KO`, `PEP`...) que operan con capital circulante negativo por diseño, no por riesgo real; recalibrar a percentiles del universo reduce pero no elimina el problema. `RevenueGrowth` en `quality()` no muestra sesgo pero tampoco evidencia de mejora: `avg_buy_forward_return` empeora o queda plano en 4 de 5 universos probados, a horizonte mensual y trimestral. Documentado con el mismo nivel de detalle que las calibraciones anteriores en `versions.md` (`v2.51`); la idea original se retira de "Ideas adicionales sugeridas" con la razon documentada, para no reabrirla sin una propuesta que trate el sesgo sectorial de `CurrentRatio`.
+
+No se toco ningun fichero de `src/`/`config/`.
+
+Detalle tecnico completo en `versions.md` (`v2.51`).

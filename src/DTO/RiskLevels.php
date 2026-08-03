@@ -45,4 +45,43 @@ class RiskLevels
     {
         return $this->target;
     }
+
+    /**
+     * Cantidad de acciones sugerida para no arriesgar mas de $riskPercent%
+     * del valor de la cartera si el precio cae hasta el stop-loss ya
+     * calculado (position sizing). Formula pura, mismo criterio que
+     * compute(): ninguna comprobacion de "cuando tiene sentido mostrarla"
+     * (eso, igual que con compute(), es responsabilidad de quien la llama,
+     * no de este DTO).
+     *
+     * cantidad = (portfolioValue * riskPercent/100) / (price - stopLoss)
+     *
+     * Acotada por lo maximo que $portfolioValue permite comprar a $price:
+     * esta app es un simulador sin saldo de efectivo real, asi que
+     * "importe disponible" se interpreta como el valor total ya calculado
+     * de la cartera (Portfolio::getMarketValue()), no una caja aparte que
+     * no existe en el modelo de datos.
+     *
+     * Null si cualquier input no tiene sentido (portfolioValue, riskPercent
+     * o price <= 0) o si el stop-loss esta al mismo nivel o por encima del
+     * precio (riesgo por accion <= 0, division por cero o resultado sin
+     * sentido): resiliente, mismo criterio que el resto de la app.
+     */
+    public function suggestedQuantity(float $portfolioValue, float $riskPercent, float $price): ?float
+    {
+        if ($portfolioValue <= 0 || $riskPercent <= 0 || $price <= 0) {
+            return null;
+        }
+
+        $riskPerShare = $price - $this->stopLoss;
+
+        if ($riskPerShare <= 0) {
+            return null;
+        }
+
+        $quantity = ($portfolioValue * ($riskPercent / 100)) / $riskPerShare;
+        $maxAffordableQuantity = $portfolioValue / $price;
+
+        return min($quantity, $maxAffordableQuantity);
+    }
 }

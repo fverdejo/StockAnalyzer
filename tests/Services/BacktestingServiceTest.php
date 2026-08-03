@@ -389,6 +389,44 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
+     * Caso 7: win_rate_buy/win_rate_sell/max_drawdown_managed sobre el mismo
+     * fixture de stop-loss del caso 1 (una unica muestra BUY, sin ninguna
+     * SELL). forward_return de esa muestra es negativo (el precio cae de
+     * 104.0 a 100.2 en el horizonte), asi que win_rate_buy debe ser 0% (no
+     * hay ningun acierto) y win_rate_sell debe ser null (0 muestras SELL:
+     * mismo criterio de resiliencia que avg_sell_forward_return, nunca 0%
+     * por division por cero). max_drawdown_managed debe coincidir con el
+     * managed_return de la unica muestra gestionada.
+     */
+    public function testWinRateYDrawdownGestionadoParaUnaMuestraDeStopLoss(): void
+    {
+        $history = $this->historyWithPostEntryPath([
+            [104.5, 103.5, 104.0], // dia 1: sin disparo
+            [104.5, 103.5, 104.0], // dia 2: sin disparo
+            [104.0, 100.0, 100.5], // dia 3: low=100.0 <= stop=101.5
+            [100.5, 100.0, 100.2], // dias 4-10: relleno, no se llegan a mirar
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+        ]);
+
+        $provider = new FixedHistoryProvider($this->stock(), $history);
+        $result = $this->service($provider)->run(['TST'], self::HORIZON_DAYS);
+        $ticker = $result['results'][0];
+        $riskLevels = $this->expectedRiskLevels();
+        $expectedManagedReturn = round((($riskLevels->getStopLoss() / self::ENTRY_PRICE) - 1) * 100, 2);
+
+        self::assertSame(1, $ticker['buy_signals']);
+        self::assertSame(0, $ticker['sell_signals']);
+        self::assertSame(0.0, $ticker['win_rate_buy'], 'El unico forward_return de la muestra es negativo: 0% de aciertos.');
+        self::assertNull($ticker['win_rate_sell'], 'Sin muestras SELL, win_rate_sell debe ser null, nunca 0 por division por cero.');
+        self::assertSame($expectedManagedReturn, $ticker['max_drawdown_managed']);
+    }
+
+    /**
      * @param list<array<string,mixed>> $samples
      * @return array<string,mixed>
      */

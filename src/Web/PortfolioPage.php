@@ -17,6 +17,7 @@ class PortfolioPage
      * @param array<string,string> $recommendations ticker => recomendacion actual (ver versions.md v2.15)
      * @param list<string> $watchedTickers tickers que el usuario ya sigue (ver versions.md v2.16)
      * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos, si hay datos suficientes
+     * @param array<string,?float> $suggestedQuantities ticker => cantidad de acciones sugerida segun el riesgo por operacion (position sizing, ver versions.md)
      */
     public static function render(
         User $user,
@@ -28,7 +29,8 @@ class PortfolioPage
         array $recommendations = [],
         int $unreadAlerts = 0,
         array $watchedTickers = [],
-        array $riskLevels = []
+        array $riskLevels = [],
+        array $suggestedQuantities = []
     ): string {
         $token = Layout::escape($csrfToken);
         $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
@@ -37,7 +39,7 @@ class PortfolioPage
         $cards = self::renderCards($portfolio);
         $valueChart = self::renderValueHistoryChart($valueHistory);
         $watched = array_fill_keys($watchedTickers, true);
-        $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels);
+        $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels, $suggestedQuantities);
         $transactions = self::renderTransactions($portfolio);
 
         $body = <<<HTML
@@ -106,8 +108,9 @@ HTML;
      * @param array<string,string> $recommendations ticker => recomendacion actual
      * @param array<string,bool> $watched
      * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos
+     * @param array<string,?float> $suggestedQuantities ticker => cantidad de acciones sugerida (position sizing)
      */
-    private static function renderHoldings(Portfolio $portfolio, string $csrfToken, array $recommendations, User $user, array $watched, array $riskLevels): string
+    private static function renderHoldings(Portfolio $portfolio, string $csrfToken, array $recommendations, User $user, array $watched, array $riskLevels, array $suggestedQuantities = []): string
     {
         $holdings = $portfolio->getHoldings();
 
@@ -136,9 +139,10 @@ HTML;
                 $marketNote,
                 Layout::formatMoney($holding->getInvestedAmount(), $currency),
                 self::profitClass($holding->getUnrealizedProfit()),
-                self::nullableProfitMoney($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent(), $currency),
+                self::nullableProfitMoney($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent(), $currency)
+                    . self::eurProfitSuffix($holding, $currency),
                 self::recommendationBadge($recommendation),
-                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency),
+                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency, $suggestedQuantities[$holding->getTicker()] ?? null),
                 self::sellForm($holding, $csrfToken)
             );
         }
@@ -301,6 +305,37 @@ HTML;
         }
 
         return Layout::formatMoney($profit, $currency) . '<span> (' . Layout::formatNumber($percent) . '%)</span>';
+    }
+
+    /**
+     * Rentabilidad latente en euros incluyendo el efecto del cambio de
+     * divisa desde cada compra (ver versions.md), como dato adicional
+     * junto al beneficio en divisa nativa ya existente, no un sustituto.
+     * Omitido para tickers que ya cotizan en EUR (coincidiria con la
+     * metrica nativa, mostrarlo seria redundante) o cuando no se pudo
+     * calcular (tipo de cambio historico no disponible para alguna
+     * compra), siguiendo el mismo criterio de "-" ya usado en el resto de
+     * columnas condicionadas a la divisa.
+     */
+    private static function eurProfitSuffix(Holding $holding, string $currency): string
+    {
+        if ($currency === '' || $currency === 'EUR') {
+            return '';
+        }
+
+        $profitEur = $holding->getUnrealizedProfitEur();
+        $percentEur = $holding->getUnrealizedProfitEurPercent();
+
+        if ($profitEur === null || $percentEur === null) {
+            return '';
+        }
+
+        return sprintf(
+            '<br><span class="muted">en EUR (con cambio): </span><span class="%s">%s<span> (%s%%)</span></span>',
+            self::profitClass($profitEur),
+            Layout::formatMoney($profitEur, 'EUR'),
+            Layout::formatNumber($percentEur)
+        );
     }
 
     private static function nullableMoney(?float $value): string

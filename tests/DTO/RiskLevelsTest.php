@@ -69,4 +69,70 @@ final class RiskLevelsTest extends TestCase
         self::assertEqualsWithDelta(-10.0, $riskLevels->getStopLoss(), 0.0001);
         self::assertEqualsWithDelta(20.0, $riskLevels->getTarget(), 0.0001);
     }
+
+    /**
+     * portfolioValue=10000, riskPercent=1.5%, precio=100, stopLoss=90
+     * (riesgo por accion = 10). riesgo total = 10000 * 1.5% = 150.
+     * cantidad = 150 / 10 = 15 acciones, muy por debajo de lo maximo
+     * comprable (10000 / 100 = 100 acciones), asi que no se acota.
+     */
+    public function testSuggestedQuantityCalculaSegunElRiesgoPorOperacion(): void
+    {
+        $riskLevels = RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
+
+        self::assertEqualsWithDelta(15.0, $riskLevels->suggestedQuantity(10000.0, 1.5, 100.0), 0.0001);
+    }
+
+    /**
+     * Con un stop-loss muy ajustado (poco riesgo por accion), la formula de
+     * riesgo por operacion pediria comprar mas acciones de las que el valor
+     * de la cartera permite pagar a precio de mercado: la cantidad sugerida
+     * se acota al maximo comprable, no a lo que pediria el riesgo.
+     *
+     * portfolioValue=1000, riskPercent=1.5%, precio=100, stopLoss=99
+     * (riesgo por accion=1). riesgo total = 1000*1.5% = 15.
+     * cantidad sin acotar = 15/1 = 15 acciones = 1500, mas que los 1000
+     * disponibles (10 acciones maximo).
+     */
+    public function testSuggestedQuantitySeAcotaALoMaximoComprable(): void
+    {
+        $riskLevels = RiskLevels::compute(100.0, 0.4, 2.5, 2.0);
+
+        self::assertEqualsWithDelta(10.0, $riskLevels->suggestedQuantity(1000.0, 1.5, 100.0), 0.0001);
+    }
+
+    /**
+     * Si el stop-loss sugerido esta al mismo nivel o por encima del precio
+     * actual (riesgo por accion <= 0: puede pasar con ATR14 muy pequeno y
+     * un precio que ya cayo desde que se calcularon los niveles), no hay
+     * ninguna cantidad que tenga sentido: null en vez de una division por
+     * cero o un numero negativo.
+     */
+    public function testSuggestedQuantityConStopLossIgualOMayorQuePrecioDevuelveNull(): void
+    {
+        $riskLevels = RiskLevels::compute(100.0, 0.0, 2.5, 2.0);
+
+        self::assertNull($riskLevels->suggestedQuantity(10000.0, 1.5, 100.0));
+    }
+
+    public function testSuggestedQuantityConPortfolioValueCeroDevuelveNull(): void
+    {
+        $riskLevels = RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
+
+        self::assertNull($riskLevels->suggestedQuantity(0.0, 1.5, 100.0));
+    }
+
+    public function testSuggestedQuantityConRiskPercentCeroDevuelveNull(): void
+    {
+        $riskLevels = RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
+
+        self::assertNull($riskLevels->suggestedQuantity(10000.0, 0.0, 100.0));
+    }
+
+    public function testSuggestedQuantityConPrecioCeroDevuelveNull(): void
+    {
+        $riskLevels = RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
+
+        self::assertNull($riskLevels->suggestedQuantity(10000.0, 1.5, 0.0));
+    }
 }

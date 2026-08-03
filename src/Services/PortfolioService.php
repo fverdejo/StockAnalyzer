@@ -107,6 +107,13 @@ class PortfolioService
             ? $this->exchangeRates->getRateToEur('USD')
             : null;
 
+        $foreignCurrencies = array_values(array_unique(array_filter(
+            $currencies,
+            static fn (string $currency): bool => $currency !== '' && $currency !== 'EUR'
+        )));
+        $todayRates = $this->buildTodayRates($foreignCurrencies);
+        $positionsEur = $this->buildEurPositions($transactions, $currencies, $foreignCurrencies);
+
         $holdings = [];
 
         foreach ($positions as $ticker => $position) {
@@ -120,7 +127,24 @@ class PortfolioService
             $currentPrice = $currentPrices[$ticker] ?? null;
             $marketError = $currentPrice === null ? 'Precio no disponible' : null;
 
-            $holdings[] = new Holding($ticker, $quantity, $averagePrice, $currentPrice, $marketError);
+            $currency = $currencies[$ticker] ?? '';
+            $investedAmountEur = $positionsEur[$ticker]['valid'] ?? false
+                ? (float) $positionsEur[$ticker]['costEur']
+                : null;
+            $todayRate = $todayRates[$currency] ?? null;
+            $marketValueEur = ($currentPrice === null || $todayRate === null)
+                ? null
+                : $quantity * $currentPrice * $todayRate;
+
+            $holdings[] = new Holding(
+                $ticker,
+                $quantity,
+                $averagePrice,
+                $currentPrice,
+                $marketError,
+                $investedAmountEur,
+                $marketValueEur
+            );
         }
 
         usort(
@@ -240,6 +264,147 @@ class PortfolioService
         }
 
         return $quantities;
+    }
+
+    /**
+     * Tipo de cambio de HOY a euros para cada divisa extranjera presente en
+     * la cartera (rentabilidad en EUR con efecto de cambio de divisa,
+     * junto a las metricas ya existentes en divisa nativa que no se
+     * tocan): una unica llamada por divisa, nunca por ticker ni por
+     * transaccion, reutilizando ExchangeRateService (ya cacheado 15 min).
+     *
+     * @param list<string> $currencies
+     * @return array<string,?float>
+     */
+    private function buildTodayRates(array $currencies): array
+    {
+        $rates = [];
+
+        foreach ($currencies as $currency) {
+            $rates[$currency] = $this->exchangeRates->getRateToEur($currency);
+        }
+
+        return $rates;
+    }
+
+    /**
+     * Coste base en euros de cada posicion abierta, usando el tipo de
+     * cambio HISTORICO del dia de cada compra (no el de hoy, a diferencia
+     * de Portfolio::getTransactionPriceEur(), pensado solo para
+     * visualizacion del historico con el cambio de hoy, ver versions.md
+     * v2.25). Mismo criterio de coste medio que el bucle de $positions de
+     * getPortfolio() (las ventas restan coste medio, no el precio de
+     * venta), pero acumulando en euros: si algun tipo de cambio historico
+     * no se pudo obtener, la posicion completa queda marcada invalida en
+     * vez de mostrar un coste base incompleto.
+     *
+     * @param list<Transaction> $transactions
+     * @param array<string,string> $currencies ticker => divisa nativa
+     * @param list<string> $foreignCurrencies divisas distintas de EUR presentes en la cartera
+     * @return array<string,array{quantity: float, costEur: float, valid: bool}>
+     */
+    private function buildEurPositions(array $transactions, array $currencies, array $foreignCurrencies): array
+    {
+        if ($foreignCurrencies === []) {
+            return [];
+        }
+
+        $ratesByDate = $this->buildHistoricalRatesByCurrency($foreignCurrencies);
+        $positionsEur = [];
+
+        foreach ($transactions as $transaction) {
+            $ticker = $transaction->getTicker();
+            $currency = $currencies[$ticker] ?? '';
+
+            if ($currency === '' || $currency === 'EUR') {
+                continue;
+            }
+
+            $positionsEur[$ticker] ??= ['quantity' => 0.0, 'costEur' => 0.0, 'valid' => true];
+
+            if ($transaction->getType() === TransactionType::BUY) {
+                $rate = $this->closestRateOnOrBefore(
+                    $ratesByDate[$currency] ?? [],
+                    $transaction->getExecutedAt()->format('Y-m-d')
+                );
+
+                if ($rate === null) {
+                    $positionsEur[$ticker]['valid'] = false;
+                } else {
+                    $positionsEur[$ticker]['costEur'] += $transaction->getQuantity() * $transaction->getPrice() * $rate;
+                }
+
+                $positionsEur[$ticker]['quantity'] += $transaction->getQuantity();
+
+                continue;
+            }
+
+            $quantity = (float) $positionsEur[$ticker]['quantity'];
+            $averageCostEur = $quantity > 0 ? ((float) $positionsEur[$ticker]['costEur'] / $quantity) : 0.0;
+            $positionsEur[$ticker]['costEur'] -= $transaction->getQuantity() * $averageCostEur;
+            $positionsEur[$ticker]['quantity'] -= $transaction->getQuantity();
+
+            if ($positionsEur[$ticker]['quantity'] <= 0.000001) {
+                $positionsEur[$ticker]['quantity'] = 0.0;
+                $positionsEur[$ticker]['costEur'] = 0.0;
+            }
+        }
+
+        return $positionsEur;
+    }
+
+    /**
+     * Historico diario de tipo de cambio a euros por divisa, una unica
+     * peticion por divisa (mismo espiritu que $closesByDate en
+     * getValueHistory()): Yahoo trata "USDEUR=X" como un ticker mas del
+     * mismo endpoint de velas (ver Services\ExchangeRateService).
+     *
+     * @param list<string> $currencies
+     * @return array<string,array<string,float>> divisa => [fecha Y-m-d => cierre]
+     */
+    private function buildHistoricalRatesByCurrency(array $currencies): array
+    {
+        $ratesByDate = [];
+
+        foreach ($currencies as $currency) {
+            try {
+                $history = $this->marketDataProvider->getHistoricalQuotes($currency . 'EUR=X');
+            } catch (Throwable) {
+                continue;
+            }
+
+            foreach ($history as $quote) {
+                $ratesByDate[$currency][$quote->getDate()->format('Y-m-d')] = $quote->getClose();
+            }
+        }
+
+        return $ratesByDate;
+    }
+
+    /**
+     * Tipo de cambio de la vela cuya fecha coincide o es la mas cercana
+     * ANTERIOR a $date; null si no hay ninguna vela en ese rango (fuera de
+     * los 2 anos de historico que sirve Yahoo, o divisa sin historico).
+     *
+     * @param array<string,float> $ratesByDate fecha Y-m-d => cierre
+     */
+    private function closestRateOnOrBefore(array $ratesByDate, string $date): ?float
+    {
+        $bestDate = null;
+        $bestRate = null;
+
+        foreach ($ratesByDate as $rateDate => $rate) {
+            if ($rateDate > $date) {
+                continue;
+            }
+
+            if ($bestDate === null || $rateDate > $bestDate) {
+                $bestDate = $rateDate;
+                $bestRate = $rate;
+            }
+        }
+
+        return $bestRate;
     }
 
     /**

@@ -23,4 +23,10 @@ return [
     // Relacion riesgo/beneficio objetivo (2:1 = el objetivo esta el doble
     // de lejos del precio actual que el stop-loss).
     'reward_ratio' => 2.0,
+
+    // Porcentaje del valor de la cartera que se esta dispuesto a arriesgar
+    // en una unica operacion (position sizing, regla habitual del 1-2% en
+    // trading cuantitativo), usado por DTO\RiskLevels::suggestedQuantity()
+    // para sugerir cuantas acciones comprar dado el stop-loss calculado.
+    'position_risk_percent' => 1.5,
 ];

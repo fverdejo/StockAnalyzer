@@ -15,11 +15,13 @@ use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
+use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Infrastructure\Mail\LogMailer;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
+use StockAnalyzer\Models\Portfolio;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\CachedMarketMoversProvider;
@@ -694,7 +696,8 @@ class Application
                 $holdingsAnalysis['recommendations'],
                 $this->alertRepository->countUnread($user),
                 $this->watchedTickers($user),
-                $holdingsAnalysis['riskLevels']
+                $holdingsAnalysis['riskLevels'],
+                $this->buildSuggestedQuantities($portfolio, $holdingsAnalysis['riskLevels'])
             );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
@@ -787,6 +790,41 @@ class Application
         }
 
         return ['recommendations' => $recommendations, 'riskLevels' => $riskLevels];
+    }
+
+    /**
+     * Cantidad de acciones sugerida por posicion abierta segun el riesgo
+     * maximo por operacion configurado (position sizing, ver versions.md):
+     * reutiliza el valor de cartera y el precio actual ya calculados en
+     * $portfolio (Portfolio::getMarketValue()/getCurrentPriceFor()), sin
+     * ninguna llamada nueva a mercado, junto al stop-loss ya calculado en
+     * $riskLevels para ese mismo ticker.
+     *
+     * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos
+     * @return array<string,?float> ticker => cantidad de acciones sugerida
+     */
+    private function buildSuggestedQuantities(Portfolio $portfolio, array $riskLevels): array
+    {
+        $portfolioValue = $portfolio->getMarketValue();
+
+        if ($portfolioValue === null) {
+            return [];
+        }
+
+        $riskPercent = (new RiskLevelsConfig())->getPositionRiskPercent();
+        $quantities = [];
+
+        foreach ($portfolio->getHoldings() as $holding) {
+            $ticker = $holding->getTicker();
+            $levels = $riskLevels[$ticker] ?? null;
+            $price = $portfolio->getCurrentPriceFor($ticker);
+
+            $quantities[$ticker] = ($levels === null || $price === null)
+                ? null
+                : $levels->suggestedQuantity($portfolioValue, $riskPercent, $price);
+        }
+
+        return $quantities;
     }
 
     private function renderProviderConfig(?string $message, ?string $error): string

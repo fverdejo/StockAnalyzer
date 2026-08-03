@@ -620,6 +620,11 @@ class Layout
             color: var(--good);
         }
 
+        .risk-badge-quantity {
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+        }
+
         .watch-star {
             background: transparent;
             border: 0;
