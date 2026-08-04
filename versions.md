@@ -2450,11 +2450,116 @@ Desde `?page=provider`, un usuario con API key de Financial Modeling Prep puede 
 
 ---
 
+## v2.53 - Captura de historial de score por ticker/dia (base para re-rating, sin UI todavia)
+
+Estado: implementado (solo captura), verificado en ddev con datos reales. La idea de "Ideas adicionales sugeridas" que motiva este cambio sigue abierta en cuanto a mostrar una tendencia: eso requiere semanas de historial acumulado que hoy no existe.
+
+Objetivo:
+
+La primera entrada de "Ideas adicionales sugeridas" (mas abajo, anotada por `analista-mercado` el 2026-08-03) propone comparar el score de un ticker hoy contra hace N dias para distinguir una accion que mejora progresivamente de otra que se deteriora con el mismo score absoluto. Estaba bloqueada porque `daily_rankings` (`v1.6`) solo tenia una fecha real capturada en este entorno (`2026-07-31`, nada desde entonces) al no correr ningun cron de verdad en ddev/local. Esta version no implementa la señal de tendencia en si (no hay datos suficientes todavia), solo la infraestructura de captura: decidido explicitamente por el usuario registrar un snapshot del score cada vez que alguien visita realmente la ficha de detalle de un ticker, en vez de seguir dependiendo de un cron que hoy no se ejecuta.
+
+Decisiones de arquitectura:
+
+- **Tabla nueva `score_history`, no reutilizar `daily_rankings`.** `daily_rankings` guarda un unico payload JSON por (fecha, nombre de ranking, hash de tickers): un snapshot de un ranking *completo*, no de un ticker individual, y su clave unica no encaja con "una fila por ticker/dia" sin forzar el significado de las columnas existentes. `database/migrations/013_create_score_history.sql` crea una tabla ligera y propia: `ticker`, `snapshot_date`, `total_score`, `max_total`, `percentage` como columnas explicitas (consulta directa de "score de este ticker hace N dias" sin decodificar JSON) mas `category_breakdown` (JSON, `CHECK JSON_VALID` igual que `daily_rankings`/`market_data_cache`) para el desglose por `ScoreCategory` — barato de guardar porque `Score` ya lo calcula, y evita columnas nuevas cada vez que se añada o quite una categoria. Clave unica `(ticker, snapshot_date)`, que es a la vez el indice que hara falta para "score de X hace N dias" y el mecanismo de idempotencia.
+- **`Repository/ScoreHistoryRepository.php`, mismo patron `INSERT ... ON DUPLICATE KEY UPDATE` que `DailyRankingRepository::save()`/`MarketDataCacheRepository`.** Idempotente por diseño gracias a la clave unica `(ticker, snapshot_date)`: visitas repetidas al mismo ticker el mismo dia sobrescriben la fila con el score mas reciente de ese dia en vez de acumular filas, sin ningun `SELECT` previo para comprobar existencia. `recordSnapshot(string $ticker, Score $score, ?DateTimeImmutable $date = null)` guarda `$score->getScores()` (mapa `ScoreCategory->value => valor`) como `category_breakdown`, no `Score::toArray()` completo: mas ligero, y las etiquetas/maximos de cada categoria son derivables de `ScoreCategory` cuando haga falta leerlos, no hace falta duplicarlos.
+- **Enganchado en `Services\Application::renderDetail()`, reutilizando el `Score` ya calculado, sin ninguna llamada nueva a mercado.** Se llama justo despues de `$analysis = $this->analysisService->analyze($ticker)` (mismo `Score` que ya se muestra en la ficha), envuelto en un `try/catch (Throwable)` silencioso — mismo criterio "best effort" ya usado en esta clase para piezas no criticas (`resolveGeneralUniverseTickers()`, `handleResendVerification()`): un fallo de escritura en `score_history` nunca debe tumbar la ficha de detalle, es solo historial acumulandose, no un dato que la pagina necesite mostrar.
+- **Sin UI de tendencia todavia, a proposito.** No se toca `Web/StockDetailPage.php` ni se añade ningun metodo de lectura mas alla de `recordSnapshot()`: no tiene sentido construir una lectura de tendencia (ni el metodo de repositorio para ella) hasta que haya semanas de historial real acumulado organicamente por visitas, momento en el que se decidira el diseño de esa señal con datos reales delante, igual que se hizo con `v2.51` para otra idea de la misma sesion.
+
+Incluye:
+
+- `database/migrations/013_create_score_history.sql` (nueva): tabla `score_history` (`ticker`, `snapshot_date`, `total_score`, `max_total`, `percentage`, `category_breakdown`, `created_at`, clave unica `(ticker, snapshot_date)`).
+- `Repository/ScoreHistoryRepository.php` (nuevo): `recordSnapshot()`.
+- `Services/Application.php`: propiedad y wiring de `ScoreHistoryRepository`; `renderDetail()` llama a `recordSnapshot()` tras calcular `$analysis`, envuelto en `try/catch` silencioso.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 2 ficheros PHP tocados/creados. `vendor/bin/phpunit`: 33 tests, 92 assertions, sin regresiones (mismos numeros que `v2.52`; no aplica ningun test nuevo porque, igual que el resto de repositorios del proyecto, `ScoreHistoryRepository` no tiene cobertura unitaria — depende de PDO real, mismo criterio que `DailyRankingRepository`/`MarketDataCacheRepository`, sin suite de tests todavia segun `roadmap.md`). `bin/migrate.php` aplica `013_create_score_history.sql` limpiamente (`APPLIED 013_create_score_history.sql`) sobre la base ddev real. Visitando `https://stockanalyzer.ddev.site/?ticker=AAPL` con datos de mercado cacheados reales (Yahoo) se inserta una fila real: `AAPL | 2026-08-04 | total_score=66.15 | max_total=115.00 | percentage=57.52 | category_breakdown={"technical":14,"momentum":6.73,"risk":4.92,"fundamental":22,"valuation":5,"quality":10,"dividend":3.5}`; una segunda visita al mismo ticker el mismo dia confirma idempotencia (sigue habiendo una unica fila para `AAPL`/`2026-08-04`, `COUNT(*)=1`); visitando `?ticker=MSFT` se añade una segunda fila independiente (`MSFT | 2026-08-04 | total_score=78.31 | percentage=68.10`) sin afectar a la de `AAPL`.
+
+Resultado esperado:
+
+Cada visita real a la ficha de detalle de un ticker deja (o actualiza) una fila en `score_history` con el score de ese dia, sin coste perceptible (una sola escritura adicional a una tabla nueva, ningun `SELECT`/llamada a mercado extra) y sin romper nada de lo existente. No hay todavia ninguna tendencia visible en la aplicacion: la idea de "re-rating" en "Ideas adicionales sugeridas" queda actualizada para reflejar que el bloqueo de infraestructura esta resuelto, pero la visualizacion sigue pendiente de que se acumulen semanas de historial real.
+
+---
+
+## v2.54 - Crecimiento de dividendo sostenido (estilo Chowder Rule) en la categoria DIVIDEND
+
+Estado: implementado y verificado en ddev con datos reales, incluyendo backtest real antes/despues del cambio.
+
+Objetivo:
+
+Cierra la idea "Crecimiento de dividendo (estilo Chowder Rule)" de "Ideas adicionales sugeridas" (mas abajo), ya calibrada con datos reales por `analista-mercado` el 2026-08-04 con veredicto "implementar con matices". `FundamentalAnalyzer::dividend()` solo puntuaba el yield actual y el payout ratio, ambos una unica foto fija; no habia ninguna señal sobre si el dividendo crece de forma sostenida en el tiempo.
+
+Formula:
+
+CAGR de dividendo anualizado a 5 años, calculado por la clase nueva `Services\DividendGrowthCalculator`:
+
+```
+dividendo_anualizado(fecha) = suma de pagos reales en la ventana movil de 12 meses que termina en fecha
+                               (excluyendo outliers, ver "Limitacion conocida" mas abajo)
+CAGR = (dividendo_anualizado(hoy) / dividendo_anualizado(hoy - 5 años))^(1/5) - 1
+```
+
+"Anualizado" nunca asume una periodicidad fija (4 pagos trimestrales): suma los pagos reales de `events.dividends` (`v8/finance/chart` con `events=div`) en cada ventana de 12 meses, para no infravalorar el dividendo anual real de valores con periodicidad semestral/anual (frecuente en `ibex35`).
+
+Bandas del componente nuevo (sobre los percentiles reales calibrados por `analista-mercado`: CAGR de dividendo anual 2020-2025 con p25=4,0%/p50=6,3%/p75=9,0%/p90=13,0%, 79 pagadores de varios universos):
+
+- CAGR >= 9% (~p75): 1,0 pts (maximo del componente)
+- CAGR 6,3%-9% (~p50-p75): 0,7 pts
+- CAGR 4%-6,3% (~p25-p50): 0,4 pts
+- CAGR < 4% o negativo (recorte real): 0,0 pts
+- Sin dato (empresa sin dividendo desde hace 5 años, ej. `GOOGL` desde 2024, o historial insuficiente): 0,5 pts (mitad del maximo, mismo criterio "sin dato = neutro, no penalizar" que el resto de `FundamentalAnalyzer`)
+
+Decisiones de arquitectura:
+
+- **Financiado reduciendo `yieldPoints` de `FundamentalAnalyzer::dividend()` de un maximo de 3,5 a 2,5 pts** (bandas reescaladas proporcionalmente: `>8% => 1,5`, `>=4% => 2,5`, `>=2% => 2,0`, resto `1,5`), para mantener el techo de la categoria DIVIDEND en 5,0 (`ScoreCategory::DIVIDEND->maxScore()`) sin desequilibrar su peso frente a TECHNICAL/FUNDAMENTAL. El fallback "sin dividendo" (antes 1,5 pts fijos) sube a 2,0 pts (+0,5, mitad del maximo del componente nuevo, tambien sin dato en ese caso).
+- **Historial de dividendos como llamada nueva y separada de `getStock()`, no fusionada dentro.** `MarketDataProviderInterface::getDividendHistory(string $ticker): array` (nuevo metodo, devuelve `list<DTO\DividendPayment>`) es best-effort igual que el resto de campos opcionales: array vacio ante cualquier fallo o ticker sin dividendo, nunca una excepcion. Se mantiene separada de `getStock()`/`Fundamentals` (que si depende de `quoteSummary`) para poder cachearla con un TTL mucho mas largo (los dividendos no cambian intradia) sin acoplar ese TTL al de cotizacion/fundamentales (15 min).
+- **`CachedMarketDataProvider::getDividendHistory()` con TTL de 30 dias por defecto** (`$dividendHistoryTtl`, nuevo 5º parametro con valor por defecto, no rompe ninguna instanciacion existente), reutilizando el mismo patron `find*`/`save*` que ya usan `stock_payload`/`history_payload` en `MarketDataCacheRepository` (columnas nuevas `dividend_history_payload`/`dividend_history_cached_at` en `market_data_cache`, migracion `014_add_dividend_history_cache.sql`).
+- **`YahooFinanceProvider::getDividendHistory()` pide `interval=1mo&range=10y&events=div`** (mismo endpoint `v8/finance/chart` que `getHistoricalQuotes()`): `interval=1mo` para un payload ligero (~8KB, no los ~140KB de `interval=1d`) y `range=10y` para tener margen suficiente para el CAGR a 5 años (necesita datos de hace 5 años Y del año anterior a ese punto). `YahooParser::parseDividendHistory()` lee `events.dividends` (mapa timestamp => `{amount, date}`, usa siempre el campo `date` de cada entrada, no la clave del mapa) — verificado en vivo contra Yahoo real desde ddev (ver "Verificado con..." mas abajo), los importes ya vienen ajustados por splits, igual que el resto del historico de precios de Yahoo.
+- **`FmpProvider::getDividendHistory()` devuelve siempre un array vacio**, mismo criterio que `revenueGrowth` en `v2.52` (`fetchFundamentalsSafely()`): no compensa una llamada adicional dentro del limite de 250 llamadas/dia del plan gratuito sin haber verificado antes el endpoint en vivo. Un ticker vía FMP simplemente no tiene componente de crecimiento de dividendo (neutro, no roto).
+- **`Fundamentals::dividendGrowth5y` se completa DESPUES de `getStock()`, no dentro.** `Fundamentals` gana un campo nuevo (`?float $dividendGrowth5y`, nullable, con wither `withDividendGrowth5y()` porque `Fundamentals` es inmutable) pero `YahooParser::parseFundamentals()` no lo rellena (viene de una llamada distinta a `quoteSummary`). `StockAnalysisService::analyze()` y `BacktestingService::backtestTicker()` (los dos unicos puntos de entrada que construyen un `Score` real) llaman cada uno a un `enrichWithDividendGrowth()` privado que pide `getDividendHistory()` al proveedor, calcula el CAGR con `DividendGrowthCalculator` (inyectado con valor por defecto, no rompe ninguna instanciacion existente en `Application.php`/`bin/backtest.php`/`bin/analyze.php`/tests) y reconstruye el `Stock` con el `Fundamentals` completado. En `BacktestingService`, `dividendGrowth5y` se calcula una unica vez con el historial MAS RECIENTE y se trata como constante durante todo el recorrido historico de `stockAt()`, exactamente la misma simplificacion que ya asume el resto de campos de `Fundamentals` (PER, ROE...) en el backtest.
+- **Limitacion conocida (documentada en el docblock de `DividendGrowthCalculator` y en el codigo): dividendos especiales pueden distorsionar la ventana de 12 meses en la que caen.** Mitigado con una heuristica simple (`excludeOutliers()`): un pago se excluye de la suma de su ventana si supera el doble de la mediana de los demas pagos de esa misma ventana. Verificado en vivo: `COST` (que pago un dividendo especial en dic-2020, el caso real que motivo esta heuristica) da un CAGR de +13,2% con la exclusion activa, no la caida artificial de -16,9% que darina sumando el pago especial sin mas. No es deteccion perfecta (un pago especial que no duplique al resto no se detecta), pero cubre el caso mas comun sin complejidad adicional.
+
+Incluye:
+
+- `src/DTO/DividendPayment.php` (nuevo): DTO inmutable (fecha, importe) de un pago de dividendo.
+- `src/Services/DividendGrowthCalculator.php` (nuevo): `calculate()` (CAGR a 5 años con exclusion de outliers).
+- `src/Interfaces/MarketDataProviderInterface.php`: nuevo metodo `getDividendHistory()`.
+- `src/Providers/YahooFinanceProvider.php`/`YahooParser.php`: implementacion real (`getDividendHistory()`/`parseDividendHistory()`).
+- `src/Providers/FmpProvider.php`: `getDividendHistory()` devuelve `[]`.
+- `src/Providers/CachedMarketDataProvider.php`: `getDividendHistory()` cacheado con TTL de 30 dias.
+- `src/Repository/MarketDataCacheRepository.php`/`src/Services/MarketDataSerializer.php`: `findDividendHistory()`/`saveDividendHistory()`, `dividendHistoryToArray()`/`dividendHistoryFromArray()`.
+- `database/migrations/014_add_dividend_history_cache.sql` (nueva): columnas `dividend_history_payload`/`dividend_history_cached_at` en `market_data_cache`.
+- `src/Models/Fundamentals.php`: campo `dividendGrowth5y` + `getDividendGrowth5y()`/`withDividendGrowth5y()`.
+- `src/Analyzer/FundamentalAnalyzer.php`: `dividend()` reduce `yieldPoints` (3,5 -> 2,5 max) y llama al metodo nuevo `dividendGrowth()`.
+- `src/Services/StockAnalysisService.php`/`src/Services/BacktestingService.php`: `enrichWithDividendGrowth()` en ambos, unico punto donde se completa `Fundamentals::dividendGrowth5y` antes de calcular el `Score`.
+- `tests/Services/FixedHistoryProvider.php`: implementa `getDividendHistory()` (devuelve `[]`, ningun test la ejerce todavia).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 14 ficheros PHP tocados/creados. `vendor/bin/phpunit`: 33 tests, 92 assertions, sin regresiones. `bin/migrate.php` aplica `014_add_dividend_history_cache.sql` limpiamente sobre la base ddev real (`APPLIED`). Contra Yahoo real desde ddev (`ddev exec`, confirmado acceso de red saliente real desde los contenedores aunque no desde este sandbox): `AAPL` 40 pagos/CAGR=4,69%, `COST` 44 pagos/CAGR=13,2% (outlier de dic-2020 excluido correctamente, ver limitacion conocida arriba), `KO` 40 pagos/CAGR=4,61%, `GOOGL` 9 pagos/CAGR=null (historial insuficiente, tratado como neutro), `JPM` 40 pagos/CAGR=10,76%.
+
+**Backtest real antes/despues** (`bin/backtest.php --horizon=20 --step=20`, mismo horizonte/paso independiente que usa el resto de investigaciones de este fichero) sobre `largecap60`, `financials`, `consumer_staples` e `ibex35`, aislando el cambio con `git stash push` solo de los ficheros de esta version (dejando intacto el resto del arbol de trabajo) para poder ejecutar el "antes" con el codigo real de produccion sin commitear nada:
+
+| Universo | avg_buy_forward_return antes -> despues | buy_signals antes -> despues | avg_sell_forward_return antes -> despues |
+|---|---|---|---|
+| largecap60 | -0,42% -> -0,57% | 45 -> 45 | 1,92% -> 1,86% |
+| financials | -0,23% -> -0,21% | 92 -> 95 | 2,17% -> 2,13% |
+| consumer_staples | +0,73% -> -1,05% | 9 -> 6 | 0,04% -> -0,10% |
+| ibex35 | +2,47% -> +2,10% | 64 -> 61 | 2,87% -> 2,70% |
+
+Ningun universo muestra el patron de colapso que descarto `CurrentRatio` en `v2.51` (29%-100% de señales BUY desaparecidas): los recuentos de señales BUY se mantienen practicamente estables (`largecap60` identico, `financials` sube, `ibex35`/`consumer_staples` bajan un 5-33% pero sin desaparecer) y los cambios en retorno futuro son pequeños (<0,4pp) y mixtos en direccion en 3 de los 4 universos. `consumer_staples` es el unico caso con una variacion aparentemente grande (+0,73% -> -1,05%), pero con solo 9 -> 6 señales BUY en todo el universo (`effective_independent_samples` agregado de 346 para el universo completo) no es una muestra fiable: un puñado de fechas cruzando el umbral de recomendacion por el nuevo componente basta para mover ese promedio, mismo tipo de ruido de muestra pequeña que ya se documenta en otras investigaciones de este fichero (`v2.51`). Veredicto: resultado neutro, no una señal limpia de mejora pero tampoco el deterioro claro que exigiria parar (criterio de `v2.34`). Se mantiene activado.
+
+Resultado esperado:
+
+`FundamentalAnalyzer::dividend()` ahora recompensa a las empresas que aumentan su dividendo de forma sostenida (compounders como `V`/`MA` en la calibracion de `analista-mercado`) y no premia por igual a las que solo mantienen un yield alto sin crecimiento real (trampa de yield en energia/utilities). El techo de la categoria DIVIDEND sigue en 5,0 puntos, sin alterar el peso relativo del resto de categorias del score.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
 
-- **Tendencia del propio score en el tiempo (re-rating) — bloqueada hoy por falta de historial diario real.** `daily_rankings` (`v1.6`) guarda snapshots de un ranking completo por fecha/universo. Si se acumulase durante semanas, se podria comparar la puntuacion (o una categoria como FUNDAMENTAL/TECHNICAL) de un ticker hoy contra hace N dias, para distinguir una accion cuyo score mejora progresivamente de otra con el mismo score absoluto pero deteriorandose — una señal de trayectoria distinta a cualquier nivel puntual que el motor ya calcula hoy, y una idea genuinamente distinta de las de tendencia tecnica ya descartadas (contexto de tendencia en RSI, sobreextension): esta es sobre la trayectoria del score compuesto, no de un indicador tecnico aislado. Bloqueo confirmado en ddev el 2026-08-03 (`SELECT ranking_date, name, COUNT(*) FROM daily_rankings GROUP BY ranking_date, name`): la tabla solo tiene una fecha real, `2026-07-31`, nada desde entonces. Como `v1.6` deja explicito que no hay ninguna tarea cron instalada automaticamente en el sistema, hoy no existe el historial diario continuo que esta idea necesita para dar una señal fiable. No implementar antes de que exista ese historial real (semanas de datos como minimo); coordinar primero que `bin/analyze.php` corra a diario de verdad (Raspberry Pi/cron) o, si se sigue sin cron, valorar registrar el snapshot en cada visita real a la ficha de detalle en vez de depender de un cron que hoy no se ejecuta.
+- **Tendencia del propio score en el tiempo (re-rating) — captura ya implementada (`v2.53`), visualizacion pendiente de que se acumule historial real.** Se podria comparar la puntuacion (o una categoria como FUNDAMENTAL/TECHNICAL) de un ticker hoy contra hace N dias, para distinguir una accion cuyo score mejora progresivamente de otra con el mismo score absoluto pero deteriorandose — una señal de trayectoria distinta a cualquier nivel puntual que el motor ya calcula hoy, y una idea genuinamente distinta de las de tendencia tecnica ya descartadas (contexto de tendencia en RSI, sobreextension): esta es sobre la trayectoria del score compuesto, no de un indicador tecnico aislado. El bloqueo original (`daily_rankings`, `v1.6`, solo tenia una fecha real capturada, `2026-07-31`, por no correr ningun cron de verdad en ddev/local) ya no aplica: `v2.53` añade `score_history` (una fila por ticker/dia) y la rellena de forma organica en cada visita real a la ficha de detalle, sin depender de un cron. Sigue sin implementarse ninguna lectura de tendencia ni UI: no hay todavia semanas de historial real acumulado para que la señal sea fiable. Retomar cuando `score_history` tenga suficiente profundidad temporal (semanas, no dias) y diseñar entonces la lectura/visualizacion con datos reales delante.
 
-- **Crecimiento de dividendo (estilo Chowder Rule) en la categoria DIVIDEND — bloqueada por el dato que expone Yahoo hoy.** `FundamentalAnalyzer::dividend()` puntua solo el nivel de yield actual y el payout ratio, ambos un unico punto en el tiempo; no hay ninguna señal sobre si el dividendo crece de forma sostenida, que es el criterio central de estrategias de ingresos consolidadas (Dividend Aristocrats, Chowder Rule: yield + tasa de crecimiento del dividendo a 5 años >= 8% para yields bajos, >=12% para yields altos). Seria complementaria a lo que ya existe, no un reemplazo: seguiria penalizando payout excesivo igual que hoy. Bloqueo de datos: `YahooFundamentalsFetcher`/`YahooParser` piden `summaryDetail.dividendYield` (un valor puntual) pero no ninguna serie historica de dividendos por accion; no esta confirmado si `quoteSummary` expone una tasa de crecimiento a 5 años fiable en algun modulo no solicitado hoy (p.ej. `fundamentalsTimeSeries` o el historial de `actions`/dividendos del endpoint de velas). Antes de implementar esto, `fiabilidad-datos-mercado` deberia confirmar si ese dato existe de forma fiable en Yahoo sin API key nueva y, si no, si merece la pena derivarlo acumulando el propio historial de `dividendYield` capturado dia a dia (mismo problema de "necesita meses de historial" que la idea anterior).
+- **Crecimiento de dividendo (estilo Chowder Rule) en la categoria DIVIDEND — implementado en `v2.54`.** Añadido un tercer componente a `FundamentalAnalyzer::dividend()` (CAGR de dividendo anualizado a 5 años, `Services\DividendGrowthCalculator`), financiado reduciendo `yieldPoints` de 3,5 a 2,5 pts para mantener el techo de la categoria DIVIDEND en 5,0. Backtest real via `BacktestingService` (pendiente en el analisis original de `analista-mercado`, que solo pudo hacer una prueba proxy inconclusa) ya ejecutado antes/despues sobre `largecap60`/`financials`/`consumer_staples`/`ibex35`: resultado neutro (cambios de avg_buy_forward_return <0,4pp en 3 de 4 universos, ningun colapso de señales BUY como el de `CurrentRatio` en `v2.51`), ver `v2.54` para el detalle completo y la limitacion conocida sobre dividendos especiales.
 

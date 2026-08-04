@@ -34,6 +34,7 @@ use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\MarketMoversCacheRepository;
 use StockAnalyzer\Repository\CorporateProfileCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
+use StockAnalyzer\Repository\ScoreHistoryRepository;
 use StockAnalyzer\Repository\TickerAlertStateRepository;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 use StockAnalyzer\Repository\TickerDividendAlertStateRepository;
@@ -93,6 +94,7 @@ class Application
     private bool $generalUniverseIsLive = false;
     private YahooCorporateProfileProvider $corporateProfileProvider;
     private CorporateProfileCacheRepository $corporateProfileCache;
+    private ScoreHistoryRepository $scoreHistoryRepository;
 
     public function __construct()
     {
@@ -135,6 +137,7 @@ class Application
             new TickerDividendAlertStateRepository($this->connection)
         );
         $this->corporateProfileCache = new CorporateProfileCacheRepository($this->connection);
+        $this->scoreHistoryRepository = new ScoreHistoryRepository($this->connection);
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
             $this->marketDataProvider,
@@ -327,6 +330,21 @@ class Application
         $explanation = $this->explainer->explain($analysis);
         $currentUser = $this->auth->currentUser();
         $isWatched = $currentUser !== null && $this->watchlistRepository->isWatched($currentUser, $ticker);
+
+        // Snapshot diario del score para poder comparar en el futuro la
+        // puntuacion de este ticker hoy contra hace N dias ("re-rating",
+        // ver versions.md v2.53). Reutiliza el Score ya calculado arriba
+        // (sin ninguna llamada nueva a mercado) y es idempotente para
+        // visitas repetidas el mismo dia (ScoreHistoryRepository). Un
+        // fallo aqui nunca debe tumbar la ficha: es solo captura de
+        // historial, no un dato que la pagina necesite mostrar.
+        try {
+            $this->scoreHistoryRepository->recordSnapshot($ticker, $analysis->getScore());
+        } catch (Throwable) {
+            // Silencioso a proposito, mismo criterio que el resto de
+            // captura "best effort" de esta clase (ver
+            // resolveGeneralUniverseTickers()/handleResendVerification()).
+        }
 
         // Descripcion/sector/industria y proximas fechas de resultados y
         // ex-dividendo: siempre via Yahoo, solo para el ticker en detalle. Un

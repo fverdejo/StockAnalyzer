@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StockAnalyzer\Services;
 
 use DateTimeImmutable;
+use StockAnalyzer\DTO\DividendPayment;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\Fundamentals;
 use StockAnalyzer\Models\HistoricalQuote;
@@ -151,6 +152,40 @@ class MarketDataSerializer
         }
 
         return $quotes;
+    }
+
+    /**
+     * @param list<DividendPayment> $payments
+     * @return list<array<string,float|string>>
+     */
+    public static function dividendHistoryToArray(array $payments): array
+    {
+        return array_map(static fn (DividendPayment $payment): array => [
+            'date' => $payment->getDate()->format(DATE_ATOM),
+            'amount' => $payment->getAmount(),
+        ], $payments);
+    }
+
+    /**
+     * @param list<array<string,mixed>> $payload
+     * @return list<DividendPayment>
+     */
+    public static function dividendHistoryFromArray(array $payload): array
+    {
+        $payments = [];
+
+        foreach ($payload as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $payments[] = new DividendPayment(
+                new DateTimeImmutable((string) ($row['date'] ?? 'now')),
+                (float) ($row['amount'] ?? 0)
+            );
+        }
+
+        return $payments;
     }
 
     private static function nullableFloat(mixed $value): ?float

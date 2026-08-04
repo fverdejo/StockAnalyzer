@@ -81,6 +81,46 @@ class YahooFinanceProvider implements MarketDataProviderInterface
         return $this->parser->parseHistoricalQuotes($payload);
     }
 
+    /**
+     * Historial de dividendos reales (v8/finance/chart con events=div,
+     * mismo endpoint que getHistoricalQuotes() pero con interval=1mo: los
+     * dividendos no cambian intradia y un payload mensual pesa ~8KB frente
+     * a los ~140KB de interval=1d). range=10y para tener margen suficiente
+     * para el CAGR a 5 años que calcula DividendGrowthCalculator (necesita
+     * datos de hace 5 años Y del año anterior a ese punto).
+     *
+     * Best effort: un ticker sin dividendo, o cualquier fallo (red, JSON
+     * invalido, formato inesperado), devuelve un array vacio en vez de
+     * lanzar, igual que el resto de campos opcionales de este proveedor.
+     */
+    public function getDividendHistory(string $ticker): array
+    {
+        $ticker = strtoupper(trim($ticker));
+
+        if ($ticker === '') {
+            return [];
+        }
+
+        try {
+            $url = sprintf(
+                'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1mo&range=10y&events=div',
+                rawurlencode($ticker)
+            );
+
+            $response = $this->httpClient->get($url);
+            $body = (string) $response->getBody();
+            $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+
+            if (!is_array($payload)) {
+                return [];
+            }
+
+            return $this->parser->parseDividendHistory($payload);
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
     public function getIntradayQuotes(string $ticker, string $interval): array
     {
         $ticker = strtoupper(trim($ticker));

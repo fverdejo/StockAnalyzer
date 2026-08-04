@@ -23,7 +23,8 @@ class BacktestingService
         private readonly MarketDataProviderInterface $marketDataProvider,
         private readonly TechnicalAnalyzer $technicalAnalyzer,
         private readonly ScoreCalculator $scoreCalculator,
-        private readonly RiskLevelsCalculator $riskLevelsCalculator
+        private readonly RiskLevelsCalculator $riskLevelsCalculator,
+        private readonly DividendGrowthCalculator $dividendGrowthCalculator = new DividendGrowthCalculator()
     ) {
     }
 
@@ -188,7 +189,7 @@ class BacktestingService
             throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical'.");
         }
 
-        $stock = $this->marketDataProvider->getStock($ticker);
+        $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
         $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
         $samples = [];
         $minimumLookback = 80;
@@ -315,6 +316,28 @@ class BacktestingService
         }
 
         return ['horizon', $future->getClose(), $horizonDays];
+    }
+
+    /**
+     * Igual que el resto de Fundamentals (PER, ROE...), dividendGrowth5y se
+     * calcula una unica vez con el historial de dividendos MAS RECIENTE
+     * disponible y se trata como constante durante todo el recorrido
+     * historico de backtestTicker()/stockAt(): no hay forma de reconstruir
+     * el historial de dividendos "tal y como se veia" en cada fecha pasada
+     * sin guardar snapshots historicos que hoy no existen. Misma
+     * simplificacion conocida que ya asume el resto del backtest para
+     * cualquier campo fundamental.
+     */
+    private function enrichWithDividendGrowth(Stock $stock, string $ticker): Stock
+    {
+        $dividendHistory = $this->marketDataProvider->getDividendHistory($ticker);
+        $dividendGrowth5y = $this->dividendGrowthCalculator->calculate($dividendHistory);
+
+        return new Stock(
+            $stock->getCompany(),
+            $stock->getQuote(),
+            $stock->getFundamentals()->withDividendGrowth5y($dividendGrowth5y)
+        );
     }
 
     private function stockAt(Stock $stock, HistoricalQuote $historical): Stock

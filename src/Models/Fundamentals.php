@@ -25,6 +25,12 @@ class Fundamentals
      * @param ?float $netMargin Margen neto (porcentaje)
      * @param ?float $revenueGrowth Crecimiento de ingresos interanual (porcentaje)
      * @param ?float $currentRatio Ratio de liquidez corriente (ratio, ej. 1.8)
+     * @param ?float $dividendGrowth5y CAGR de dividendo anualizado a 5 años (porcentaje,
+     *                      ej. 6.3 = 6.3%), calculado por Services\DividendGrowthCalculator
+     *                      a partir del historial real de pagos. Null tanto si la empresa
+     *                      no paga dividendo como si tiene menos de 5 años de historial:
+     *                      ver DividendGrowthCalculator::calculate() para el criterio
+     *                      exacto, tratado como "sin dato" (neutro) en FundamentalAnalyzer.
      */
     public function __construct(
         private readonly ?float $per,
@@ -43,7 +49,8 @@ class Fundamentals
         private readonly ?float $operatingMargin = null,
         private readonly ?float $netMargin = null,
         private readonly ?float $revenueGrowth = null,
-        private readonly ?float $currentRatio = null
+        private readonly ?float $currentRatio = null,
+        private readonly ?float $dividendGrowth5y = null
     ) {
     }
 
@@ -141,6 +148,43 @@ class Fundamentals
     public function getCurrentRatio(): ?float
     {
         return $this->currentRatio;
+    }
+
+    public function getDividendGrowth5y(): ?float
+    {
+        return $this->dividendGrowth5y;
+    }
+
+    /**
+     * Reconstruye este objeto con dividendGrowth5y actualizado, sin tocar
+     * el resto de campos. Fundamentals se construye a partir del payload de
+     * quoteSummary (que no tiene el historial de dividendos), asi que
+     * StockAnalysisService/BacktestingService completan este campo aparte,
+     * a partir de una llamada distinta al proveedor (ver
+     * Services\DividendGrowthCalculator), una vez que ya tienen el Stock.
+     */
+    public function withDividendGrowth5y(?float $dividendGrowth5y): self
+    {
+        return new self(
+            $this->per,
+            $this->peg,
+            $this->roe,
+            $this->roic,
+            $this->eps,
+            $this->marketCap,
+            $this->debtToEquity,
+            $this->freeCashFlow,
+            $this->evToEbitda,
+            $this->priceToBook,
+            $this->dividendYield,
+            $this->payoutRatio,
+            $this->grossMargin,
+            $this->operatingMargin,
+            $this->netMargin,
+            $this->revenueGrowth,
+            $this->currentRatio,
+            $dividendGrowth5y
+        );
     }
 
     /**

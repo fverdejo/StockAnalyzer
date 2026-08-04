@@ -6,6 +6,7 @@ namespace StockAnalyzer\Providers;
 
 use DateTimeImmutable;
 use StockAnalyzer\DTO\CorporateEvents;
+use StockAnalyzer\DTO\DividendPayment;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\Fundamentals;
@@ -132,6 +133,58 @@ class YahooParser
         }
 
         return $quotes;
+    }
+
+    /**
+     * Historial de dividendos reales desde events.dividends de
+     * v8/finance/chart (ver YahooFinanceProvider::getDividendHistory()).
+     * Yahoo indexa events.dividends por timestamp de la barra mensual que
+     * contiene el pago (la clave del mapa), pero cada entrada trae su
+     * propio campo "date" con la fecha real del pago: se usa "date", no la
+     * clave del mapa. Los importes de events.dividends ya vienen ajustados
+     * por splits (mismo criterio que el resto del historico de precios de
+     * Yahoo), asi que no hace falta ningun ajuste adicional aqui.
+     *
+     * @param array<string,mixed> $payload Respuesta de v8/finance/chart con events=div
+     * @return list<DividendPayment>
+     */
+    public function parseDividendHistory(array $payload): array
+    {
+        $result = $payload['chart']['result'][0] ?? null;
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $dividends = $result['events']['dividends'] ?? null;
+
+        if (!is_array($dividends)) {
+            return [];
+        }
+
+        $payments = [];
+
+        foreach ($dividends as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $amount = $this->numeric($entry['amount'] ?? null);
+            $timestamp = $entry['date'] ?? null;
+
+            if ($amount === null || $amount <= 0 || !is_numeric($timestamp)) {
+                continue;
+            }
+
+            $payments[] = new DividendPayment(
+                (new DateTimeImmutable())->setTimestamp((int) $timestamp),
+                $amount
+            );
+        }
+
+        usort($payments, static fn (DividendPayment $a, DividendPayment $b): int => $a->getDate() <=> $b->getDate());
+
+        return $payments;
     }
 
     /**

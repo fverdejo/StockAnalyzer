@@ -8,6 +8,7 @@ use DateInterval;
 use DateTimeImmutable;
 use JsonException;
 use PDO;
+use StockAnalyzer\DTO\DividendPayment;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Models\HistoricalQuote;
 use StockAnalyzer\Models\Stock;
@@ -89,12 +90,54 @@ class MarketDataCacheRepository
     }
 
     /**
+     * @return list<DividendPayment>|null
+     */
+    public function findDividendHistory(string $ticker, DateInterval $ttl): ?array
+    {
+        $row = $this->findRow($ticker);
+
+        if (
+            $row === null
+            || !is_string($row['dividend_history_payload'] ?? null)
+            || !$this->isFresh($row['dividend_history_cached_at'] ?? null, $ttl)
+        ) {
+            return null;
+        }
+
+        try {
+            $payload = json_decode((string) $row['dividend_history_payload'], true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return null;
+        }
+
+        return is_array($payload) ? MarketDataSerializer::dividendHistoryFromArray($payload) : null;
+    }
+
+    /**
+     * @param list<DividendPayment> $payments
+     */
+    public function saveDividendHistory(string $ticker, array $payments): void
+    {
+        $payload = json_encode(MarketDataSerializer::dividendHistoryToArray($payments), JSON_THROW_ON_ERROR);
+        $statement = $this->connection->getPdo()->prepare(
+            'INSERT INTO market_data_cache (ticker, dividend_history_payload, dividend_history_cached_at, updated_at)
+             VALUES (:ticker, :payload, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE dividend_history_payload = VALUES(dividend_history_payload), dividend_history_cached_at = NOW(), updated_at = NOW()'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'payload' => $payload,
+        ]);
+    }
+
+    /**
      * @return array<string,mixed>|null
      */
     private function findRow(string $ticker): ?array
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT ticker, stock_payload, stock_cached_at, history_payload, history_cached_at
+            'SELECT ticker, stock_payload, stock_cached_at, history_payload, history_cached_at,
+                    dividend_history_payload, dividend_history_cached_at
              FROM market_data_cache
              WHERE ticker = :ticker'
         );

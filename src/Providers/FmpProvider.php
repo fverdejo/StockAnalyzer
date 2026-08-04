@@ -106,6 +106,21 @@ class FmpProvider implements MarketDataProviderInterface
     }
 
     /**
+     * Sin implementar todavia: requeriria una llamada adicional (endpoint
+     * `dividends`, no verificado en vivo contra el plan gratuito) que no
+     * compensa el coste dentro del limite de 250 llamadas/dia, mismo
+     * criterio que revenueGrowth en fetchFundamentalsSafely(). Array vacio
+     * en vez de excepcion: FundamentalAnalyzer::dividend() ya trata la
+     * ausencia de historial de dividendos como neutro, no como un fallo.
+     *
+     * @return array{}
+     */
+    public function getDividendHistory(string $ticker): array
+    {
+        return [];
+    }
+
+    /**
      * @return array{name: string, sector: string, industry: string, currency: string}
      */
     private function fetchProfileSafely(string $ticker): array

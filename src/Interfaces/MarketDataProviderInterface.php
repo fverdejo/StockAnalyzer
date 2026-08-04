@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Interfaces;
 
+use StockAnalyzer\DTO\DividendPayment;
 use StockAnalyzer\Models\Stock;
 
 interface MarketDataProviderInterface
@@ -24,4 +25,15 @@ interface MarketDataProviderInterface
      * @return list<\StockAnalyzer\Models\HistoricalQuote>
      */
     public function getIntradayQuotes(string $ticker, string $interval): array;
+
+    /**
+     * Historial de pagos de dividendo reales, para calcular crecimiento de
+     * dividendo (ver Services\DividendGrowthCalculator). Best effort, igual
+     * criterio que el resto de campos opcionales de esta interfaz: si el
+     * ticker no paga dividendo o el proveedor no puede obtener el dato,
+     * debe devolver un array vacio, nunca lanzar una excepcion.
+     *
+     * @return list<DividendPayment>
+     */
+    public function getDividendHistory(string $ticker): array;
 }

@@ -15,7 +15,8 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
         private readonly MarketDataProviderInterface $inner,
         private readonly MarketDataCacheRepository $cache,
         private readonly DateInterval $stockTtl = new DateInterval('PT15M'),
-        private readonly DateInterval $historyTtl = new DateInterval('P1D')
+        private readonly DateInterval $historyTtl = new DateInterval('P1D'),
+        private readonly DateInterval $dividendHistoryTtl = new DateInterval('P30D')
     ) {
     }
 
@@ -78,5 +79,37 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
     public function getIntradayQuotes(string $ticker, string $interval): array
     {
         return $this->inner->getIntradayQuotes(strtoupper(trim($ticker)), $interval);
+    }
+
+    /**
+     * TTL mucho mas largo que stockTtl/historyTtl (30 dias por defecto): el
+     * historial de dividendos reales no cambia intradia ni siquiera de un
+     * dia para otro, a diferencia del resto de datos que cachea esta clase
+     * (ver Services\DividendGrowthCalculator, que es quien consume este
+     * historial).
+     */
+    public function getDividendHistory(string $ticker): array
+    {
+        $ticker = strtoupper(trim($ticker));
+        $cached = null;
+
+        try {
+            $cached = $this->cache->findDividendHistory($ticker, $this->dividendHistoryTtl);
+        } catch (\Throwable) {
+            $cached = null;
+        }
+
+        if (is_array($cached) && $cached !== []) {
+            return $cached;
+        }
+
+        $payments = $this->inner->getDividendHistory($ticker);
+
+        try {
+            $this->cache->saveDividendHistory($ticker, $payments);
+        } catch (\Throwable) {
+        }
+
+        return $payments;
     }
 }

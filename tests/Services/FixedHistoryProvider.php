@@ -44,4 +44,14 @@ final class FixedHistoryProvider implements MarketDataProviderInterface
     {
         throw new RuntimeException('FixedHistoryProvider no soporta velas intradia.');
     }
+
+    /**
+     * Array vacio: ningun test de BacktestingServiceTest ejerce todavia el
+     * componente de crecimiento de dividendo (DividendGrowthCalculator ya
+     * trata un historial vacio como "sin dato", neutro).
+     */
+    public function getDividendHistory(string $ticker): array
+    {
+        return [];
+    }
 }

@@ -328,7 +328,11 @@ class FundamentalAnalyzer
         if ($yield === null || $yield <= 0) {
             return new CategoryResult(
                 ScoreCategory::DIVIDEND,
-                1.5,
+                // 2.0 = 1.5 original (yield/payout, sin datos que valorar)
+                // + 0.5 (mitad del maximo del componente de crecimiento de
+                // dividendo, tambien sin dato: una empresa sin dividendo no
+                // tiene crecimiento de dividendo que evaluar).
+                2.0,
                 [new Signal(
                     'Dividendo',
                     SignalVerdict::NEUTRAL,
@@ -340,11 +344,14 @@ class FundamentalAnalyzer
 
         $signals = [];
 
+        // Maximo reducido de 3.5 a 2.5 (ver versions.md) para financiar el
+        // componente nuevo de crecimiento de dividendo sin subir el techo
+        // de la categoria DIVIDEND por encima de 5.0.
         $yieldPoints = match (true) {
-            $yield > 8 => 2.0,
-            $yield >= 4 => 3.5,
-            $yield >= 2 => 3.0,
-            default => 2.0,
+            $yield > 8 => 1.5,
+            $yield >= 4 => 2.5,
+            $yield >= 2 => 2.0,
+            default => 1.5,
         };
         $signals[] = new Signal(
             'Rentabilidad por dividendo',
@@ -375,7 +382,66 @@ class FundamentalAnalyzer
             );
         }
 
-        return new CategoryResult(ScoreCategory::DIVIDEND, $yieldPoints + $payoutPoints, $signals);
+        [$growthPoints, $growthSignal] = $this->dividendGrowth($fundamentals);
+        $signals[] = $growthSignal;
+
+        return new CategoryResult(ScoreCategory::DIVIDEND, $yieldPoints + $payoutPoints + $growthPoints, $signals);
+    }
+
+    /**
+     * Componente "crecimiento de dividendo sostenido" (estilo Chowder
+     * Rule), calibrado con datos reales por analista-mercado (ver
+     * versions.md): CAGR de dividendo anual 2020-2025 sobre ~79 pagadores
+     * reales con p25=4,0%/p50=6,3%/p75=9,0%/p90=13,0%. Bandas alineadas con
+     * esos percentiles, no con los umbrales de libro de la Chowder Rule
+     * original (8%/12%), que resultan demasiado exigentes para este
+     * universo.
+     *
+     * Fundamentals::getDividendGrowth5y() es null tanto si la empresa no
+     * paga dividendo desde hace 5 años (ej. GOOGL, que empezo a pagar en
+     * 2024) como si DividendGrowthCalculator no pudo calcularlo por
+     * cualquier otro motivo: en ambos casos, "sin dato" (mitad del maximo
+     * del componente), nunca penalizar, mismo criterio que el resto de
+     * FundamentalAnalyzer.
+     *
+     * @return array{0: float, 1: Signal}
+     */
+    private function dividendGrowth(Fundamentals $fundamentals): array
+    {
+        $growth = $fundamentals->getDividendGrowth5y();
+
+        if ($growth === null) {
+            return [0.5, new Signal(
+                'Crecimiento de dividendo',
+                SignalVerdict::NEUTRAL,
+                'No hay suficiente historial de dividendos (menos de 5 años) para valorar su crecimiento.',
+                ScoreCategory::DIVIDEND
+            )];
+        }
+
+        $points = match (true) {
+            $growth >= 9 => 1.0,
+            $growth >= 6.3 => 0.7,
+            $growth >= 4 => 0.4,
+            default => 0.0,
+        };
+
+        return [$points, new Signal(
+            'Crecimiento de dividendo',
+            $growth >= 6.3 ? SignalVerdict::POSITIVE : ($growth >= 4 ? SignalVerdict::NEUTRAL : SignalVerdict::NEGATIVE),
+            sprintf(
+                'El dividendo ha crecido a un ritmo anualizado del %s%% en los ultimos 5 años, %s.',
+                $this->fmt($growth),
+                match (true) {
+                    $growth >= 9 => 'un crecimiento solido que compensa un yield mas modesto',
+                    $growth >= 6.3 => 'un ritmo saludable',
+                    $growth >= 4 => 'un ritmo modesto',
+                    $growth < 0 => 'lo que refleja un recorte real, no solo una desaceleracion',
+                    default => 'un ritmo debil que no acompaña al yield actual',
+                }
+            ),
+            ScoreCategory::DIVIDEND
+        )];
     }
 
     private function fmt(float $value): string
