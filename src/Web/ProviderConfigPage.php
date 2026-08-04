@@ -21,7 +21,7 @@ class ProviderConfigPage
 
         foreach ($config['providers'] as $key => $provider) {
             $checked = $key === $active ? ' checked' : '';
-            $implemented = $key === 'yahoo';
+            $implemented = in_array($key, ['yahoo', 'financial_modeling_prep'], true);
             $disabled = $implemented ? '' : ' disabled';
             $note = match (true) {
                 !$implemented => '<span class="muted">Preparado, sin implementacion activa todavia</span>',

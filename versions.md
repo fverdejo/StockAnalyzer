@@ -2414,6 +2414,42 @@ Resultado esperado:
 
 ---
 
+## v2.52 - Financial Modeling Prep como segundo `MarketDataProviderInterface` real
+
+Estado: implementado.
+
+Objetivo:
+
+La infraestructura de seleccion de proveedor (`v0.7`) ya lista `alpha_vantage`/`twelve_data` como placeholders "preparados, sin implementacion activa todavia" (`config/provider.php`), `Web/ProviderConfigPage.php` ya deshabilita el radio button de cualquier proveedor cuya key no sea `'yahoo'`, y `Services/Application::handleProviderSave()` ya forzaba `$active = 'yahoo'` a la espera de un segundo proveedor real. Este cambio implementa ese segundo proveedor con Financial Modeling Prep (FMP), verificado en vivo con una API key real de plan gratuito (250 llamadas/dia, 512MB/30 dias) antes de escribir codigo, sin tocar Yahoo Finance, que sigue siendo el proveedor activo por defecto.
+
+Decisiones de arquitectura:
+
+- **Mismo patron que `YahooFinanceProvider`/`YahooParser`, no uno nuevo.** `Providers/FmpProvider.php` implementa `MarketDataProviderInterface` con `HttpClient` inyectable con valor por defecto igual que Yahoo, mas un tercer parametro obligatorio (`apiKey`, sin valor por defecto: FMP exige key en cada llamada, a diferencia de Yahoo). `Providers/FmpParser.php` sigue el mismo estilo que `YahooParser` (helper `numeric()`/`toPercentage()`, DTOs de dominio como unico resultado, sin dependencias de HTTP).
+- **`getStock()`: cotizacion obligatoria, perfil y fundamentales en mejor esfuerzo, mismo criterio de resiliencia que `YahooFinanceProvider::fetchFundamentalsAndProfileSafely()`.** `quote` no se captura (si falla, la excepcion se propaga, igual que Yahoo); `profile` (nombre/sector/industria/divisa) y `ratios-ttm`+`key-metrics-ttm` (fundamentales) si se capturan por separado y caen a `''`/`Fundamentals` vacios respectivamente si fallan. El `marketCap` del payload de `quote` viaja como fallback explicito a `Fundamentals::marketCap` para que la capitalizacion sobreviva aunque fallen las dos llamadas de fundamentales — el unico dato de las tres llamadas opcionales que no se pierde nunca. `market` de `Company` sale siempre de `exchange` del `quote`, nunca del `profile`, por la misma razon.
+- **`getHistoricalQuotes()` acota el rango explicitamente (`from`/`to` de los ultimos 2 años) porque FMP, sin esos parametros, devuelve todo el historico desde los años 80** — con el limite de 512MB/mes del plan gratuito, eso agotaria el presupuesto de bandwidth en pocas peticiones. FMP devuelve el historico en orden descendente (mas reciente primero); el resto de la app (`TechnicalAnalyzer`, `BacktestingService`) asume orden ascendente (igual que ya entrega `YahooParser`), asi que `FmpProvider` invierte el array con `array_reverse()` antes de devolverlo, dejando esa decision de orden en el proveedor (no en el parser) con un comentario explicito.
+- **`getIntradayQuotes()` lanza siempre `MarketDataException` sin llamada HTTP.** Confirmado en vivo que los 4 intervalos intradia de FMP (`1min`/`5min`/`15min`/`1hour`) devuelven texto plano "Restricted Endpoint" en el plan gratuito: no tiene sentido gastar una llamada del limite diario intentandolo. Mensaje explicito sugiriendo cambiar a Yahoo Finance para ese grafico.
+- **Deteccion de errores centralizada en `FmpProvider::fetchJson()`, un unico punto para las tres formas de fallo confirmadas en vivo.** Cuerpo no JSON (texto plano `Restricted Endpoint`/`Premium Query Parameter`, tipico de un ticker o endpoint no soportado en el plan gratuito) se relanza como `MarketDataException` con los primeros 200 caracteres del cuerpo crudo para que sea diagnosticable; JSON valido con `Error Message` (API key invalida) se relanza con ese mensaje; array vacio `[]` (ticker no encontrado) se relanza con un mensaje especifico. Los tres casos se comprueban antes de que cualquier metodo de `FmpParser` intente usar el payload.
+- **`Fundamentals::roic` si se rellena con FMP** (`key-metrics-ttm.returnOnInvestedCapitalTTM`), a diferencia de Yahoo que no lo expone de forma fiable (comentario ya existente en `Models/Fundamentals.php`): documentado con un comentario junto al mapeo. `revenueGrowth` queda siempre `null` para FMP (requeriria una tercera llamada a `/stable/financial-growth`, que no compensa el coste en el plan gratuito de 250 llamadas/dia), documentado igual que el comentario ya existente sobre `roic` en Yahoo.
+- **`config/provider.php`/`Web/ProviderConfigPage.php`/`Services/Application.php` cablean el proveedor nuevo sin tocar el patron ya establecido**: entrada `financial_modeling_prep` en el array `providers` (sin tocar `yahoo`/`alpha_vantage`/`twelve_data`), `$implemented` en `ProviderConfigPage` acepta `'yahoo'` o `'financial_modeling_prep'`, y `handleProviderSave()`/`createMarketDataProvider()` en `Application.php` leen `active_provider` del POST (antes forzado siempre a `'yahoo'`) validando contra la lista blanca de proveedores realmente implementados, con `'yahoo'` como fallback ante cualquier otro valor.
+
+Incluye:
+
+- `Providers/FmpProvider.php` (nuevo): implementa `MarketDataProviderInterface` contra `https://financialmodelingprep.com/stable/`.
+- `Providers/FmpParser.php` (nuevo): `parseQuote()`, `parseProfile()`, `parseHistoricalQuotes()`, `parseFundamentals()`.
+- `config/provider.php`: entrada `financial_modeling_prep` (`label`, `api_key` vacia).
+- `Web/ProviderConfigPage.php`: `$implemented` acepta `yahoo` y `financial_modeling_prep`.
+- `Services/Application.php`: import de `FmpProvider`; `handleProviderSave()` lee `active_provider` del POST con lista blanca; `createMarketDataProvider()` añade el caso `financial_modeling_prep` al `match`, pasando la `api_key` ya cargada de configuracion.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 5 ficheros PHP tocados/creados. `vendor/bin/phpunit`: 33 tests, 92 assertions, sin regresiones (mismos numeros que antes del cambio, `v2.51`); `tests/Services/FixedHistoryProvider.php` (stub de `MarketDataProviderInterface` usado por `BacktestingServiceTest`) no se ve afectado porque la interfaz no gana ningun metodo nuevo. No se ha podido probar `FmpProvider` contra la API real de FMP desde este sandbox (sin acceso a red saliente fiable) ni escribir ninguna API key real en el repositorio (gestionada aparte por el usuario en `config/provider.local.php`, no tocado); los nombres de campo, formas de payload y los tres modos de fallo (texto plano no JSON, `Error Message`, array vacio) proceden de pruebas en vivo ya realizadas por el usuario con una key real de plan gratuito, no de documentacion sin verificar.
+
+Resultado esperado:
+
+Desde `?page=provider`, un usuario con API key de Financial Modeling Prep puede activarlo como proveedor de mercado sin tocar codigo; el resto de la aplicacion (analisis, score, backtesting, cartera) sigue funcionando igual porque `FmpProvider` implementa el mismo contrato que `YahooFinanceProvider`. `getIntradayQuotes()` devuelve un mensaje claro en vez de un fallo silencioso mientras el plan sea gratuito. Yahoo Finance sigue siendo el proveedor activo por defecto y no cambia su comportamiento.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

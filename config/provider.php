@@ -17,5 +17,9 @@ return [
             'label' => 'Twelve Data',
             'api_key' => '',
         ],
+        'financial_modeling_prep' => [
+            'label' => 'Financial Modeling Prep',
+            'api_key' => '',
+        ],
     ],
 ];

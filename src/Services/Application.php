@@ -25,6 +25,7 @@ use StockAnalyzer\Models\Portfolio;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\CachedMarketMoversProvider;
+use StockAnalyzer\Providers\FmpProvider;
 use StockAnalyzer\Providers\YahooCorporateProfileProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Providers\YahooMarketMoversProvider;
@@ -653,7 +654,12 @@ class Application
         try {
             $this->assertValidCsrf();
             $user = $this->auth->requireUser();
-            $active = 'yahoo';
+            $active = $this->postString('active_provider');
+
+            if (!in_array($active, ['yahoo', 'financial_modeling_prep'], true)) {
+                $active = 'yahoo';
+            }
+
             $apiKeys = $_POST['api_keys'] ?? [];
             $this->providerConfig->save($active, is_array($apiKeys) ? array_map('strval', $apiKeys) : []);
 
@@ -1063,6 +1069,7 @@ class Application
 
         $provider = match ($active) {
             'yahoo' => new YahooFinanceProvider(),
+            'financial_modeling_prep' => new FmpProvider($loaded['providers']['financial_modeling_prep']['api_key']),
             default => new YahooFinanceProvider(),
         };
 
