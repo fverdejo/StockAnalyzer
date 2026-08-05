@@ -92,6 +92,7 @@ final class TechnicalScoreAnalyzerBollingerTest extends TestCase
             null, // macd, no usado en technical()
             null, // macdSignal, no usado en technical()
             null, // macdHistogram -> getMacdHistogram() null -> rama else, +3.0 fijo
+            null, // macdHistogramPrevious, no usado en technical() con histograma null
             self::BOLLINGER_UPPER,
             null, // bollingerMiddle, no usado en technical()
             self::BOLLINGER_LOWER,

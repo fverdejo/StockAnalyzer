@@ -427,6 +427,111 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
+     * Historico de 91 velas (indices 0..90) pensado para producir
+     * EXACTAMENTE 2 muestras con horizonte=5/step=5 (bucle de
+     * backtestTicker() desde el indice 80: 80 y 85 entran, 90 no porque
+     * 90 < count-horizon = 86 es falso): indices 0-80 son baselineQuotes()
+     * (tendencia alcista suave, BUY conocido al 85,34% en el indice 80, ver
+     * comentario de clase); indices 81-85 son una caida brusca (104 -> 75 en
+     * 5 dias) que, vista desde el indice 85, convierte la recomendacion en
+     * HOLD (64,01%, verificado ejecutando TechnicalAnalyzer::analyze() +
+     * ScoreCalculator::calculate() directamente sobre este fixture antes de
+     * escribir el test); indices 86-90 continuan la caida (75 -> 65) para
+     * fijar el forward_return de la muestra del indice 85.
+     *
+     * Con estos valores exactos: forward_return(80)=(75/104-1)*100=-27,88,
+     * forward_return(85)=(65/75-1)*100=-13,33. Una sola muestra BUY (indice
+     * 80) y una HOLD (indice 85, no cuenta ni como BUY ni como SELL).
+     *
+     * @return list<HistoricalQuote>
+     */
+    private function crashAfterEntryHistory(): array
+    {
+        $quotes = $this->baselineQuotes();
+        $date = $quotes[count($quotes) - 1]->getDate()->modify('+1 day');
+
+        foreach ([95.0, 90.0, 85.0, 80.0, 75.0, 73.0, 71.0, 69.0, 67.0, 65.0] as $close) {
+            $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
+            $date = $date->modify('+1 day');
+        }
+
+        return $quotes;
+    }
+
+    /**
+     * Historico de 91 velas (indices 0..90) con una tendencia bajista suave
+     * y constante (R=1.0, d=-0.05, simetrico al de baselineQuotes() pero en
+     * sentido contrario) durante todo el periodo, sin ningun tramo alcista:
+     * produce recomendacion HOLD en ambas muestras del walk-forward
+     * (horizonte=5/step=5, indices 80 y 85), asi que buy_signals=0 en las
+     * dos, verificado ejecutando BacktestingService::run() directamente
+     * sobre este fixture antes de escribir el test.
+     *
+     * @return list<HistoricalQuote>
+     */
+    private function steadyDeclineHistory(): array
+    {
+        $quotes = [];
+        $close = 200.0;
+        $date = new DateTimeImmutable('2024-01-01');
+
+        for ($i = 0; $i < 91; $i++) {
+            $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
+            $date = $date->modify('+1 day');
+            $close -= 0.05;
+        }
+
+        return $quotes;
+    }
+
+    /**
+     * Caso 8: avg_all_days_forward_return/win_rate_all_days/
+     * buy_alpha_vs_all_days sobre crashAfterEntryHistory() (2 muestras: una
+     * BUY en el indice 80 con forward_return=-27,88, una HOLD en el indice
+     * 85 con forward_return=-13,33 que cuenta en "todos los dias" pero no en
+     * "compras"). avg_all_days_forward_return debe ser la media de AMBAS
+     * muestras (-20,61, no solo la BUY), win_rate_all_days 0% (las dos son
+     * negativas) y buy_alpha_vs_all_days = avg_buy(-27,88) -
+     * avg_all_days(-20,61) = -7,27: la señal BUY se queda por debajo de la
+     * media de "cualquier dia" de este fixture.
+     */
+    public function testAlphaVsMediaDelUniversoConMezclaDeSenalesBuyYNoBuy(): void
+    {
+        $provider = new FixedHistoryProvider($this->stock(), $this->crashAfterEntryHistory());
+        $result = $this->service($provider)->run(['TST'], 5, 5);
+        $ticker = $result['results'][0];
+
+        self::assertSame(2, $ticker['samples']);
+        self::assertSame(1, $ticker['buy_signals']);
+        self::assertSame(-27.88, $ticker['avg_buy_forward_return']);
+        self::assertSame(-20.61, $ticker['avg_all_days_forward_return']);
+        self::assertSame(0.0, $ticker['win_rate_all_days']);
+        self::assertSame(-7.27, $ticker['buy_alpha_vs_all_days']);
+    }
+
+    /**
+     * Caso 9: sin ninguna señal BUY en todo el walk-forward
+     * (steadyDeclineHistory(): buy_signals=0 en las 2 muestras),
+     * avg_all_days_forward_return/win_rate_all_days siguen calculandose con
+     * normalidad (no dependen de que haya compras), pero
+     * buy_alpha_vs_all_days debe ser null, nunca 0 por division por cero ni
+     * por comparar contra un avg_buy_forward_return tambien null.
+     */
+    public function testAlphaVsMediaDelUniversoEsNuloSinNingunaSenalDeCompra(): void
+    {
+        $provider = new FixedHistoryProvider($this->stock(), $this->steadyDeclineHistory());
+        $result = $this->service($provider)->run(['TST'], 5, 5);
+        $ticker = $result['results'][0];
+
+        self::assertSame(2, $ticker['samples']);
+        self::assertSame(0, $ticker['buy_signals']);
+        self::assertNull($ticker['avg_buy_forward_return']);
+        self::assertNotNull($ticker['avg_all_days_forward_return']);
+        self::assertNotNull($ticker['win_rate_all_days']);
+        self::assertNull($ticker['buy_alpha_vs_all_days']);
+    }
+
+    /**
      * @param list<array<string,mixed>> $samples
      * @return array<string,mixed>
      */

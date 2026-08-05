@@ -46,6 +46,7 @@ class TechnicalAnalyzer
             macd: $this->lastDefined($macd['macd']),
             macdSignal: $this->lastDefined($macd['signal']),
             macdHistogram: $this->lastDefined($macd['histogram']),
+            macdHistogramPrevious: $this->valueBeforeLast($macd['histogram'], 1),
             bollingerUpper: $this->lastDefined($bollinger['upper']),
             bollingerMiddle: $this->lastDefined($this->smaSeries($closes, 20)),
             bollingerLower: $this->lastDefined($bollinger['lower']),
@@ -398,6 +399,28 @@ class TechnicalAnalyzer
         for ($index = count($series) - 1; $index >= 0; $index--) {
             if ($series[$index] !== null) {
                 return $series[$index];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Valor de la serie $offset posiciones antes de la ultima definida:
+     * localiza el mismo indice que lastDefined() y retrocede $offset pasos
+     * desde ahi, en vez de devolver ese ultimo valor. Se usa para comparar
+     * el valor actual de un indicador con el que tenia unas sesiones atras
+     * (p.ej. detectar un cruce reciente del histograma MACD).
+     *
+     * @param list<float|null> $series
+     */
+    private function valueBeforeLast(array $series, int $offset): ?float
+    {
+        for ($index = count($series) - 1; $index >= 0; $index--) {
+            if ($series[$index] !== null) {
+                $targetIndex = $index - $offset;
+
+                return $targetIndex >= 0 ? $series[$targetIndex] : null;
             }
         }
 

@@ -32,6 +32,7 @@ final class RiskLevelsCalculatorTest extends TestCase
             null, // macd
             null, // macdSignal
             null, // macdHistogram
+            null, // macdHistogramPrevious
             null, // bollingerUpper
             null, // bollingerMiddle
             null, // bollingerLower

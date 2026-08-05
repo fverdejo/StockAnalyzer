@@ -96,7 +96,7 @@ HTML;
 
             $ticker = (string) ($item['ticker'] ?? '');
             $rows[] = sprintf(
-                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
                 urlencode($ticker),
                 Layout::escape($ticker),
                 (int) ($item['samples'] ?? 0),
@@ -107,7 +107,8 @@ HTML;
                 self::nullablePercent($item['avg_sell_forward_return'] ?? null),
                 self::nullablePercent($item['win_rate_sell'] ?? null),
                 self::nullablePercent($item['benchmark_return'] ?? null),
-                self::nullablePercent($item['max_drawdown_managed'] ?? null)
+                self::nullablePercent($item['max_drawdown_managed'] ?? null),
+                self::nullablePercent($item['buy_alpha_vs_all_days'] ?? null)
             );
         }
 
@@ -115,7 +116,7 @@ HTML;
             return '<section class="panel"><div class="muted">Sin resultados de backtesting.</div></section>';
         }
 
-        return '<section class="panel"><h2>Backtesting basico</h2><div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Muestras</th><th>Compras</th><th>Retorno compras</th><th>Win rate compras</th><th>Ventas</th><th>Retorno ventas</th><th>Win rate ventas</th><th>Benchmark</th><th>Peor gestionado</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div></section>';
+        return '<section class="panel"><h2>Backtesting basico</h2><div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Muestras</th><th>Compras</th><th>Retorno compras</th><th>Win rate compras</th><th>Ventas</th><th>Retorno ventas</th><th>Win rate ventas</th><th>Benchmark</th><th>Peor gestionado</th><th>Alpha vs media del universo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div></section>';
     }
 
     private static function nullablePercent(mixed $value): string

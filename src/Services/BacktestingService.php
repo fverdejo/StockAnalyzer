@@ -256,6 +256,9 @@ class BacktestingService
         $benchmark = $count > $horizonDays
             ? (($history[$count - 1]->getClose() / $history[0]->getClose()) - 1) * 100
             : 0.0;
+        $allReturns = array_column($samples, 'forward_return');
+        $avgAll = $this->average($allReturns);
+        $avgBuy = $this->average($buyReturns);
 
         return [
             'ticker' => strtoupper($ticker),
@@ -269,6 +272,9 @@ class BacktestingService
             'avg_sell_forward_return' => $this->average($sellReturns),
             'win_rate_buy' => $this->winRate($buyReturns),
             'win_rate_sell' => $this->winRate($sellReturns),
+            'avg_all_days_forward_return' => $avgAll,
+            'win_rate_all_days' => $this->winRate($allReturns),
+            'buy_alpha_vs_all_days' => ($avgBuy !== null && $avgAll !== null) ? round($avgBuy - $avgAll, 2) : null,
             'benchmark_return' => round($benchmark, 2),
             'recent_samples' => array_slice($samples, -10),
             'buy_managed_samples' => count($managedSamples),

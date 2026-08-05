@@ -157,37 +157,51 @@ return [
     // Consumo discrecional: retail generalista y de mejora del hogar,
     // restauracion, ocio/viajes y moda, gasto que el consumidor puede
     // aplazar o recortar en un ciclo bajista. ITX.MC (Inditex/Zara) es moda
-    // de consumo discrecional, va aqui. Nota: WMT, COST y DG estan en
+    // de consumo discrecional, va aqui. Nota: WMT, COST, DG y TGT estan en
     // 'consumer_staples' y no aqui, siguiendo la clasificacion GICS vigente
     // desde 2018 que reclasifico a los grandes distribuidores/hipermercados
     // como "Consumer Staples Distribution & Retail" en vez de discrecional.
+    // TGT se movio el 2026-08-05 (v2.54): se quedo aqui por descuido cuando
+    // WMT/COST/DG ya se habian movido, pese a que Yahoo la clasifica igual
+    // que ellas (sector=Consumer Defensive, industry=Discount Stores,
+    // verificado en ddev via YahooFundamentalsFetcher/YahooParser). Ver
+    // versions.md v2.54.
     'consumer_discretionary' => [
         'label' => 'Consumo discrecional',
         'tickers' => [
-            'AMZN', 'HD', 'MCD', 'NKE', 'SBUX', 'TGT', 'LOW', 'TJX', 'BKNG', 'CMG',
+            'AMZN', 'HD', 'MCD', 'NKE', 'SBUX', 'LOW', 'TJX', 'BKNG', 'CMG',
             'MAR', 'YUM', 'ROST', 'ITX.MC',
         ],
     ],
     // Consumo defensivo/staples: alimentacion, higiene/hogar, bebidas y
     // tabaco, gasto recurrente poco sensible al ciclo economico. Incluye WMT,
-    // COST y DG (grandes distribuidores/hipermercados y descuento, ver nota
-    // en 'consumer_discretionary' sobre la reclasificacion GICS 2018) y EL
-    // (Estee Lauder, cosmetica de higiene/cuidado personal clasificada como
-    // staples pese a la percepcion de "lujo/discrecional"). Sin tickers
-    // '.MC' en este grupo.
+    // COST, DG y TGT (grandes distribuidores/hipermercados y descuento, ver
+    // nota en 'consumer_discretionary' sobre la reclasificacion GICS 2018) y
+    // EL (Estee Lauder, cosmetica de higiene/cuidado personal clasificada
+    // como staples pese a la percepcion de "lujo/discrecional"). Sin
+    // tickers '.MC' en este grupo.
     'consumer_staples' => [
         'label' => 'Consumo defensivo',
         'tickers' => [
-            'WMT', 'COST', 'DG', 'KO', 'PEP', 'PG', 'PM', 'MO', 'MDLZ', 'CL',
-            'KMB', 'GIS', 'STZ', 'EL', 'KHC', 'HSY', 'CLX',
+            'WMT', 'COST', 'DG', 'TGT', 'KO', 'PEP', 'PG', 'PM', 'MO', 'MDLZ',
+            'CL', 'KMB', 'GIS', 'STZ', 'EL', 'KHC', 'HSY', 'CLX',
         ],
     ],
+    // ADP (Automatic Data Processing) y PAYX (Paychex) se sacaron de aqui el
+    // 2026-08-05: pese al nombre y la percepcion de "servicios de nomina
+    // industriales", Yahoo las clasifica como sector=Technology,
+    // industry=Software - Application (verificado en ddev via
+    // YahooCorporateProfileProvider/assetProfile), no como Industrials. A
+    // diferencia de otros solapes documentados en este fichero (semiconductores
+    // EEUU tambien en 'tech40', REP.MC/ITX.MC en varios universos geograficos),
+    // este no era un solape deliberado, era una etiqueta incorrecta. Ver
+    // versions.md v2.52.
     'industrials' => [
         'label' => 'Industria',
         'tickers' => [
-            'CAT', 'HON', 'UNP', 'RTX', 'BA', 'GE', 'DE', 'LMT', 'ADP', 'ETN',
+            'CAT', 'HON', 'UNP', 'RTX', 'BA', 'GE', 'DE', 'LMT', 'ETN',
             'UPS', 'NOC', 'GD', 'ITW', 'EMR', 'CSX', 'WM', 'NSC', 'PH', 'TT',
-            'CMI', 'PCAR', 'ROK', 'FDX', 'PAYX', 'CTAS', 'FAST', 'ODFL', 'JCI',
+            'CMI', 'PCAR', 'ROK', 'FDX', 'CTAS', 'FAST', 'ODFL', 'JCI',
         ],
     ],
     // Grupos geograficos fuera de EEUU/Europa, anadidos 2026-07-31. Mismo

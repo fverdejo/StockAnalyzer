@@ -19,6 +19,7 @@ class TechnicalSnapshot
         private readonly ?float $macd,
         private readonly ?float $macdSignal,
         private readonly ?float $macdHistogram,
+        private readonly ?float $macdHistogramPrevious,
         private readonly ?float $bollingerUpper,
         private readonly ?float $bollingerMiddle,
         private readonly ?float $bollingerLower,
@@ -71,6 +72,17 @@ class TechnicalSnapshot
     public function getMacdHistogram(): ?float
     {
         return $this->macdHistogram;
+    }
+
+    /**
+     * Histograma MACD una sesion antes de la ultima definida. Se usa para
+     * distinguir un cruce alcista reciente (sesion anterior <= 0, actual
+     * > 0) de un histograma positivo ya sostenido (ver
+     * TechnicalScoreAnalyzer::technical() y versions.md).
+     */
+    public function getMacdHistogramPrevious(): ?float
+    {
+        return $this->macdHistogramPrevious;
     }
 
     public function getBollingerUpper(): ?float
