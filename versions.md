@@ -2414,11 +2414,779 @@ Resultado esperado:
 
 ---
 
+## v2.52 - Correccion de curacion de datos: ADP y PAYX fuera de 'industrials'
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Objetivo:
+
+`analista-mercado` reviso el motor buscando nuevas mejoras (peticion del usuario, 2026-08-05) y de paso encontro un error de curacion en `config/universes.php`: el grupo `industrials` (linea 185 antes del cambio) incluia `ADP` (Automatic Data Processing) y `PAYX` (Paychex), dos proveedores de software/servicios de nomina y RRHH en la nube. A diferencia de otros solapes ya documentados y deliberados en el fichero (semiconductores EEUU que tambien estan en `tech40`, REP.MC/ITX.MC repetidos en varios universos geograficos/sectoriales), este no estaba anotado como intencional en ningun comentario cercano: era simplemente una etiqueta incorrecta, no una decision de diseño.
+
+Verificado con datos reales (no solo con el criterio del analista) antes de tocar el fichero: via `YahooCorporateProfileProvider::fetch()` (mismo mecanismo que puebla `Company::getSector()`/`getIndustry()` desde `assetProfile` en la app real desde `v2.47`), contra Yahoo real en ddev:
+
+- `ADP` => `sector=Technology`, `industry=Software - Application`.
+- `PAYX` => `sector=Technology`, `industry=Software - Application`.
+
+Ninguno de los dos tiene `sector=Industrials` segun Yahoo, confirmando el hallazgo del analista.
+
+Decisiones:
+
+- **Cambio minimo: sacar ambos tickers de `industrials`, sin crear un grupo nuevo ni añadirlos a `tech40` u otro universo existente.** No fue pedido por el analista ni por el usuario; `tech40` (`Tecnologia ampliada`) tiene hoy 20 tickers y encajarian ahi de forma razonable como candidato natural para una futura ampliacion, pero se deja fuera de este cambio para mantenerlo acotado a la correccion reportada.
+- **No se toco el limite de 50 tickers/grupo ni se introdujeron duplicados**: `industrials` pasa de 29 a 27 tickers, todos unicos (verificado con `array_unique()`).
+- Comentario nuevo anadido justo antes del grupo `industrials` explicando el motivo de la correccion y la fuente de verificacion, siguiendo el mismo estilo que otros comentarios de curacion ya existentes en el fichero (p.ej. la nota sobre WMT/COST/DG en `consumer_discretionary`/`consumer_staples`).
+
+Incluye:
+
+- `config/universes.php`: `ADP` y `PAYX` retirados del array `tickers` del grupo `industrials`; comentario explicativo anadido.
+
+Verificado en ddev con...:
+
+`php -l config/universes.php` sin errores. Comprobacion en PHP puro: `industrials` queda con 27 tickers, `count(array_unique($tickers)) === count($tickers)` (sin duplicados). `ddev exec php bin/analyze.php --universe=industrials` contra Yahoo real: los 27 tickers restantes (`CAT`, `HON`, `UNP`, `RTX`, `BA`, `GE`, `DE`, `LMT`, `ETN`, `UPS`, `NOC`, `GD`, `ITW`, `EMR`, `CSX`, `WM`, `NSC`, `PH`, `TT`, `CMI`, `PCAR`, `ROK`, `FDX`, `CTAS`, `FAST`, `ODFL`, `JCI`) se analizan sin errores (`Saved ranking 'industrials' with 27 results and 0 errors`), confirmando que el grupo sigue operativo tras el cambio.
+
+Resultado esperado:
+
+El universo `industrials` de Stock Analyzer ya no incluye dos empresas de software clasificadas por Yahoo como sector Technology; cualquier ranking, backtest o comparativa sectorial que use este grupo refleja de forma mas fiel el sector real de sus componentes. Sin cambios en ningun otro universo ni en el motor de analisis/score.
+
+---
+
+## v2.53 - Cruce alcista reciente del MACD como bonificacion distinta de un histograma ya extendido
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Parte del mismo lote de revision de `analista-mercado` que `v2.52` (peticion del usuario, 2026-08-05): esta es la mejora de scoring en la categoria TECHNICAL validada con backtesting real.
+
+Objetivo:
+
+`TechnicalScoreAnalyzer::technical()` puntuaba el sub-bloque MACD solo por la magnitud del histograma (`histPercent > 0.5 => 6.0`, `> 0 => 4.5`, etc.), sin distinguir si ese histograma acababa de cruzar a positivo o llevaba dias siendolo. `analista-mercado` comparo con backtesting real (horizonte 20 dias, no solapado, mismo criterio que `BacktestingService`) el retorno futuro segun 3 buckets: cruce alcista fresco (histograma ayer <=0, hoy >0; n=231, retorno medio 20d 2,56%, win rate 61,0%), positivo sostenido >=5 sesiones (n=1.616, 0,64%, 51,1%) y positivo ni fresco ni sostenido (n=678, 1,08%, 51,8%). La formula anterior estaba mal calibrada: el bucket "positivo sostenido" (peor retorno futuro) recibia de media 5,25/6 puntos, mientras que "cruce fresco" (mejor retorno futuro) recibia solo 4,52/6. Robustez confirmada por el analista a horizonte 40 dias (misma direccion), diluida a horizonte 10 dias (coherente con un efecto de medio plazo), no concentrada en un ticker (max 5/231 muestras del mismo ticker, repartido entre 40+ tickers). El lado bajista (cruce fresco a negativo) no mostro patron limpio, asi que los umbrales negativos no se tocaron.
+
+Decisiones de arquitectura:
+
+- **Nuevo campo en el DTO existente, no un DTO nuevo**: `TechnicalSnapshot::$macdHistogramPrevious` (nullable, con su getter) sigue el mismo patron que el resto de campos del snapshot en vez de crear un objeto aparte para "un valor mas del MACD".
+- **Calculo en `TechnicalAnalyzer`, no en el analizador de score**: se añadio `valueBeforeLast(array $series, int $offset)`, un helper analogo a `lastDefined()` ya existente (mismo criterio: localiza el ultimo valor definido de la serie, pero retrocediendo `$offset` posiciones desde ahi en vez de devolverlo), para no duplicar la logica de "encontrar el ultimo dato valido" que ya vive en esa clase.
+- **Redistribucion de puntos dentro del sub-bloque, no cambio de peso**: el maximo del sub-bloque MACD sigue siendo 6,0 (no cambia `config/weights.php`); se anadio `$freshBullishCross` como primera condicion del `match()` (6,0) y se bajo un punto cada tramo positivo existente (`> 0.5 => 5.0` antes 6.0, `> 0 => 4.0` antes 4.5); los tramos negativos (`> -0.5 => 2.0`, `default => 0.5`) quedan exactamente igual, coherente con que el analista no encontro señal limpia en el lado bajista.
+- **Texto de la Signal explicito sobre que respalda el backtest**, mismo tono honesto que ya usa el comentario de Bollinger sobre sobrecompra: cuando `$freshBullishCross` es cierto el mensaje dice "cruce alcista reciente" y menciona que historicamente anticipa mejor retorno que un histograma ya sostenido, en vez de reusar el texto generico de magnitud.
+
+Incluye:
+
+- `src/DTO/TechnicalSnapshot.php`: nuevo campo `?float $macdHistogramPrevious` con `getMacdHistogramPrevious()`.
+- `src/Analyzer/TechnicalAnalyzer.php`: nuevo helper privado `valueBeforeLast()`; `analyze()` pasa `valueBeforeLast($macd['histogram'], 1)` al construir el `TechnicalSnapshot`.
+- `src/Analyzer/TechnicalScoreAnalyzer.php` (`technical()`, bloque MACD): `$freshBullishCross` y `match()` recalibrado segun lo descrito arriba; mensaje de la `Signal` 'MACD' distinto cuando hay cruce fresco.
+- `tests/Analyzer/TechnicalScoreAnalyzerMacdFreshCrossTest.php` (nuevo): cruce fresco => 6,0 puntos y verdict POSITIVE con el texto de cruce; histograma positivo sostenido => 5,0 puntos con el texto de magnitud habitual; histograma ausente => rama de "dato ausente" sin cambios (+3,0 fijo, sin señal MACD en la lista).
+- `tests/Analyzer/TechnicalAnalyzerMacdHistogramPreviousTest.php` (nuevo): confirma sobre una serie sintetica que `macdHistogramPrevious` coincide con el histograma calculado sobre el mismo historico con una sesion menos (MACD/señal son causales, no miran al futuro) y que es `null` cuando solo hay un punto de histograma definido en toda la serie (sin sesion anterior dentro de los datos).
+- `tests/Analyzer/TechnicalScoreAnalyzerBollingerTest.php` y `tests/Services/RiskLevelsCalculatorTest.php`: actualizados para pasar el nuevo argumento posicional del constructor de `TechnicalSnapshot` (valor `null`, no usado en ninguno de los dos).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 7 ficheros tocados. `vendor/bin/phpunit`: 38 tests, 107 assertions, sin regresiones (33 tests/92 assertions antes del cambio, tras `v2.50`). `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20 --step=20` contra Yahoo real: se ejecuta completo sin errores (`"errors": []`). Verificacion dirigida con un script auxiliar (via `TickerBacktestCache`/`CachedMarketDataProvider` reales, borrado tras el uso) sobre el universo `largecap60`: 3 tickers con cruce alcista fresco real ese dia (`JPM` histograma 0,1609 tras -0,1017 el dia anterior, `WFC` 0,0416 tras -0,0921, `CAT` 1,0608 tras -3,6605), los tres con `histPercent` entre 0% y 0,5% (tramo que antes daba 4,5 puntos) y ahora puntuan el maximo del sub-bloque (6,0) con el mensaje de cruce, confirmando que las señales con cruce fresco puntuan mas alto que antes del cambio. Ningun otro campo de `TechnicalSnapshot`/`CategoryResult` ni ninguna otra sub-señal de `technical()`/`momentum()`/`risk()` se toco: los umbrales SMA, cruce de medias, Bollinger y volumen son identicos a `v2.50`.
+
+Resultado esperado:
+
+Un histograma MACD que acaba de cruzar a positivo puntua ahora el maximo del sub-bloque MACD (6,0/6,0), por delante de un histograma ya positivo desde hace varias sesiones (5,0 o 4,0 segun magnitud, un punto menos que antes en ambos tramos); el lado bajista queda exactamente igual. El peso total de la categoria TECHNICAL en el score no cambia.
+
+---
+
+## v2.54 - Correccion de curacion de datos: TGT movido de 'consumer_discretionary' a 'consumer_staples'
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Objetivo:
+
+`analista-mercado` encontro otra inconsistencia de curacion en `config/universes.php`, del mismo tipo que `v2.52` (ADP/PAYX fuera de `industrials`) pero mas notable porque contradecia un criterio que el propio fichero ya documentaba y aplicaba: el comentario de `consumer_discretionary` explica que WMT, COST y DG se sacaron de ese grupo y se movieron a `consumer_staples` "siguiendo la clasificacion GICS vigente desde 2018 que reclasifico a los grandes distribuidores/hipermercados", pero `TGT` (Target) se habia quedado en `consumer_discretionary` sin que nadie lo moviera, pese a ser exactamente el mismo tipo de negocio (gran distribuidor/hipermercado de descuento) que WMT/COST/DG.
+
+Verificado con datos reales (no solo con el criterio del analista) antes de tocar el fichero: via `YahooFundamentalsFetcher::fetchProfile()`/`YahooParser::parseCompanyProfile()` (mismo mecanismo que puebla `Company::getSector()`/`getIndustry()` desde `assetProfile`, usado ya en `v2.52`), contra Yahoo real en ddev:
+
+- `TGT` => `sector=Consumer Defensive`, `industry=Discount Stores` — misma categoria GICS que motivo mover a WMT/COST/DG, confirmando el hallazgo del analista.
+
+De paso se verifico tambien la nota aparte del analista sobre `FIS`/`GPN` (grupo `financials`/`financials_payments_asset_mgmt`), **sin actuar sobre ella**: Yahoo devuelve `FIS` => `sector=Technology, industry=Information Technology Services` y `GPN` => `sector=Industrials, industry=Specialty Business Services`, confirmando que ninguno de los dos aparece como `Financial Services`. A diferencia de TGT, esto no contradice ningun criterio ya documentado en el fichero para ese grupo (el comentario de `financials_payments_asset_mgmt` ya reconoce explicitamente que agrupa "pagos, exchanges/datos financieros y gestion de activos" por similitud de modelo de negocio, no por sector GICS estricto) y parece ambigüedad tipica de GICS con fintechs/procesadores de pago. Se deja anotado aqui como observacion sin accion; no se movio ningun ticker de ese grupo.
+
+Decisiones:
+
+- **Cambio minimo: mover `TGT` del array `tickers` de `consumer_discretionary` al de `consumer_staples`**, aplicando exactamente el mismo criterio GICS 2018 que el comentario existente ya documentaba para WMT/COST/DG. No se creo ningun grupo nuevo ni se toco ningun otro universo.
+- **No se toco el limite de 50 tickers/grupo ni se introdujeron duplicados**: `consumer_discretionary` pasa de 14 a 13 tickers, `consumer_staples` de 17 a 18, ambos con todos sus tickers unicos (verificado con `array_unique()`); el total combinado (31) no cambia.
+- Comentarios de ambos grupos actualizados: la nota de `consumer_discretionary` ahora incluye a TGT junto a WMT/COST/DG en la lista de tickers movidos por GICS 2018, con una frase adicional explicando que TGT se movio en este cambio (v2.54) por descuido en la migracion original; la nota de `consumer_staples` incluye a TGT en la enumeracion de distribuidores/hipermercados. No se modifico `'consumer'` (alias amplio sin subdivision, ya incluye TGT desde siempre y no se ve afectado por esta correccion).
+
+Incluye:
+
+- `config/universes.php`: `TGT` retirado del array `tickers` de `consumer_discretionary` y añadido al de `consumer_staples`; comentarios de ambos grupos actualizados.
+
+Verificado en ddev con...:
+
+`php -l config/universes.php` sin errores. Comprobacion en PHP puro: `consumer_discretionary` queda con 13 tickers, `consumer_staples` con 18, `count(array_unique($tickers)) === count($tickers)` en ambos (sin duplicados). `ddev exec php bin/analyze.php --universe=consumer_discretionary` contra Yahoo real: los 13 tickers restantes se analizan sin errores (`Saved ranking 'consumer_discretionary' with 13 results and 0 errors`). `ddev exec php bin/analyze.php --universe=consumer_staples` contra Yahoo real: los 18 tickers (incluido `TGT`) se analizan sin errores (`Saved ranking 'consumer_staples' with 18 results and 0 errors`).
+
+Resultado esperado:
+
+El universo `consumer_discretionary` de Stock Analyzer ya no incluye a Target, que Yahoo clasifica como `Consumer Defensive`/`Discount Stores` igual que WMT/COST/DG; cualquier ranking, backtest o comparativa sectorial que use estos dos grupos refleja de forma mas consistente el criterio GICS 2018 que el fichero ya aplicaba al resto de grandes distribuidores. Sin cambios en `'consumer'` (alias amplio) ni en ningun otro universo ni en el motor de analisis/score. Observacion sin accion documentada sobre `FIS`/`GPN` para referencia futura, por si se decide en algun momento crear subgrupos mas finos dentro de `financials_payments_asset_mgmt`.
+
+---
+
+## v2.55 - Alpha vs "cualquier dia" del walk-forward en el backtesting
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Objetivo:
+
+Segunda ronda de revision de `analista-mercado` sobre el motor de backtesting en la misma sesion que `v2.52`/`v2.53` (peticion del usuario, 2026-08-05). `avg_buy_forward_return`/`win_rate_buy` (ya existentes) se leen aislados: no hay ninguna comparacion contra "que habria devuelto cualquier dia cualquiera del walk-forward, al mismo horizonte, en el mismo universo" — una linea base contemporanea justa, distinta de `benchmark_return` (un unico numero de comprar-y-mantener todo el periodo, no una media de puntos muestreados). El analista lo probo con backtesting real (walk-forward no solapado, `step=horizon`, sobre 219 tickers de varios universos): en `largecap60`, la señal BUY pierde consistentemente frente a "cualquier dia" en los 3 horizontes probados (alpha -1,13pp a horizonte 20, -0,86pp a horizonte 10, -2,09pp a horizonte 40), mientras que en universos mas pequeños/especializados (`financials`, `healthcare`, `energy`) el alpha es positivo o neutro. Se pide añadir esta observabilidad para que el hallazgo sea visible en cada backtest futuro sin scripts ad-hoc, **sin corregir ninguna calibracion de score** (eso queda fuera de este encargo, como investigacion aparte de mayor alcance).
+
+Decisiones de arquitectura:
+
+- **Cambio de observabilidad puro, mismo patron que `v2.49` (win rate/drawdown)**: `backtestTicker()` ya recorre las muestras una vez y ya construye `$samples` con `forward_return` para TODOS los puntos del walk-forward, no solo BUY. Los campos nuevos se calculan a partir de `array_column($samples, 'forward_return')`, sin ningun bucle adicional sobre el historico ni ninguna llamada nueva al `MarketDataProviderInterface`. No cambia `avg_buy_forward_return`, `avg_sell_forward_return`, `win_rate_buy`, `win_rate_sell`, `max_drawdown_managed`, `benchmark_return` ni ningun otro campo ya existente, ni las recomendaciones que ve el usuario real (`DashboardPage`/`StockDetailPage`/`WatchlistPage`/`PortfolioPage` no se tocan).
+- **Reutiliza `average()`/`winRate()` ya existentes, sin metodos nuevos**: `avg_all_days_forward_return` es `average()` sobre todos los `forward_return`; `win_rate_all_days` es `winRate()` sobre la misma lista. Mismo criterio de resiliencia que el resto del agregado: sin muestras, `null`.
+- **`buy_alpha_vs_all_days` como diferencia simple, no ratio**: `avg_buy_forward_return - avg_all_days_forward_return`, redondeado a 2 decimales. `null` si cualquiera de los dos operandos es `null` (incluye el caso `buy_signals=0`, que ya deja `avg_buy_forward_return` en `null`) — nunca `0` por comparar contra un operando ausente.
+
+Incluye:
+
+- `src/Services/BacktestingService.php` (`backtestTicker()`): tres campos nuevos en el array de retorno (`avg_all_days_forward_return`, `win_rate_all_days`, `buy_alpha_vs_all_days`), calculados justo antes del `return` final a partir de `$samples`/`$buyReturns` ya construidos.
+- `src/Web/BacktestPage.php` (`renderResult()`): columna nueva "Alpha vs media del universo", reutilizando `nullablePercent()` ya existente sobre `buy_alpha_vs_all_days`.
+- `bin/backtest.php`: sin cambios — ya vuelca el array completo de `run()` a JSON, asi que los campos nuevos aparecen automaticamente en su salida.
+- `tests/Services/BacktestingServiceTest.php`: dos casos nuevos con historicos sinteticos donde el promedio de todos los dias y el de los dias BUY se conocen de antemano (`crashAfterEntryHistory()`/`steadyDeclineHistory()`, walk-forward de 2 muestras con horizonte=5/step=5). `testAlphaVsMediaDelUniversoConMezclaDeSenalesBuyYNoBuy`: una muestra BUY (forward_return=-27,88) y una HOLD (forward_return=-13,33) verifican `avg_all_days_forward_return=-20,61`, `win_rate_all_days=0%` y `buy_alpha_vs_all_days=-7,27`. `testAlphaVsMediaDelUniversoEsNuloSinNingunaSenalDeCompra`: sin ninguna señal BUY (`buy_signals=0`), `avg_all_days_forward_return`/`win_rate_all_days` se siguen calculando con normalidad pero `buy_alpha_vs_all_days` es `null`, no `0` por division por cero.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 3 ficheros PHP tocados. `vendor/bin/phpunit`: 40 tests, 119 assertions, sin regresiones (38 tests/107 assertions antes del cambio, tras `v2.53`). `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20 --step=20` contra Yahoo real: los 3 campos nuevos aparecen en todos los tickers; `AAPL` (`buy_signals=0`) muestra `avg_all_days_forward_return=1.48`, `win_rate_all_days=61.9` y `buy_alpha_vs_all_days=null` (sin señales BUY que comparar); tickers con señales BUY confirman la aritmetica exacta, p.ej. `GOOGL` (`avg_buy_forward_return=7.08`, `avg_all_days_forward_return=4.34`, `buy_alpha_vs_all_days=2.74`), `PG` (`avg_buy_forward_return=-8.05`, `avg_all_days_forward_return=-0.83`, `buy_alpha_vs_all_days=-7.22`) y `NFLX` (`5.91 - (-0.47) = 6.38`). Confirmado que `avg_buy_forward_return`, `avg_sell_forward_return`, `win_rate_buy`, `win_rate_sell`, `max_drawdown_managed`, `benchmark_return` y el resto de campos ya existentes no cambian de valor respecto al comportamiento anterior al cambio.
+
+Resultado esperado:
+
+Cualquier investigacion futura con `bin/backtest.php` o `Web/BacktestPage.php` puede comparar de un vistazo la señal BUY de un ticker/universo contra una linea base contemporanea justa ("cualquier dia" del mismo walk-forward), en vez de leer `avg_buy_forward_return` aislado o compararlo contra `benchmark_return` (una metrica de naturaleza distinta: comprar-y-mantener todo el periodo). No se altera ninguna recomendacion ni umbral de score real; el hallazgo de `analista-mercado` sobre `largecap60` (la señal BUY pierde consistentemente frente a "cualquier dia" en los 3 horizontes probados) queda documentado y verificable sin scripts ad-hoc, pendiente de una investigacion de calibracion aparte si el usuario decide abrirla.
+
+---
+
+## v2.56 - Alerta de stop-loss perdido en posiciones abiertas
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+Desde `v2.19`/`v2.29`/`v2.50`, `Services\RiskLevelsCalculator` calcula un stop-loss sugerido por posicion y "Mi cartera" lo muestra, pero nadie avisa cuando el precio realmente lo pierde: hay que abrir la pagina y comparar dos numeros a ojo, posicion por posicion. `Services\AlertService` solo tenia cambio de recomendacion (`v2.15`) y dividendo proximo (`v2.42`/`v2.43`). Idea propuesta y validada por `analista-mercado` en la tercera ronda de mejoras (misma tanda que `v2.57`).
+
+Decisiones de arquitectura:
+
+- **Semantica por transicion, no por estado absoluto**, exactamente igual que `checkRecommendationChange()`: se guarda el ultimo estado visto (`above`/`below`) y solo se genera alerta cuando el previo era `above` y el actual es `below`. La primera observacion solo fija la base de comparacion, sin alertar. Esto evita el unico modo de fallo que haria la alerta inutil (repetirla cada dia mientras la posicion siga por debajo del stop) sin bloquear el caso legitimo de recuperar el nivel y volver a perderlo, que es un evento nuevo.
+- **Precio exactamente en el stop cuenta como perdido** (`$currentPrice > $stopLoss` es lo unico que se considera `above`): el stop-loss es el nivel en el que se sale, no un nivel que haya que perforar.
+- **Tabla de estado propia (`ticker_stop_loss_alert_state`) en vez de reutilizar `ticker_alert_state`**, mismo criterio que ya se siguio en `v2.42` con `ticker_dividend_alert_state`: cada tipo de alerta compara contra una base distinta y mezclarlas en una columna generica obligaria a inventar un formato dentro del valor. Mismo molde de tabla (PK compuesta `user_id`+`ticker`, FK a `users` con `ON DELETE CASCADE`) y mismo `INSERT ... ON DUPLICATE KEY UPDATE` que el repositorio de dividendo.
+- **Cero llamadas nuevas al proveedor**: el enganche esta dentro del bucle que `Application::analyzeHoldingsForAlerts()` ya ejecuta, reutilizando el `RiskLevels` y el `Quote` del mismo `analyze()` que ya se hacia para la recomendacion. No cambia la firma del metodo ni añade una pasada extra por la cartera.
+- **Solo posiciones abiertas, no watchlist**: en la watchlist no hay posicion que cerrar, asi que un aviso de "has perdido el stop" no significaria nada. Es la simetria opuesta de la alerta de dividendo, que empezo siendo solo de watchlist (`v2.42`) porque ahi si tenia sentido.
+- **Simbolo de divisa en el mensaje via `Layout::formatMoney()`** (exigencia de `v2.27` para todo nivel de precio), pasando la divisa del ticker como parametro: `DTO\RiskLevels` es una formula pura y no conoce divisas, y `Services\PortfolioCsvExporter` ya sentaba el precedente de un servicio usando los helpers de formato de `Layout`.
+
+Incluye:
+
+- `src/Services/AlertService.php`: `checkStopLossBreach(User, string $ticker, ?RiskLevels, ?float $currentPrice, string $currency = '')` y las constantes de estado `above`/`below`. Guardas de `null` en niveles y precio (dato no disponible nunca es "stop perdido").
+- `src/Repository/TickerStopLossAlertStateRepository.php`: `getLastState()`/`setLastState()`.
+- `database/migrations/015_create_ticker_stop_loss_alert_state.sql`.
+- `src/Services/Application.php`: nueva dependencia en el constructor de `AlertService` y llamada dentro de `analyzeHoldingsForAlerts()`, justo despues de capturar `$analysis->getRiskLevels()`.
+- `tests/Services/AlertServiceStopLossTest.php` (8 tests) y los dobles en memoria reutilizables `tests/Services/InMemoryAlertRepository.php`, `InMemoryTickerAlertStateRepository.php`, `InMemoryTickerDividendAlertStateRepository.php`, `InMemoryTickerStopLossAlertStateRepository.php`, `InMemoryTickerEarningsAlertStateRepository.php` (extienden el repositorio real sin llamar a su constructor: ni `Connection` ni PDO en los tests, mismo criterio que `FixedHistoryProvider`).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en todos los ficheros tocados. `ddev exec php bin/migrate.php`: `APPLIED 015_create_ticker_stop_loss_alert_state.sql`, tabla confirmada con `DESCRIBE` (PK `user_id`+`ticker`, `last_state VARCHAR(8)`). `vendor/bin/phpunit` sobre el baseline de 40 tests/119 assertions: **56 tests, 146 assertions**, todo en verde (16 tests nuevos entre `v2.56` y `v2.57`, ninguna regresion). Con el usuario real de ddev (id 3, sin tocar sus transacciones) y precios reales de Yahoo: las **13 posiciones abiertas cotizan por encima de su stop-loss** (ADBE 265,21 $ vs 236,65; DIS 104,91 $ vs 98,88; PUIG.MC 16,88 € vs 16,05...), asi que **no se genero ninguna alerta**, que es el resultado correcto: las 13 filas quedaron en `ticker_stop_loss_alert_state` con `last_state='above'` como base de comparacion. La transicion completa se verifico end-to-end contra la BD real con un ticker ficticio (`ZZ-VERIFY`, borrado despues junto a su fila de estado) recorriendo precios 95 → 85 → 84 → 96 → 88 sobre un stop de 90,00: **exactamente 2 alertas** (una por cada caida, ninguna repetida en el tramo que sigue por debajo), con el texto `ZZ-VERIFY ha perdido el stop-loss sugerido (precio 85,00 $, stop 90,00 $). Revisa si cierras la posicion.`. "Mi cartera" y "Mi watchlist" renderizadas como el usuario real (sesion propia, HTTP 200): ninguna alerta duplicada y las alertas ya existentes intactas.
+
+Resultado esperado:
+
+Cuando una posicion abierta pierde el stop-loss sugerido, el usuario recibe una alerta en la campana la primera vez que abre "Mi cartera" tras la caida, con el precio y el nivel exactos y su divisa. Mientras siga por debajo no se repite; si recupera el nivel y vuelve a perderlo, vuelve a avisar. Ninguna llamada nueva a Yahoo y ningun cambio en el calculo de stop-loss, recomendaciones ni rentabilidad.
+
+---
+
+## v2.57 - Alerta de resultados (earnings) proximos, en cartera y watchlist
+
+Estado: implementado y verificado en ddev.
+
+Objetivo:
+
+`DTO\CorporateEvents::getNextEarningsDate()` ya se obtiene (cacheado 24h, `v2.41`) en cada visita a "Mi cartera" y "Mi watchlist", pero **solo se usaba para la alerta de dividendo** (`v2.42`/`v2.43`): la fecha de resultados se mostraba en la ficha de detalle y no avisaba de nada. La publicacion de resultados es riesgo de evento puro — un hueco de precio que el ATR14, que es retrospectivo, no puede anticipar — asi que conviene saberlo antes, no despues. Segunda idea de la misma ronda que `v2.56`.
+
+Decisiones de arquitectura:
+
+- **Calcado de `checkUpcomingDividend()`**, incluida la **guarda estricta de fecha futura**, que aqui no es una precaucion teorica: `analista-mercado` comprobo contra Yahoo real 20 tickers (6 de ellos `.MC`) y, con 20/20 fechas disponibles, **una estaba caducada** (`TEF.MC` devolvia 2026-07-29 estando ya a 2026-08-07). Es el mismo patron de fecha rancia que `DTO\CorporateEvents` ya documenta para ex-dividendo. Sin esa guarda, la alerta avisaria de resultados ya publicados.
+- **Dedupe por fecha, no por ventana temporal**: se guarda la ultima fecha de resultados ya alertada (`ticker_earnings_alert_state`, mismo molde que la 012). Una fecha nueva publicada por Yahoo — el siguiente trimestre, o la correccion de una estimacion — vuelve a avisar; la misma fecha, no.
+- **El mensaje distingue explicitamente fecha estimada de confirmada**, usando `isEarningsDateEstimate()` (5 de los 20 tickers de la muestra venian marcados como estimados). Dar por confirmada una estimacion llevaria al usuario a decidir sobre una fecha que puede moverse varios dias, que es justo el error que la alerta pretende evitar.
+- **Ventana por defecto de 7 dias** (frente a los 10 del dividendo): el dividendo avisa con margen porque hay que comprar ANTES de la fecha ex-dividendo para tener derecho; aqui el aviso es para revisar exposicion, y una semana es el horizonte en el que la decision es accionable sin generar ruido durante quince dias.
+- **Cartera y watchlist desde el primer momento** (a diferencia del dividendo, que necesito `v2.43` para llegar a la cartera): el riesgo de evento aplica igual a una posicion abierta que a un candidato que se esta vigilando. En ambos sitios se reutiliza el `$corporateEvents` ya cacheado que se pedia para el dividendo: **cero llamadas nuevas al proveedor**.
+
+Incluye:
+
+- `src/Services/AlertService.php`: `checkUpcomingEarnings(User, string $ticker, ?CorporateEvents, int $leadDays = 7)`.
+- `src/Repository/TickerEarningsAlertStateRepository.php`: `getLastAlertedEarningsDate()`/`setLastAlertedEarningsDate()`.
+- `database/migrations/016_create_ticker_earnings_alert_state.sql` (`last_alerted_earnings_date DATE`).
+- `src/Services/Application.php`: llamada en `analyzeHoldingsForAlerts()` y en `renderWatchlist()`, junto a la de dividendo que ya usaba el mismo `$corporateEvents`.
+- `tests/Services/AlertServiceEarningsTest.php` (8 tests: fecha pasada, fecha de hoy, fuera de ventana, sin datos, dedupe por fecha, fecha distinta, texto de estimada, ventana configurable). Fechas siempre relativas a "hoy" para que los tests no caduquen.
+
+Verificado en ddev con...:
+
+`php -l` sin errores. `ddev exec php bin/migrate.php`: `APPLIED 016_create_ticker_earnings_alert_state.sql`, tabla confirmada con `DESCRIBE`. `vendor/bin/phpunit`: **56 tests, 146 assertions** en verde (baseline previo 40/119). Con el usuario real (id 3, 13 posiciones y 14 tickers en watchlist) y datos reales de Yahoo a fecha 2026-08-08: se genero **una sola alerta**, `VIPS publica resultados el 13/08/2026 (en 5 dias). Los resultados pueden abrir un hueco de precio que el analisis tecnico no anticipa.` — una sola fila pese a que VIPS esta a la vez en cartera y en watchlist (el dedupe por fecha lo cubre en la misma visita). Las fechas caducadas reales de la muestra (`AMS.MC` 2026-07-31, `PUIG.MC` 2026-07-30, `DIS` 2026-08-05) se ignoraron correctamente, confirmando en produccion el motivo de la guarda estricta; el resto (2026-09-10 a 2026-10-29) quedo fuera de ventana. Repitiendo la visita completa no se creo ninguna alerta duplicada (13 alertas antes y despues) y `ticker_earnings_alert_state` quedo con una unica fila (`VIPS`, `2026-08-13`). Las alertas ya existentes siguen funcionando igual: la de dividendo de `MSA` (ex-dividendo 14/08/2026, dentro de ventana) no se duplico porque ya se habia emitido el 2026-08-05, y las de cambio de recomendacion (`BBVA.MC`, `ELE.MC`) siguen en la lista. "Mi cartera" y "Mi watchlist" renderizadas como el usuario real: HTTP 200, contenido correcto.
+
+Resultado esperado:
+
+Al abrir "Mi cartera" o "Mi watchlist", el usuario recibe un aviso por cada ticker que publica resultados en los proximos 7 dias, indicando si la fecha esta confirmada o es una estimacion del proveedor, una sola vez por fecha. Ninguna llamada nueva a Yahoo, ningun cambio en el score ni en la ficha de detalle.
+
+---
+
+## v2.58 - Significancia estadistica de la alpha en el backtesting
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Parte de la tercera ronda de ideas de `analista-mercado` sobre observabilidad del backtesting (misma naturaleza que `v2.49` y `v2.55`: no cambia ninguna recomendacion real ni ningun campo ya existente). Se implementa junto a `v2.59`, que toca los mismos dos ficheros.
+
+Objetivo:
+
+`buy_alpha_vs_all_days` (`v2.55`) dice **cuanta** diferencia hay entre las señales BUY y la linea base de "cualquier dia", pero no si esa diferencia es distinguible del azar — y con 30-90 muestras BUY esa es exactamente la pregunta relevante antes de tomar cualquier decision sobre el motor. Hasta ahora habia que responderla con un script ad-hoc fuera del proyecto. Datos medidos por `analista-mercado` antes de tocar codigo (walk-forward no solapado, `horizon=20`/`step=20`): `largecap60` (n=46, media BUY -2,75%, alpha -3,66pp, error estandar 1,42, **t = -2,59: significativo al 95%**), `financials` (n=93, alpha -1,44pp, se 0,87, t = -1,67: **no distinguible del ruido**), `healthcare` (n=28, alpha +0,43pp, se 1,60, t = +0,27: **no distinguible del ruido**). Sin el t-stat, las tres alphas se leian igual de "reales", cuando solo una lo es.
+
+Decisiones de arquitectura:
+
+- **Observabilidad pura, calculada sobre las listas que `backtestTicker()` ya construye.** `$buyReturns` (via `returnsFor()`) y `$allReturns` (via `array_column($samples, 'forward_return')`) ya existian; los campos nuevos no añaden ningun bucle sobre el historico ni ninguna llamada nueva al `MarketDataProviderInterface`. No cambia `avg_buy_forward_return`, `win_rate_buy`, `max_drawdown_managed`, `buy_alpha_vs_all_days`, `benchmark_return` ni ningun otro campo ya existente, ni las paginas de recomendaciones reales (`DashboardPage`/`StockDetailPage`/`WatchlistPage`/`PortfolioPage` no se tocan).
+- **Desviacion tipica MUESTRAL (denominador n-1), no poblacional.** Las muestras de un backtest son una muestra del comportamiento de la señal, no la poblacion de todos los dias posibles. Nuevo metodo privado `stdDev(array $values): ?float`, mismo patron y firma que `average()`/`winRate()` ya existentes.
+- **`null` cuando no hay dispersion calculable (n < 2), nunca 0 ni una division por cero**, mismo criterio de resiliencia que `average()`/`winRate()`/`worstManagedReturn()` ya aplican con lista vacia. Con un solo ticker y una sola muestra BUY (caso muy comun en universos grandes: 3 de los 12 tickers con compras de `largecap60`), los cinco campos nuevos quedan en `null` y los ya existentes se siguen calculando igual.
+- **Error estandar de la alpha por la formula de Welch (`sqrt(sB²/nB + sA²/nA)`), no varianza combinada.** El grupo BUY es un subconjunto pequeño y mas selectivo que "todos los dias" (47 frente a 1.260 muestras en `largecap60`), asi que asumir la misma varianza en ambos grupos seria una hipotesis que estos datos no respaldan. Nuevo metodo privado `welchStdErr()`.
+- **`buy_alpha_t_stat` es `null` tambien cuando el error estandar es exactamente 0** (posible con historicos sinteticos o muy planos, donde todas las muestras rinden lo mismo): no hay division por cero ni un t infinito.
+- **Los estadisticos intermedios se calculan sin redondear y solo se redondea al publicarlos** (`stdDev()`/`welchStdErr()` devuelven el valor crudo), para que el t-stat no acumule el error de redondeo a dos decimales de sus componentes. El numerador del t-stat es la `buy_alpha_vs_all_days` ya publicada, para que la cifra siga siendo reproducible a mano a partir de la salida.
+- **UI: una columna mas junto a la alpha, con la leyenda del umbral.** `Web/BacktestPage.php` gana "t de la alpha" (sin sufijo `%`: es un numero de desviaciones tipicas, no un porcentaje — de ahi `nullableNumber()` junto al `nullablePercent()` ya existente) y una nota bajo la tabla: `|t| ≥ 1,96 → la diferencia no es atribuible al azar al 95%`.
+
+Incluye:
+
+- `src/Services/BacktestingService.php`: `stdDev()` y `welchStdErr()` nuevos (privados); `backtestTicker()` añade `buy_return_stddev`, `buy_return_stderr`, `buy_return_ci95_low`, `buy_return_ci95_high`, `buy_alpha_stderr` y `buy_alpha_t_stat`.
+- `src/Web/BacktestPage.php`: columna "t de la alpha" + leyenda del umbral 1,96; helper `nullableNumber()`.
+- `bin/backtest.php`: sin cambios — ya vuelca el array completo de `run()` a JSON, asi que los campos nuevos aparecen solos (mismo caso que `v2.48`/`v2.55`).
+- `database/`: sin migracion — `ticker_backtest_cache.result_payload` es un JSON blob y los payloads antiguos (sin los campos nuevos) conviven sin error: los unicos campos que lee `Services/Application.php::renderSignalHistory()` son `buy_managed_samples`/`avg_buy_managed_return`, presentes en ambos formatos.
+- `tests/Services/BacktestingServiceStatisticsTest.php` (nuevo, comparte fichero con `v2.59` porque comparte fixtures: mismo sujeto, la estadistica agregada del backtest): 3 casos de significancia (valores exactos calculados a mano, n<2 → todo `null`, sd = 0 → sin division por cero).
+- `tests/Services/SyntheticStock.php` (nuevo) y `tests/Services/BacktestingServiceTest.php`: el Stock sintetico de fundamentales excelentes que ya usaba `BacktestingServiceTest` se extrae a una clase compartida en vez de duplicarlo en el fichero de tests nuevo.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 5 ficheros PHP tocados. `vendor/bin/phpunit`: los 6 tests nuevos (55 assertions) en verde y suite completa sin regresiones (baseline al empezar: 40 tests/119 assertions; al terminar 62/201, incluyendo los tests que otros agentes añadieron en paralelo para `v2.56`/`v2.57`). `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20 --step=20` contra Yahoo real: los 6 campos aparecen en los 60 tickers y reproducen el hallazgo del analista, p.ej. `ADBE` (4 muestras BUY, media -9,69%, sd 4,14, se 2,07, IC95 [-13,74 ; -5,64], **t = -2,54**: la unica alpha por ticker significativa del universo) frente a `GOOGL` (7 muestras, sd 13,25, IC95 [-6,46 ; +13,18], t = -0,10: ruido puro) y `JPM`/`GS`/`SPGI` (1 muestra BUY, los seis campos en `null`). Diff completo campo a campo contra la version anterior de la clase ejecutada sobre los mismos datos cacheados: **1.200 valores de campos ya existentes comparados en los 60 tickers, 0 diferencias**; lo unico que cambia en el JSON son las claves nuevas.
+
+Resultado esperado:
+
+Cualquier investigacion futura con `bin/backtest.php` o la pagina de backtesting puede distinguir una alpha real de una casualidad de muestra pequeña sin salir del proyecto, que es lo que hoy obligaba a un script ad-hoc. Ninguna recomendacion, umbral ni cifra ya existente cambia.
+
+---
+
+## v2.59 - Agregado por universo y vista por episodios de mercado en el backtesting
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Segunda mitad de la tercera ronda de observabilidad de `analista-mercado`, implementada junto a `v2.58` (mismos dos ficheros de produccion). Igual que aquella: no cambia ninguna recomendacion real ni ningun campo ya existente, y no necesita migracion.
+
+Objetivo:
+
+`run()` devolvia solo la lista por ticker: no habia ninguna cifra agregada del universo, asi que `buy_alpha_vs_all_days` habia que promediarlo a ojo entre 60 filas. Y, mas importante, faltaba una correccion de interpretacion: **las muestras de tickers distintos en la misma fecha no son independientes entre si**, porque comparten el movimiento del mercado de ese dia. `effective_independent_samples` (`v2.31`) solo corrige el solape temporal *dentro* de un ticker, no este agrupamiento *entre* tickers.
+
+Hallazgo de no-independencia (medido por `analista-mercado` en `largecap60` y reproducido en la verificacion de esta version):
+
+Las 46-47 muestras BUY del universo no son 46 apuestas distintas: salen de **12 tickers y 15 meses**, y las perdidas se concentran en episodios de mercado concretos (`2025-01`: -11,16%, `2026-01`: -10,91%, `2024-12`: -6,99%, `2026-03`: -7,88%) mientras otros meses van al reves (`2025-08`: +6,10%, `2025-11`: +7,56%). Cuando cuatro de esos quince meses mandan sobre el resultado, el t-stat de `v2.58` (que asume muestras independientes) es una **cota superior optimista** de la confianza real: hay que leerlo sabiendo que el n efectivo esta mas cerca del numero de episodios que del numero de muestras.
+
+Decisiones de arquitectura:
+
+- **`avg_of_monthly_avgs` COMPLEMENTA, no sustituye, a `avg_buy_forward_return`.** El retorno medio por muestra (una muestra = un voto) sigue siendo la cifra principal y no se toca; la media de las medias mensuales (un mes = un voto) da la misma señal ponderando episodios de mercado en vez de muestras. La distancia entre ambas es el diagnostico: si se separan mucho, el resultado esta dominado por unos pocos episodios y no por la calidad de la señal (en `largecap60`: -2,85% por muestra frente a -2,37% por mes, ambas negativas y de magnitud parecida — el sesgo existe pero no invierte la conclusion). Por eso se publican las dos, nunca una en lugar de la otra.
+- **`buy_samples` por ticker como unica fuente del agregado, en vez de recalcular nada.** `backtestTicker()` añade la lista de sus muestras BUY (`date` + `forward_return`, via el nuevo `datedReturnsFor()`, version "con fecha" del `returnsFor()` ya existente); `run()` solo las junta. Son decenas por universo (47 en `largecap60`, no miles), asi que no infla la cache de forma significativa; `recent_samples` ya guardaba 10 muestras completas por ticker desde `v1.x`.
+- **La media de todos los dias del universo se pondera por muestras de cada ticker** (`sum(avg_all_days_i * samples_i) / sum(samples_i)`), no como media simple de las medias por ticker: asi la linea base del universo equivale a la media de todas las muestras, coherente con la definicion por ticker de `buy_alpha_vs_all_days`. No se guardan las muestras de "todos los dias" (serian 1.260 solo en `largecap60`, 27 veces mas que las BUY, para una cifra que ya se puede reconstruir exactamente asi).
+- **Agrupacion mensual por `substr($date, 0, 7)`**, sin `DateTimeImmutable`: la fecha ya viene normalizada como `Y-m-d` desde el propio muestreo, y un mes natural es el episodio de mercado mas pequeño que tiene sentido con horizontes de 20 sesiones.
+- **Mismo criterio de resiliencia que el resto del agregado.** Un universo sin ninguna señal BUY devuelve `null` en `avg_buy_forward_return`, `buy_alpha_vs_all_days`, `win_rate_buy`, `avg_of_monthly_avgs` y `worst_month`, nunca 0 ni una division por cero; `samples`/`distinct_buy_tickers`/`distinct_buy_months` son contadores y valen 0. Un `buy_samples` ausente (payload viejo, ticker que fallo) se trata como lista vacia, no como error.
+- **En caso de empate, `worst_month` devuelve el mes mas antiguo** (el array llega ordenado por fecha desde `aggregateUniverse()`): el resultado tiene que ser determinista entre ejecuciones.
+- **UI: cabecera de resumen (`section.cards` con `.metric`, el patron ya usado en "Mi cartera"/dashboard) encima de la tabla existente, no una tabla nueva**, con la nota que explica la no-independencia con las cifras concretas del universo mostrado.
+
+Incluye:
+
+- `src/Services/BacktestingService.php`: `datedReturnsFor()`, `aggregateUniverse()` y `worstMonth()` nuevos (privados); `backtestTicker()` añade `buy_samples`; `run()` añade el bloque `aggregate` (`samples`, `buy_signals`, `avg_buy_forward_return`, `avg_all_days_forward_return`, `buy_alpha_vs_all_days`, `win_rate_buy`, `distinct_buy_tickers`, `distinct_buy_months`, `avg_of_monthly_avgs`, `worst_month`).
+- `src/Web/BacktestPage.php`: `renderUniverseSummary()` nuevo, invocado desde `renderResult()`.
+- `bin/backtest.php`: sin cambios (vuelca `run()` completo). `src/Services/Application.php`: sin cambios — `renderBacktest()` ya pasa el array completo de `run()` a `BacktestPage::render()`.
+- `database/`: sin migracion, misma razon que en `v2.58` (`result_payload` es un JSON blob y `runForTickerCached()`/`runForPeerGroup()` solo leen `buy_managed_samples`/`avg_buy_managed_return`, presentes en payloads viejos y nuevos). La cache **no** necesita invalidarse.
+- `tests/Services/BacktestingServiceStatisticsTest.php`: 3 casos de agregado (dos tickers sinteticos que comparten meses, con todas las cifras calculadas a mano; `buy_samples` contiene exactamente las muestras BUY con su fecha; universo sin ninguna señal BUY → `null` sin division por cero).
+- `tests/Services/PerTickerHistoryProvider.php` (nuevo): doble de `MarketDataProviderInterface` que devuelve un historico distinto por ticker, imprescindible para probar un agregado de varios tickers (`FixedHistoryProvider` devuelve siempre el mismo).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los ficheros tocados. `vendor/bin/phpunit` sin regresiones (ver `v2.58`: 40/119 al empezar, 62/201 al terminar contando los tests de otros agentes en paralelo). `ddev exec php bin/backtest.php --universe=largecap60 --horizon=20 --step=20` contra Yahoo real: `aggregate` = 1.260 muestras, **47 señales BUY procedentes de solo 12 tickers y 15 meses**, `avg_buy_forward_return` -2,85%, `avg_all_days_forward_return` +0,91%, `buy_alpha_vs_all_days` **-3,76pp**, `win_rate_buy` 36,17%, `avg_of_monthly_avgs` -2,37%, `worst_month` `2025-01` (-11,16%) — todo dentro de lo que reporto `analista-mercado` (46 señales, 11 tickers, 15 meses, alpha -3,66pp; las diferencias minimas son de datos mas recientes), y las medias mensuales reproducen sus episodios uno a uno (`2024-12` -6,99, `2025-01` -11,16, `2025-08` +6,10, `2025-11` +7,56, `2026-03` -7,88). El t-stat de universo calculado a mano sobre estos mismos datos (sd de las 47 muestras BUY = 9,37, se = 1,37) da **-2,75**, coherente con el -2,59 del analista. Diff campo a campo contra la version anterior de la clase sobre los mismos datos cacheados: 1.200 valores ya existentes comparados, **0 diferencias**; en la raiz del JSON solo aparece la clave `aggregate` nueva. `BacktestPage::render()` renderizada con ese resultado real: cabecera y tabla correctas, sin mas avisos de parseo HTML que los que ya daba la pagina vacia (etiquetas HTML5 que `DOMDocument` no conoce).
+
+Resultado esperado:
+
+La pagina de backtesting y `bin/backtest.php` responden de un vistazo "que hace la señal en TODO el universo" y, sobre todo, dejan a la vista que esas decenas de muestras son en realidad un puñado de episodios de mercado — el contexto sin el cual el t-stat de `v2.58` se sobreinterpreta. Ninguna recomendacion, umbral ni campo ya existente cambia.
+
+---
+
+## v2.60 - `dow30` cuadrado con el indice real: entran NVDA y GOOGL, sale VZ
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Tercera correccion de curacion de universos detectada por `analista-mercado` (tras `ADP`/`PAYX` en `v2.52` y `TGT` en `v2.54`), mismo patron que aquellas: un grupo de `config/universes.php` cuya composicion real no coincidia con la etiqueta que promete.
+
+Objetivo:
+
+El universo `dow30` se llama "Dow Jones 30" pero solo tenia **29 tickers**. El analista lo detecto comparando contra la composicion real del DJIA: faltaba `NVDA`. Efecto practico: cualquier ranking "las mejores del Dow" omitia en silencio uno de los mayores componentes del indice, sin ningun error visible (el analisis terminaba "correctamente" con 29 resultados).
+
+Hallazgos de la verificacion (2026-08-08, fuentes web + comprobacion ticker a ticker):
+
+- **`NVDA` faltaba, confirmado.** Entro en el DJIA el 2024-11-08 sustituyendo a `INTC`, en el mismo movimiento en que `SHW` sustituyo a `DOW`. El fichero ya reflejaba correctamente las otras dos patas (ni `INTC` ni `DOW` estaban, `SHW` si): fue un olvido de aquella actualizacion, no un criterio deliberado.
+- **Segunda discrepancia no detectada en el aviso original: `VZ` ya no esta en el indice y faltaba `GOOGL`.** S&P Dow Jones Indices anuncio el 2026-06-23 que Alphabet clase A (`GOOGL`) sustituia a Verizon (`VZ`), efectivo **antes de la apertura del 2026-06-29**. Verizon salio tras 22 anos por pesar solo ~0,5% en un indice ponderado por precio. Es el unico cambio del DJIA desde noviembre de 2024, asi que con estas dos correcciones la lista queda cuadrada 30/30 contra el indice real.
+- **`HON` se queda, pese al spin-off del mismo dia.** Honeywell completo la escision de su division aeroespacial el 2026-06-29: la matriz pasa a llamarse Honeywell Technologies pero **conserva el ticker `HON` y su puesto en el DJIA**; la escindida cotiza aparte como `HONA` en Nasdaq y **no** forma parte del indice. Ademas hizo un contrasplit 1x2 en esa misma fecha, anotado como comentario en el fichero porque es exactamente el tipo de evento que produce un salto brusco en el historico sin causa fundamental (precio verificado hoy: 246,21 $, coherente con el post-contrasplit).
+- Ninguna otra discrepancia: los 28 tickers restantes coinciden uno a uno con la composicion actual del indice, sin sobrantes.
+- Fuera de alcance a proposito: `VZ` sigue (correctamente) en `general` y `largecap60`, que no son replicas de ningun indice sino listas de valores grandes y liquidos. Salir del Dow no le quita liquidez a Verizon.
+
+Incluye:
+
+- `config/universes.php`, `dow30`: `+NVDA`, `+GOOGL`, `-VZ` (29 -> 30 tickers, sin duplicados). Lista reformateada a 3 filas de 10 (mismo estilo que `general`/`largecap60`/`ibex35`) en vez de una linea unica de 29 elementos, y precedida de un comentario que documenta los dos cambios del indice con sus fechas y el caso `HON`/`HONA`.
+- `config/universes.php`, `tech40`: **solo un comentario aclaratorio, sin tocar la lista ni la clave.** Observacion menor del mismo analista: la clave se llama `tech40` pero tiene 20 tickers. No se renombra a proposito — romperia los rankings ya guardados en `daily_rankings` (que se indexan por `name`) y cualquier enlace existente con `?universe=tech40` — y no engaña al usuario final, cuya etiqueta visible es "Tecnologia ampliada" y no promete ningun numero. El comentario deja constancia de que, a diferencia de `dow30`/`ibex35`, aqui no hay indice real contra el que cuadrar la lista, para que nadie "corrija" el conteo en el futuro.
+
+Verificado en ddev con...:
+
+`php -l config/universes.php` sin errores. Conteo programatico sobre el array ya cargado: `dow30` con 30 tickers, 30 unicos, cero duplicados, y diff vacio en ambos sentidos (`array_diff`) contra la composicion real del DJIA verificada arriba — ni faltan ni sobran. `ddev exec php bin/analyze.php --universe=dow30` contra Yahoo real: los **30 tickers analizados OK, 0 errores** (`Saved ranking 'dow30' with 30 results and 0 errors`), incluidos los dos nuevos. Payload guardado en `daily_rankings` comprobado: 30 filas con precio y score reales, `NVDA` 223,96 $ (score 75,91) y `GOOGL` 354,30 $ (score 75,50), `VZ` ya ausente. No se toco ningun fichero de `src/`.
+
+Resultado esperado:
+
+El ranking "las mejores del Dow" pasa a evaluar los 30 componentes reales del indice. Deja de omitir a Nvidia (uno de los mayores pesos del DJIA) y deja de puntuar a Verizon como si siguiera dentro, dos huecos que no producian ningun error visible y por eso podian pasar desapercibidos indefinidamente.
+
+---
+
+## v2.61 - Concentracion de la cartera por posicion, sector y divisa
+
+Estado: implementado y verificado en ddev con datos reales.
+
+Parte de la tercera ronda de ideas validadas por `analista-mercado` (junto a `v2.56` alerta de stop-loss, `v2.57` alerta de earnings, `v2.58` significancia estadistica en backtest y `v2.59` agregado por universo, implementadas en paralelo por otros agentes).
+
+Objetivo:
+
+`Models\Portfolio` no exponia ningun peso relativo: ni el % que representa cada posicion sobre el total, ni el peso por sector (disponible desde `v2.47`), ni la exposicion por divisa (los mapas ya existen desde `v2.25`/`v2.48`). "Mi cartera" mostraba invertido, valor, beneficio latente/realizado y rendimiento general, pero nada que respondiera a "¿que parte de mi dinero depende de una sola accion, de un solo sector o de una sola divisa?". Medido por `analista-mercado` sobre la cartera real del usuario: top 3 = 74,3% del total, tres sectores concentrando el 80,8%, 85,1% de exposicion a USD (relevante porque `v2.48` ya demostro con datos que el tipo de cambio mueve la rentabilidad en euros de forma perceptible) y un HHI de 0,196, es decir 5,1 posiciones efectivas pese a tener 13 abiertas. Toda esa concentracion era invisible en la aplicacion.
+
+Decisiones de arquitectura:
+
+- **Los pesos se calculan sobre valores convertidos a EUR, nunca sobre las metricas nativas.** `Holding::getMarketValue()` esta en divisa nativa y `Portfolio::getMarketValue()` suma euros con dolares sin convertir (deliberado desde siempre, `v2.48` lo dejo asi a proposito porque el resto del negocio depende de esas metricas nativas). Un peso relativo calculado sobre esa suma mixta seria sencillamente incorrecto: con el cambio EUR/USD actual, una posicion de 1.000 $ y otra de 1.000 € no pesan lo mismo. `Services\PortfolioConcentrationCalculator` lleva cada posicion a euros ANTES de pesar y no toca ninguna metrica existente.
+- **Reutiliza la conversion ya calculada en `v2.48` en vez de repetir el mapeo de divisas.** Para una posicion en divisa extranjera se usa `Holding::getMarketValueEur()` (tipo de cambio de HOY, una unica peticion por divisa via `ExchangeRateService`, ya cacheada 15 min); para una posicion que ya cotiza en euros se usa su valor nativo, porque `getMarketValueEur()` es `null` por diseño en ese caso (`v2.48`, para no duplicar el mismo importe en la UI). Asi no se duplica la regla "EUR tal cual / USD por el cambio" que ya vive en `Portfolio::getTransactionPriceEur()`, no se añade ningun getter nuevo a `Portfolio`, y el calculo vale para cualquier divisa extranjera futura, no solo USD. Cero llamadas nuevas al proveedor de mercado. Desviacion consciente respecto a la propuesta original de `analista-mercado`, que planteaba convertir con un `Portfolio::getUsdToEurRate()` que no existe hoy: mismo resultado numerico (ambos caminos usan `ExchangeRateService::getRateToEur('USD')`) y mismo criterio de nulabilidad, sin duplicar el mapeo de divisas ni limitarse a USD.
+- **Todo o nada, mismo criterio de resiliencia que `Portfolio::getMarketValue()`.** `compute()` devuelve `null` (y la pagina omite el bloque entero) si la cartera esta vacia, si el valor total es cero, o si alguna posicion no se puede expresar en euros (precio actual no disponible, o tipo de cambio no disponible). Un reparto de pesos al que le falta una posicion no es "casi correcto": es engañoso, porque el resto de pesos se inflan sin avisar.
+- **DTO con las metricas derivadas, calculador con la conversion y la agrupacion.** Mismo reparto de responsabilidades que `Services\RiskLevelsCalculator` (decide "cuando" y con que datos) frente a `DTO\RiskLevels` (formula pura): `DTO\PortfolioConcentration` recibe el total en euros y los tres repartos ya en porcentaje, y calcula a partir de ellos el HHI (suma de los cuadrados de los pesos en tanto por uno), las posiciones efectivas (1/HHI) y el peso acumulado del top N. Los pesos se guardan sin redondear (el redondeo es de la presentacion) para que sumen exactamente 100.
+- **Los umbrales de aviso viven en el DTO como constantes, y el DTO responde "que" supera el umbral, no "como se dice".** `POSITION_WARNING_PERCENT = 20`, `SECTOR_WARNING_PERCENT = 40`, `FOREIGN_CURRENCY_WARNING_PERCENT = 70` y `BASE_CURRENCY = 'EUR'`; `getOverweightPositions()`/`getOverweightSectors()`/`getOverweightForeignCurrencies()` devuelven el subconjunto de pesos que los supera, y el texto y el HTML del aviso son cosa de `Web\PortfolioPage`. Son referencias orientativas de diversificacion, no reglas del motor: no pasan por `Config\ScoreWeights`, no alteran ninguna recomendacion, ningun score ni ningun stop-loss, y no bloquean ni ocultan nada en la interfaz. El aviso de divisa solo aplica a divisas distintas de la de referencia (estar al 100% en euros no es riesgo de cambio).
+- **Los tickers sin sector se agrupan en "Sin sector" en vez de desaparecer.** Yahoo no siempre devuelve sector (`v2.47`); ignorar esas posiciones dejaria un reparto por sector que no suma 100% sin decir por que.
+- **El sector se toma del `Stock` que el analisis por posicion ya devuelve, en `Application::analyzeHoldingsForAlerts()`.** Ese metodo ya recorre las posiciones abiertas una vez y ya captura recomendacion y niveles de riesgo del mismo `StockAnalysis`; añadir `getStock()->getCompany()->getSector()` no cuesta ninguna llamada nueva al proveedor. El calculador se instancia en `renderPortfolio()` (raiz de composicion), igual que `buildSuggestedQuantities()` instancia `RiskLevelsConfig` en `v2.50`; `Web\PortfolioPage` sigue siendo solo renderizado.
+- **UI: panel nuevo justo debajo de las tarjetas de resumen, con el patron visual ya existente de la pagina.** Cuatro `.metric` con valor total en euros, peso del top 3, HHI y posiciones efectivas; despues tres tarjetas mas con el reparto por posicion, por sector y por divisa. Los repartos usan `.list`/`.list-row` (etiqueta + porcentaje) y no `<table>`: la hoja de estilos da a las tablas un ancho minimo pensado para las tablas grandes de esta pagina, que dentro de una tarjeta estrecha desbordaria. Todo importe pasa por `Layout::formatMoney(..., 'EUR')` respetando `v2.27`, y toda etiqueta dinamica (ticker, sector, divisa) por `Layout::escape()`. El HHI es el unico numero de la pagina con tres decimales: se mueve en un rango tan estrecho (0-1) que con dos decimales 0,196 y 0,204 se verian iguales.
+
+Incluye:
+
+- `DTO/PortfolioConcentration.php` (nuevo): total en euros, pesos por posicion/sector/divisa en orden descendente, `getHerfindahlIndex()`, `getEffectivePositions()`, `getTopPositionsWeight()`, `getPositionCount()` y los tres `getOverweight*()`; constantes de umbral, `BASE_CURRENCY` y `UNKNOWN_SECTOR`.
+- `Services/PortfolioConcentrationCalculator.php` (nuevo): `compute(Portfolio $portfolio, array $sectors = []): ?PortfolioConcentration`, con `marketValueEur()`, `currencyOf()` y `toWeights()` privados.
+- `Services/Application.php`: `analyzeHoldingsForAlerts()` captura tambien el sector por ticker y lo devuelve en la clave `sectors`; `renderPortfolio()` invoca el calculador y pasa el DTO a `PortfolioPage::render()`.
+- `Web/PortfolioPage.php`: parametro nuevo `?PortfolioConcentration $concentration = null` en `render()`, con `renderConcentration()`, `weightList()`, `percent()`, `thresholdPercent()` e `index()` privados.
+- `Web/Layout.php`: clases CSS `.concentration-list` y `.concentration-warning` (misma paleta de aviso que `.hold`, mismo patron de pildora que `.risk-badge-*`).
+- `tests/Services/PortfolioConcentrationCalculatorTest.php` (nuevo): 11 casos — los tres repartos suman 100%, orden descendente y top N, cuatro posiciones iguales dan HHI 0,25 y 4 posiciones efectivas, la conversion a euros se aplica antes de pesar (una posicion de 1.000 $ y otra de 1.000 € no pesan 50/50), sin tipo de cambio con posiciones en dolares devuelve `null`, posicion sin precio actual devuelve `null`, cartera vacia devuelve `null`, agrupacion por sector, ticker sin sector agrupado en "Sin sector" manteniendo el 100%, avisos de los tres tipos, y cartera integramente en euros sin aviso de divisa.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 6 ficheros PHP tocados. `vendor/bin/phpunit`: 73 tests, 234 assertions, sin regresiones (62 tests/201 assertions de baseline, ya con `v2.56`-`v2.60` incluidas). Con la cartera real del usuario de prueba (`fvnavarro@hotmail.com`, id 3, unico en BD, solo lecturas, sin borrar ni modificar ninguna transaccion) contra Yahoo real via `CachedMarketDataProvider`: valor total 12.122,63 €, HHI 0,1969, 5,08 posiciones efectivas de 11, top 3 = 74,05% (`MSA` 27,71%, `TRV` 27,42%, `ADBE` 18,92%), sectores `Financial Services` 29,45% + `Industrials` 27,71% + `Technology` 23,66% = 80,82%, divisas 82,79% USD / 17,21% EUR; los tres repartos suman 100,000000%. Las cifras reproducen las que reporto `analista-mercado` (HHI 0,196, 5,1 efectivas, top 3 74,3%, trio sectorial 80,8%). Las dos diferencias estan explicadas con datos y no son de calculo: hoy hay 11 posiciones abiertas y no 13 porque en la BD ya no existe ninguna transaccion de `DIS` ni de `PYPL` (ambas en USD, ambas presentes cuando se documento `v2.50`) y no hay ninguna fila de venta, ademas de cuatro compras nuevas del mismo dia (`REP.MC`, `MSA`, `PUIG.MC`, `VIPS`); quitar dos posiciones en dolares y añadir dos compras en euros explica el descenso del peso USD de 85,1% a 82,79%. Sin regresion en el resto de la pagina: renderizado `PortfolioPage::render()` dos veces con los mismos datos reales (11 recomendaciones, 11 `RiskLevels`, 11 cantidades sugeridas de `v2.50`), una con el DTO y otra con `null`, la unica diferencia entre ambos HTML son los 3.086 bytes del panel nuevo — los 25.945 bytes anteriores y los 24.506 posteriores son identicos byte a byte (tarjetas de resumen, grafico de evolucion, tabla de posiciones con badges de stop/objetivo/cantidad sugerida, historial de operaciones y aviso de alertas sin leer).
+
+Resultado esperado:
+
+"Mi cartera" muestra, justo debajo del resumen, cuanto pesa cada posicion, cada sector y cada divisa sobre el valor total en euros, con el indice HHI y el numero de posiciones efectivas, y marca de forma orientativa las posiciones por encima del 20%, los sectores por encima del 40% y la exposicion no-euro por encima del 70%. Una cartera de 11 posiciones que en la practica se comporta como 5 deja de ser invisible, sin ninguna llamada nueva al proveedor de mercado, sin migracion de base de datos y sin alterar ningun calculo de rentabilidad, recomendacion, stop-loss o cantidad sugerida ya existente.
+
+---
+
+## v2.62 - Financial Modeling Prep como segundo `MarketDataProviderInterface` real
+
+Nota de recuperacion (2026-08-08): esta entrada se escribio originalmente como `v2.52` en la rama remota. El rebase del 2026-08-05 (commit `5702f39`) resolvio un conflicto de `versions.md` descartando las tres entradas que venian de esa rama (141 lineas), pese a que su codigo si quedo en el repositorio. Se recupera aqui desde el commit `12ac56f` y se renumera porque `v2.52` ya estaba ocupado en local por otro cambio distinto. La numeracion es lo unico que se ha modificado: el texto es el original.
+
+Estado: implementado.
+
+Objetivo:
+
+La infraestructura de seleccion de proveedor (`v0.7`) ya lista `alpha_vantage`/`twelve_data` como placeholders "preparados, sin implementacion activa todavia" (`config/provider.php`), `Web/ProviderConfigPage.php` ya deshabilita el radio button de cualquier proveedor cuya key no sea `'yahoo'`, y `Services/Application::handleProviderSave()` ya forzaba `$active = 'yahoo'` a la espera de un segundo proveedor real. Este cambio implementa ese segundo proveedor con Financial Modeling Prep (FMP), verificado en vivo con una API key real de plan gratuito (250 llamadas/dia, 512MB/30 dias) antes de escribir codigo, sin tocar Yahoo Finance, que sigue siendo el proveedor activo por defecto.
+
+Decisiones de arquitectura:
+
+- **Mismo patron que `YahooFinanceProvider`/`YahooParser`, no uno nuevo.** `Providers/FmpProvider.php` implementa `MarketDataProviderInterface` con `HttpClient` inyectable con valor por defecto igual que Yahoo, mas un tercer parametro obligatorio (`apiKey`, sin valor por defecto: FMP exige key en cada llamada, a diferencia de Yahoo). `Providers/FmpParser.php` sigue el mismo estilo que `YahooParser` (helper `numeric()`/`toPercentage()`, DTOs de dominio como unico resultado, sin dependencias de HTTP).
+- **`getStock()`: cotizacion obligatoria, perfil y fundamentales en mejor esfuerzo, mismo criterio de resiliencia que `YahooFinanceProvider::fetchFundamentalsAndProfileSafely()`.** `quote` no se captura (si falla, la excepcion se propaga, igual que Yahoo); `profile` (nombre/sector/industria/divisa) y `ratios-ttm`+`key-metrics-ttm` (fundamentales) si se capturan por separado y caen a `''`/`Fundamentals` vacios respectivamente si fallan. El `marketCap` del payload de `quote` viaja como fallback explicito a `Fundamentals::marketCap` para que la capitalizacion sobreviva aunque fallen las dos llamadas de fundamentales — el unico dato de las tres llamadas opcionales que no se pierde nunca. `market` de `Company` sale siempre de `exchange` del `quote`, nunca del `profile`, por la misma razon.
+- **`getHistoricalQuotes()` acota el rango explicitamente (`from`/`to` de los ultimos 2 años) porque FMP, sin esos parametros, devuelve todo el historico desde los años 80** — con el limite de 512MB/mes del plan gratuito, eso agotaria el presupuesto de bandwidth en pocas peticiones. FMP devuelve el historico en orden descendente (mas reciente primero); el resto de la app (`TechnicalAnalyzer`, `BacktestingService`) asume orden ascendente (igual que ya entrega `YahooParser`), asi que `FmpProvider` invierte el array con `array_reverse()` antes de devolverlo, dejando esa decision de orden en el proveedor (no en el parser) con un comentario explicito.
+- **`getIntradayQuotes()` lanza siempre `MarketDataException` sin llamada HTTP.** Confirmado en vivo que los 4 intervalos intradia de FMP (`1min`/`5min`/`15min`/`1hour`) devuelven texto plano "Restricted Endpoint" en el plan gratuito: no tiene sentido gastar una llamada del limite diario intentandolo. Mensaje explicito sugiriendo cambiar a Yahoo Finance para ese grafico.
+- **Deteccion de errores centralizada en `FmpProvider::fetchJson()`, un unico punto para las tres formas de fallo confirmadas en vivo.** Cuerpo no JSON (texto plano `Restricted Endpoint`/`Premium Query Parameter`, tipico de un ticker o endpoint no soportado en el plan gratuito) se relanza como `MarketDataException` con los primeros 200 caracteres del cuerpo crudo para que sea diagnosticable; JSON valido con `Error Message` (API key invalida) se relanza con ese mensaje; array vacio `[]` (ticker no encontrado) se relanza con un mensaje especifico. Los tres casos se comprueban antes de que cualquier metodo de `FmpParser` intente usar el payload.
+- **`Fundamentals::roic` si se rellena con FMP** (`key-metrics-ttm.returnOnInvestedCapitalTTM`), a diferencia de Yahoo que no lo expone de forma fiable (comentario ya existente en `Models/Fundamentals.php`): documentado con un comentario junto al mapeo. `revenueGrowth` queda siempre `null` para FMP (requeriria una tercera llamada a `/stable/financial-growth`, que no compensa el coste en el plan gratuito de 250 llamadas/dia), documentado igual que el comentario ya existente sobre `roic` en Yahoo.
+- **`config/provider.php`/`Web/ProviderConfigPage.php`/`Services/Application.php` cablean el proveedor nuevo sin tocar el patron ya establecido**: entrada `financial_modeling_prep` en el array `providers` (sin tocar `yahoo`/`alpha_vantage`/`twelve_data`), `$implemented` en `ProviderConfigPage` acepta `'yahoo'` o `'financial_modeling_prep'`, y `handleProviderSave()`/`createMarketDataProvider()` en `Application.php` leen `active_provider` del POST (antes forzado siempre a `'yahoo'`) validando contra la lista blanca de proveedores realmente implementados, con `'yahoo'` como fallback ante cualquier otro valor.
+
+Incluye:
+
+- `Providers/FmpProvider.php` (nuevo): implementa `MarketDataProviderInterface` contra `https://financialmodelingprep.com/stable/`.
+- `Providers/FmpParser.php` (nuevo): `parseQuote()`, `parseProfile()`, `parseHistoricalQuotes()`, `parseFundamentals()`.
+- `config/provider.php`: entrada `financial_modeling_prep` (`label`, `api_key` vacia).
+- `Web/ProviderConfigPage.php`: `$implemented` acepta `yahoo` y `financial_modeling_prep`.
+- `Services/Application.php`: import de `FmpProvider`; `handleProviderSave()` lee `active_provider` del POST con lista blanca; `createMarketDataProvider()` añade el caso `financial_modeling_prep` al `match`, pasando la `api_key` ya cargada de configuracion.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 5 ficheros PHP tocados/creados. `vendor/bin/phpunit`: 33 tests, 92 assertions, sin regresiones (mismos numeros que antes del cambio, `v2.51`); `tests/Services/FixedHistoryProvider.php` (stub de `MarketDataProviderInterface` usado por `BacktestingServiceTest`) no se ve afectado porque la interfaz no gana ningun metodo nuevo. No se ha podido probar `FmpProvider` contra la API real de FMP desde este sandbox (sin acceso a red saliente fiable) ni escribir ninguna API key real en el repositorio (gestionada aparte por el usuario en `config/provider.local.php`, no tocado); los nombres de campo, formas de payload y los tres modos de fallo (texto plano no JSON, `Error Message`, array vacio) proceden de pruebas en vivo ya realizadas por el usuario con una key real de plan gratuito, no de documentacion sin verificar.
+
+Resultado esperado:
+
+Desde `?page=provider`, un usuario con API key de Financial Modeling Prep puede activarlo como proveedor de mercado sin tocar codigo; el resto de la aplicacion (analisis, score, backtesting, cartera) sigue funcionando igual porque `FmpProvider` implementa el mismo contrato que `YahooFinanceProvider`. `getIntradayQuotes()` devuelve un mensaje claro en vez de un fallo silencioso mientras el plan sea gratuito. Yahoo Finance sigue siendo el proveedor activo por defecto y no cambia su comportamiento.
+
+---
+
+## v2.63 - Captura de historial de score por ticker/dia (base para re-rating, sin UI todavia)
+
+Nota de recuperacion (2026-08-08): esta entrada se escribio originalmente como `v2.53` en la rama remota. El rebase del 2026-08-05 (commit `5702f39`) resolvio un conflicto de `versions.md` descartando las tres entradas que venian de esa rama (141 lineas), pese a que su codigo si quedo en el repositorio. Se recupera aqui desde el commit `12ac56f` y se renumera porque `v2.53` ya estaba ocupado en local por otro cambio distinto. La numeracion es lo unico que se ha modificado: el texto es el original.
+
+Estado: implementado (solo captura), verificado en ddev con datos reales. La idea de "Ideas adicionales sugeridas" que motiva este cambio sigue abierta en cuanto a mostrar una tendencia: eso requiere semanas de historial acumulado que hoy no existe.
+
+Objetivo:
+
+La primera entrada de "Ideas adicionales sugeridas" (mas abajo, anotada por `analista-mercado` el 2026-08-03) propone comparar el score de un ticker hoy contra hace N dias para distinguir una accion que mejora progresivamente de otra que se deteriora con el mismo score absoluto. Estaba bloqueada porque `daily_rankings` (`v1.6`) solo tenia una fecha real capturada en este entorno (`2026-07-31`, nada desde entonces) al no correr ningun cron de verdad en ddev/local. Esta version no implementa la señal de tendencia en si (no hay datos suficientes todavia), solo la infraestructura de captura: decidido explicitamente por el usuario registrar un snapshot del score cada vez que alguien visita realmente la ficha de detalle de un ticker, en vez de seguir dependiendo de un cron que hoy no se ejecuta.
+
+Decisiones de arquitectura:
+
+- **Tabla nueva `score_history`, no reutilizar `daily_rankings`.** `daily_rankings` guarda un unico payload JSON por (fecha, nombre de ranking, hash de tickers): un snapshot de un ranking *completo*, no de un ticker individual, y su clave unica no encaja con "una fila por ticker/dia" sin forzar el significado de las columnas existentes. `database/migrations/013_create_score_history.sql` crea una tabla ligera y propia: `ticker`, `snapshot_date`, `total_score`, `max_total`, `percentage` como columnas explicitas (consulta directa de "score de este ticker hace N dias" sin decodificar JSON) mas `category_breakdown` (JSON, `CHECK JSON_VALID` igual que `daily_rankings`/`market_data_cache`) para el desglose por `ScoreCategory` — barato de guardar porque `Score` ya lo calcula, y evita columnas nuevas cada vez que se añada o quite una categoria. Clave unica `(ticker, snapshot_date)`, que es a la vez el indice que hara falta para "score de X hace N dias" y el mecanismo de idempotencia.
+- **`Repository/ScoreHistoryRepository.php`, mismo patron `INSERT ... ON DUPLICATE KEY UPDATE` que `DailyRankingRepository::save()`/`MarketDataCacheRepository`.** Idempotente por diseño gracias a la clave unica `(ticker, snapshot_date)`: visitas repetidas al mismo ticker el mismo dia sobrescriben la fila con el score mas reciente de ese dia en vez de acumular filas, sin ningun `SELECT` previo para comprobar existencia. `recordSnapshot(string $ticker, Score $score, ?DateTimeImmutable $date = null)` guarda `$score->getScores()` (mapa `ScoreCategory->value => valor`) como `category_breakdown`, no `Score::toArray()` completo: mas ligero, y las etiquetas/maximos de cada categoria son derivables de `ScoreCategory` cuando haga falta leerlos, no hace falta duplicarlos.
+- **Enganchado en `Services\Application::renderDetail()`, reutilizando el `Score` ya calculado, sin ninguna llamada nueva a mercado.** Se llama justo despues de `$analysis = $this->analysisService->analyze($ticker)` (mismo `Score` que ya se muestra en la ficha), envuelto en un `try/catch (Throwable)` silencioso — mismo criterio "best effort" ya usado en esta clase para piezas no criticas (`resolveGeneralUniverseTickers()`, `handleResendVerification()`): un fallo de escritura en `score_history` nunca debe tumbar la ficha de detalle, es solo historial acumulandose, no un dato que la pagina necesite mostrar.
+- **Sin UI de tendencia todavia, a proposito.** No se toca `Web/StockDetailPage.php` ni se añade ningun metodo de lectura mas alla de `recordSnapshot()`: no tiene sentido construir una lectura de tendencia (ni el metodo de repositorio para ella) hasta que haya semanas de historial real acumulado organicamente por visitas, momento en el que se decidira el diseño de esa señal con datos reales delante, igual que se hizo con `v2.51` para otra idea de la misma sesion.
+
+Incluye:
+
+- `database/migrations/013_create_score_history.sql` (nueva): tabla `score_history` (`ticker`, `snapshot_date`, `total_score`, `max_total`, `percentage`, `category_breakdown`, `created_at`, clave unica `(ticker, snapshot_date)`).
+- `Repository/ScoreHistoryRepository.php` (nuevo): `recordSnapshot()`.
+- `Services/Application.php`: propiedad y wiring de `ScoreHistoryRepository`; `renderDetail()` llama a `recordSnapshot()` tras calcular `$analysis`, envuelto en `try/catch` silencioso.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 2 ficheros PHP tocados/creados. `vendor/bin/phpunit`: 33 tests, 92 assertions, sin regresiones (mismos numeros que `v2.62`; no aplica ningun test nuevo porque, igual que el resto de repositorios del proyecto, `ScoreHistoryRepository` no tiene cobertura unitaria — depende de PDO real, mismo criterio que `DailyRankingRepository`/`MarketDataCacheRepository`, sin suite de tests todavia segun `roadmap.md`). `bin/migrate.php` aplica `013_create_score_history.sql` limpiamente (`APPLIED 013_create_score_history.sql`) sobre la base ddev real. Visitando `https://stockanalyzer.ddev.site/?ticker=AAPL` con datos de mercado cacheados reales (Yahoo) se inserta una fila real: `AAPL | 2026-08-04 | total_score=66.15 | max_total=115.00 | percentage=57.52 | category_breakdown={"technical":14,"momentum":6.73,"risk":4.92,"fundamental":22,"valuation":5,"quality":10,"dividend":3.5}`; una segunda visita al mismo ticker el mismo dia confirma idempotencia (sigue habiendo una unica fila para `AAPL`/`2026-08-04`, `COUNT(*)=1`); visitando `?ticker=MSFT` se añade una segunda fila independiente (`MSFT | 2026-08-04 | total_score=78.31 | percentage=68.10`) sin afectar a la de `AAPL`.
+
+Resultado esperado:
+
+Cada visita real a la ficha de detalle de un ticker deja (o actualiza) una fila en `score_history` con el score de ese dia, sin coste perceptible (una sola escritura adicional a una tabla nueva, ningun `SELECT`/llamada a mercado extra) y sin romper nada de lo existente. No hay todavia ninguna tendencia visible en la aplicacion: la idea de "re-rating" en "Ideas adicionales sugeridas" queda actualizada para reflejar que el bloqueo de infraestructura esta resuelto, pero la visualizacion sigue pendiente de que se acumulen semanas de historial real.
+
+---
+
+## v2.64 - Crecimiento de dividendo sostenido (estilo Chowder Rule) en la categoria DIVIDEND
+
+Nota de recuperacion (2026-08-08): esta entrada se escribio originalmente como `v2.54` en la rama remota. El rebase del 2026-08-05 (commit `5702f39`) resolvio un conflicto de `versions.md` descartando las tres entradas que venian de esa rama (141 lineas), pese a que su codigo si quedo en el repositorio. Se recupera aqui desde el commit `12ac56f` y se renumera porque `v2.54` ya estaba ocupado en local por otro cambio distinto. La numeracion es lo unico que se ha modificado: el texto es el original.
+
+Estado: implementado y verificado en ddev con datos reales, incluyendo backtest real antes/despues del cambio.
+
+Objetivo:
+
+Cierra la idea "Crecimiento de dividendo (estilo Chowder Rule)" de "Ideas adicionales sugeridas" (mas abajo), ya calibrada con datos reales por `analista-mercado` el 2026-08-04 con veredicto "implementar con matices". `FundamentalAnalyzer::dividend()` solo puntuaba el yield actual y el payout ratio, ambos una unica foto fija; no habia ninguna señal sobre si el dividendo crece de forma sostenida en el tiempo.
+
+Formula:
+
+CAGR de dividendo anualizado a 5 años, calculado por la clase nueva `Services\DividendGrowthCalculator`:
+
+```
+dividendo_anualizado(fecha) = suma de pagos reales en la ventana movil de 12 meses que termina en fecha
+                               (excluyendo outliers, ver "Limitacion conocida" mas abajo)
+CAGR = (dividendo_anualizado(hoy) / dividendo_anualizado(hoy - 5 años))^(1/5) - 1
+```
+
+"Anualizado" nunca asume una periodicidad fija (4 pagos trimestrales): suma los pagos reales de `events.dividends` (`v8/finance/chart` con `events=div`) en cada ventana de 12 meses, para no infravalorar el dividendo anual real de valores con periodicidad semestral/anual (frecuente en `ibex35`).
+
+Bandas del componente nuevo (sobre los percentiles reales calibrados por `analista-mercado`: CAGR de dividendo anual 2020-2025 con p25=4,0%/p50=6,3%/p75=9,0%/p90=13,0%, 79 pagadores de varios universos):
+
+- CAGR >= 9% (~p75): 1,0 pts (maximo del componente)
+- CAGR 6,3%-9% (~p50-p75): 0,7 pts
+- CAGR 4%-6,3% (~p25-p50): 0,4 pts
+- CAGR < 4% o negativo (recorte real): 0,0 pts
+- Sin dato (empresa sin dividendo desde hace 5 años, ej. `GOOGL` desde 2024, o historial insuficiente): 0,5 pts (mitad del maximo, mismo criterio "sin dato = neutro, no penalizar" que el resto de `FundamentalAnalyzer`)
+
+Decisiones de arquitectura:
+
+- **Financiado reduciendo `yieldPoints` de `FundamentalAnalyzer::dividend()` de un maximo de 3,5 a 2,5 pts** (bandas reescaladas proporcionalmente: `>8% => 1,5`, `>=4% => 2,5`, `>=2% => 2,0`, resto `1,5`), para mantener el techo de la categoria DIVIDEND en 5,0 (`ScoreCategory::DIVIDEND->maxScore()`) sin desequilibrar su peso frente a TECHNICAL/FUNDAMENTAL. El fallback "sin dividendo" (antes 1,5 pts fijos) sube a 2,0 pts (+0,5, mitad del maximo del componente nuevo, tambien sin dato en ese caso).
+- **Historial de dividendos como llamada nueva y separada de `getStock()`, no fusionada dentro.** `MarketDataProviderInterface::getDividendHistory(string $ticker): array` (nuevo metodo, devuelve `list<DTO\DividendPayment>`) es best-effort igual que el resto de campos opcionales: array vacio ante cualquier fallo o ticker sin dividendo, nunca una excepcion. Se mantiene separada de `getStock()`/`Fundamentals` (que si depende de `quoteSummary`) para poder cachearla con un TTL mucho mas largo (los dividendos no cambian intradia) sin acoplar ese TTL al de cotizacion/fundamentales (15 min).
+- **`CachedMarketDataProvider::getDividendHistory()` con TTL de 30 dias por defecto** (`$dividendHistoryTtl`, nuevo 5º parametro con valor por defecto, no rompe ninguna instanciacion existente), reutilizando el mismo patron `find*`/`save*` que ya usan `stock_payload`/`history_payload` en `MarketDataCacheRepository` (columnas nuevas `dividend_history_payload`/`dividend_history_cached_at` en `market_data_cache`, migracion `014_add_dividend_history_cache.sql`).
+- **`YahooFinanceProvider::getDividendHistory()` pide `interval=1mo&range=10y&events=div`** (mismo endpoint `v8/finance/chart` que `getHistoricalQuotes()`): `interval=1mo` para un payload ligero (~8KB, no los ~140KB de `interval=1d`) y `range=10y` para tener margen suficiente para el CAGR a 5 años (necesita datos de hace 5 años Y del año anterior a ese punto). `YahooParser::parseDividendHistory()` lee `events.dividends` (mapa timestamp => `{amount, date}`, usa siempre el campo `date` de cada entrada, no la clave del mapa) — verificado en vivo contra Yahoo real desde ddev (ver "Verificado con..." mas abajo), los importes ya vienen ajustados por splits, igual que el resto del historico de precios de Yahoo.
+- **`FmpProvider::getDividendHistory()` devuelve siempre un array vacio**, mismo criterio que `revenueGrowth` en `v2.62` (`fetchFundamentalsSafely()`): no compensa una llamada adicional dentro del limite de 250 llamadas/dia del plan gratuito sin haber verificado antes el endpoint en vivo. Un ticker vía FMP simplemente no tiene componente de crecimiento de dividendo (neutro, no roto).
+- **`Fundamentals::dividendGrowth5y` se completa DESPUES de `getStock()`, no dentro.** `Fundamentals` gana un campo nuevo (`?float $dividendGrowth5y`, nullable, con wither `withDividendGrowth5y()` porque `Fundamentals` es inmutable) pero `YahooParser::parseFundamentals()` no lo rellena (viene de una llamada distinta a `quoteSummary`). `StockAnalysisService::analyze()` y `BacktestingService::backtestTicker()` (los dos unicos puntos de entrada que construyen un `Score` real) llaman cada uno a un `enrichWithDividendGrowth()` privado que pide `getDividendHistory()` al proveedor, calcula el CAGR con `DividendGrowthCalculator` (inyectado con valor por defecto, no rompe ninguna instanciacion existente en `Application.php`/`bin/backtest.php`/`bin/analyze.php`/tests) y reconstruye el `Stock` con el `Fundamentals` completado. En `BacktestingService`, `dividendGrowth5y` se calcula una unica vez con el historial MAS RECIENTE y se trata como constante durante todo el recorrido historico de `stockAt()`, exactamente la misma simplificacion que ya asume el resto de campos de `Fundamentals` (PER, ROE...) en el backtest.
+- **Limitacion conocida (documentada en el docblock de `DividendGrowthCalculator` y en el codigo): dividendos especiales pueden distorsionar la ventana de 12 meses en la que caen.** Mitigado con una heuristica simple (`excludeOutliers()`): un pago se excluye de la suma de su ventana si supera el doble de la mediana de los demas pagos de esa misma ventana. Verificado en vivo: `COST` (que pago un dividendo especial en dic-2020, el caso real que motivo esta heuristica) da un CAGR de +13,2% con la exclusion activa, no la caida artificial de -16,9% que darina sumando el pago especial sin mas. No es deteccion perfecta (un pago especial que no duplique al resto no se detecta), pero cubre el caso mas comun sin complejidad adicional.
+
+Incluye:
+
+- `src/DTO/DividendPayment.php` (nuevo): DTO inmutable (fecha, importe) de un pago de dividendo.
+- `src/Services/DividendGrowthCalculator.php` (nuevo): `calculate()` (CAGR a 5 años con exclusion de outliers).
+- `src/Interfaces/MarketDataProviderInterface.php`: nuevo metodo `getDividendHistory()`.
+- `src/Providers/YahooFinanceProvider.php`/`YahooParser.php`: implementacion real (`getDividendHistory()`/`parseDividendHistory()`).
+- `src/Providers/FmpProvider.php`: `getDividendHistory()` devuelve `[]`.
+- `src/Providers/CachedMarketDataProvider.php`: `getDividendHistory()` cacheado con TTL de 30 dias.
+- `src/Repository/MarketDataCacheRepository.php`/`src/Services/MarketDataSerializer.php`: `findDividendHistory()`/`saveDividendHistory()`, `dividendHistoryToArray()`/`dividendHistoryFromArray()`.
+- `database/migrations/014_add_dividend_history_cache.sql` (nueva): columnas `dividend_history_payload`/`dividend_history_cached_at` en `market_data_cache`.
+- `src/Models/Fundamentals.php`: campo `dividendGrowth5y` + `getDividendGrowth5y()`/`withDividendGrowth5y()`.
+- `src/Analyzer/FundamentalAnalyzer.php`: `dividend()` reduce `yieldPoints` (3,5 -> 2,5 max) y llama al metodo nuevo `dividendGrowth()`.
+- `src/Services/StockAnalysisService.php`/`src/Services/BacktestingService.php`: `enrichWithDividendGrowth()` en ambos, unico punto donde se completa `Fundamentals::dividendGrowth5y` antes de calcular el `Score`.
+- `tests/Services/FixedHistoryProvider.php`: implementa `getDividendHistory()` (devuelve `[]`, ningun test la ejerce todavia).
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 14 ficheros PHP tocados/creados. `vendor/bin/phpunit`: 33 tests, 92 assertions, sin regresiones. `bin/migrate.php` aplica `014_add_dividend_history_cache.sql` limpiamente sobre la base ddev real (`APPLIED`). Contra Yahoo real desde ddev (`ddev exec`, confirmado acceso de red saliente real desde los contenedores aunque no desde este sandbox): `AAPL` 40 pagos/CAGR=4,69%, `COST` 44 pagos/CAGR=13,2% (outlier de dic-2020 excluido correctamente, ver limitacion conocida arriba), `KO` 40 pagos/CAGR=4,61%, `GOOGL` 9 pagos/CAGR=null (historial insuficiente, tratado como neutro), `JPM` 40 pagos/CAGR=10,76%.
+
+**Backtest real antes/despues** (`bin/backtest.php --horizon=20 --step=20`, mismo horizonte/paso independiente que usa el resto de investigaciones de este fichero) sobre `largecap60`, `financials`, `consumer_staples` e `ibex35`, aislando el cambio con `git stash push` solo de los ficheros de esta version (dejando intacto el resto del arbol de trabajo) para poder ejecutar el "antes" con el codigo real de produccion sin commitear nada:
+
+| Universo | avg_buy_forward_return antes -> despues | buy_signals antes -> despues | avg_sell_forward_return antes -> despues |
+|---|---|---|---|
+| largecap60 | -0,42% -> -0,57% | 45 -> 45 | 1,92% -> 1,86% |
+| financials | -0,23% -> -0,21% | 92 -> 95 | 2,17% -> 2,13% |
+| consumer_staples | +0,73% -> -1,05% | 9 -> 6 | 0,04% -> -0,10% |
+| ibex35 | +2,47% -> +2,10% | 64 -> 61 | 2,87% -> 2,70% |
+
+Ningun universo muestra el patron de colapso que descarto `CurrentRatio` en `v2.51` (29%-100% de señales BUY desaparecidas): los recuentos de señales BUY se mantienen practicamente estables (`largecap60` identico, `financials` sube, `ibex35`/`consumer_staples` bajan un 5-33% pero sin desaparecer) y los cambios en retorno futuro son pequeños (<0,4pp) y mixtos en direccion en 3 de los 4 universos. `consumer_staples` es el unico caso con una variacion aparentemente grande (+0,73% -> -1,05%), pero con solo 9 -> 6 señales BUY en todo el universo (`effective_independent_samples` agregado de 346 para el universo completo) no es una muestra fiable: un puñado de fechas cruzando el umbral de recomendacion por el nuevo componente basta para mover ese promedio, mismo tipo de ruido de muestra pequeña que ya se documenta en otras investigaciones de este fichero (`v2.51`). Veredicto: resultado neutro, no una señal limpia de mejora pero tampoco el deterioro claro que exigiria parar (criterio de `v2.34`). Se mantiene activado.
+
+Resultado esperado:
+
+`FundamentalAnalyzer::dividend()` ahora recompensa a las empresas que aumentan su dividendo de forma sostenida (compounders como `V`/`MA` en la calibracion de `analista-mercado`) y no premia por igual a las que solo mantienen un yield alto sin crecimiento real (trampa de yield en energia/utilities). El techo de la categoria DIVIDEND sigue en 5,0 puntos, sin alterar el peso relativo del resto de categorias del score.
+
+---
+
+## v2.65 - La cantidad sugerida deja de contradecir al aviso de concentracion (tope del 20% por posicion)
+
+Estado: implementado y verificado en ddev con la cartera real del usuario.
+
+Sale de la revision con backtesting real que `analista-mercado` hizo el 2026-08-08, a peticion del usuario, sobre los tres parametros de `config/risk_levels.php`.
+
+Objetivo:
+
+`DTO\RiskLevels::suggestedQuantity()` (`v2.50`) calculaba la cantidad sugerida como `(portfolioValue * riskPercent/100) / (price - stopLoss)` y la acotaba solo por `portfolioValue / price`, es decir por el 100% de la cartera: un tope que en la practica no acotaba nada. Con un stop de `2,5 x ATR`, el peso que pide esa formula es `riesgo% / (2,5 x ATR%)`, asi que **cuanto menos volatil es la accion, mayor es la posicion sugerida**. Medido por `analista-mercado` con `suggestedQuantity()` real sobre la cartera reequilibrada del usuario (10 posiciones de ~200 € cada una) y ATR14 real: peso medio sugerido **23,6%** de la cartera (minimo 13,9% en `ADBE`, maximo 31,9% en `ELE.MC`), **7 de las 10 posiciones por encima del 20%** y las 10 sugerencias sumando **236% de la cartera**, algo imposible de ejecutar. El 20% es exactamente el umbral con el que `DTO\PortfolioConcentration::POSITION_WARNING_PERCENT` (`v2.61`, implementada el mismo dia) avisa de que una posicion esta demasiado concentrada: la aplicacion se contradecia a si misma, sugiriendo comprar en una columna de "Mi cartera" lo que marcaba como exceso de concentracion en el panel de al lado.
+
+`atr_multiplier` (2,5) y `reward_ratio` (2,0) se revisaron en la misma sesion con backtesting real y **se decide NO tocarlos**: ninguna de las 25 combinaciones probadas alcanza `|t| >= 1,96` y el signo del efecto depende de la calidad de la entrada, no del multiplicador. Mismo criterio de "sin evidencia limpia no se toca el parametro" que ya cerro `v2.34` y `v2.51`. `position_risk_percent` tampoco cambia de valor (1,5% es la regla clasica del 1-2% por operacion): el diagnostico es que esa regla **solo es coherente si el tamaño va acotado por un peso maximo de posicion**, y eso es lo unico que se implementa aqui.
+
+Decisiones de arquitectura:
+
+- **Se cambia el tope, no el porcentaje de riesgo.** `suggestedQuantity()` gana un cuarto parametro `float $maxPositionPercent = 20.0` y sustituye `min($quantityByRisk, portfolioValue/price)` por `min($quantityByRisk, (portfolioValue * maxPositionPercent/100)/price)`. Las guardas existentes quedan intactas (`portfolioValue`/`riskPercent`/`price` `<= 0` -> `null`; riesgo por accion `<= 0` -> `null`) y sigue siendo una formula pura sin logica de "cuando aplicarla", mismo criterio que `compute()` desde `v2.19`. El valor por defecto `20.0` hace que ninguna llamada de tres argumentos se rompa **y ademas quede acotada**: el defecto que se corrige no debe poder reaparecer por olvidarse de pasar el cuarto argumento.
+- **Cuarto parametro de configuracion, mismo patron que los otros tres.** `config/risk_levels.php` gana `max_position_percent => 20.0` y `Config\RiskLevelsConfig` su `maxPositionPercent`/`getMaxPositionPercent()`, con la misma carga tolerante a fallos (archivo ausente, con errores, valor no numerico o `<= 0` -> valor por defecto). El comentario del fichero de configuracion deja escrito que ese 20% es **deliberadamente el mismo umbral** que `DTO\PortfolioConcentration::POSITION_WARNING_PERCENT` y que quien cambie uno deberia mirar el otro. La constante no se referencia desde `Config` a proposito: `Config` no debe depender de un DTO de otra capa, y son dos umbrales que deben coincidir, no un mismo dato compartido (si se compartiera, cambiar el aviso de concentracion cambiaria en silencio el tamaño de posicion sugerido, que es una decision distinta).
+- **`DTO\SuggestedPosition` nuevo para poder explicar la cifra, en vez de un segundo mapa paralelo por ticker.** Si el tope de peso es el que manda, la cantidad mostrada ya no cuadra con el 1,5% de riesgo configurado y el usuario no tiene forma de saber por que. Hacia falta transportar ese "cual de los dos topes mando" hasta el badge. Se hace con un DTO minimo (`getQuantity()`, `isLimitedByMaxWeight()`, `getMaxPositionPercent()`) que ocupa el mismo hueco que antes ocupaba el `?float`: **ningun metodo de la cadena de render gana parametros** (`PortfolioPage::render()` ya tiene 12 y `renderHoldings()` 7), solo cambia el tipo que viaja en el mapa que ya existia. La alternativa (un mapa `array<string,bool>` en paralelo al de cantidades) obligaba a mantener dos mapas sincronizados por ticker en tres firmas distintas.
+- **`RiskLevels` expone `isLimitedByMaxPositionWeight()` en vez de devolver el objeto compuesto.** `suggestedQuantity()` sigue devolviendo un numero (es una formula, y asi los tests y cualquier uso futuro fuera de la UI no dependen de un DTO de presentacion); quien necesite explicarlo compone el `SuggestedPosition` en la raiz de composicion (`Services\Application`), no en `Web\*`. Las dos formulas parciales (`quantityByRisk()`, `quantityByMaxWeight()`) se extraen a metodos privados para que los dos metodos publicos no puedan divergir.
+- **Renombre `buildSuggestedQuantities()` -> `buildSuggestedPositions()` (y `$suggestedQuantities` -> `$suggestedPositions`).** El mapa ya no lleva cantidades sueltas sino posiciones sugeridas; el metodo es privado y su unico llamador es `renderPortfolio()`, asi que el nombre se ajusta al tipo en vez de quedar mintiendo durante años.
+- **UI: se dice dentro del badge que ya existe, no en una columna ni un aviso nuevo.** Cuando manda el tope de peso, `Web\RiskLevelsBadge` muestra `Sugerido X acc. (max. 20%)` con `title` explicativo ("Limitado al 20% maximo por posicion: el riesgo por operacion permitiria comprar mas."); cuando manda el riesgo por operacion, el badge queda **byte a byte igual que antes**. El porcentaje se toma del DTO, no se escribe a mano en la vista, para que cambiar la configuracion cambie tambien el texto. Sin CSS nuevo (reutiliza `.risk-badge-quantity` de `v2.50`) y sin tocar `Web\WatchlistPage`, que sigue llamando a `render()` con dos argumentos.
+- **Sin migracion de base de datos**: es un parametro de configuracion y una formula, no hay nada que persistir.
+
+Incluye:
+
+- `DTO/RiskLevels.php`: cuarto parametro `$maxPositionPercent` en `suggestedQuantity()`, metodo `isLimitedByMaxPositionWeight()` nuevo, privados `quantityByRisk()`/`quantityByMaxWeight()`.
+- `DTO/SuggestedPosition.php` (nuevo): cantidad sugerida + si la acoto el peso maximo + el peso maximo aplicado.
+- `config/risk_levels.php`: entrada `max_position_percent => 20.0`, documentada como el mismo umbral que `PortfolioConcentration::POSITION_WARNING_PERCENT`.
+- `Config/RiskLevelsConfig.php`: cuarto parametro opcional, `DEFAULT_MAX_POSITION_PERCENT` y `getMaxPositionPercent()`.
+- `Services/Application.php`: `buildSuggestedQuantities()` pasa a `buildSuggestedPositions()`, lee tambien `getMaxPositionPercent()` y compone un `SuggestedPosition` por ticker.
+- `Web/PortfolioPage.php`: el parametro `$suggestedQuantities` pasa a `$suggestedPositions` (`array<string,?SuggestedPosition>`) en `render()`/`renderHoldings()`.
+- `Web/RiskLevelsBadge.php`: tercer parametro tipado `?SuggestedPosition`, nota "(max. X%)" + `title` cuando manda el tope de peso, `formatPercent()` privado.
+- `tests/DTO/RiskLevelsTest.php`: el caso "se acota a lo maximo comprable" pasa a ser "se acota al peso maximo por posicion" con los numeros reales de `ELE.MC`; nuevos casos de tope por defecto sin pasar el argumento, retrocompatibilidad con `maxPositionPercent=100` (identico al comportamiento anterior) y `isLimitedByMaxPositionWeight()` en `false` con los cuatro inputs que ya devolvian `null`.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 7 ficheros PHP tocados/creados. `vendor/bin/phpunit`: **76 tests, 243 assertions**, sin regresiones (baseline confirmado antes de empezar: 73 tests / 234 assertions).
+
+Con la cartera real del usuario de prueba (`fvnavarro@hotmail.com`, id 3, unico en BD, **solo lecturas**: las 14 transacciones de la tabla siguen intactas antes y despues) contra Yahoo real via `CachedMarketDataProvider`, valor de cartera **2.182,83** y presupuesto de riesgo 32,74 (1,5%):
+
+| Ticker | Cantidad antes | Cantidad ahora | Peso antes | Peso ahora | Tope que manda |
+|---|---|---|---|---|---|
+| ADBE | 1,146431 | 1,146431 | 13,93% | 13,93% | riesgo |
+| AMS.MC | 8,426540 | 7,592456 | 22,20% | 20,00% | peso |
+| BBVA.MC | 24,827557 | 17,746595 | 27,98% | 20,00% | peso |
+| EDU | 6,687785 | 6,687785 | 17,29% | 17,29% | riesgo |
+| ELE.MC | 16,472629 | 10,335375 | 31,88% | 20,00% | peso |
+| MSA | 2,307057 | 2,248140 | 20,52% | 20,00% | peso |
+| PUIG.MC | 39,375538 | 25,862929 | 30,45% | 20,00% | peso |
+| REP.MC | 17,651976 | 17,269234 | 20,44% | 20,00% | peso |
+| TRV | 1,493040 | 1,135974 | 26,29% | 20,00% | peso |
+| VIPS | 35,139484 | 27,842235 | 25,24% | 20,00% | peso |
+
+La columna "antes" reproduce exactamente las 10 cifras que reporto `analista-mercado`. **Ninguna cantidad sugerida supera ya el 20%** del valor de la cartera (maximo 20,00%, en las 8 posiciones donde manda el tope de peso), y las dos posiciones mas volatiles (`ADBE`, `EDU`) siguen exactamente igual que antes porque en ellas manda el riesgo por operacion, no el tope. La suma de los 10 pesos sugeridos baja de 236,22% a 191,22% (siguen siendo 10 sugerencias independientes de "cuanto comprar de esta accion", no un reparto de cartera).
+
+Sin regresion en el resto de la pagina: `PortfolioPage::render()` renderizado dos veces con los mismos datos reales (10 recomendaciones, 10 `RiskLevels`), una con las posiciones nuevas y otra con las cantidades previas a `v2.65`; quitando el badge `.risk-badge-quantity` de ambos HTML, el resto es **identico byte a byte** (tarjetas de resumen, grafico de evolucion, tabla de posiciones con stop/objetivo, historial de operaciones y formularios). No cambia ningun stop-loss, objetivo, recomendacion, score ni metrica de rentabilidad: los `RiskLevels` de cada ticker son los mismos y este cambio solo toca la cantidad sugerida.
+
+Resultado esperado:
+
+En "Mi cartera", la cantidad sugerida por posicion deja de pedir de media un 23,6% de la cartera en una accion y queda acotada al mismo 20% con el que el panel de concentracion (`v2.61`) avisa de sobrepeso, de modo que las dos pantallas dejan de contradecirse. Cuando el tope de peso es el que manda, el badge lo dice ("(max. 20%)" mas tooltip) para que la cifra siga siendo explicable frente al 1,5% de riesgo por operacion configurado. `atr_multiplier` y `reward_ratio` se quedan como estaban, sin migracion de base de datos y sin alterar ningun calculo existente de stop-loss, objetivo, recomendacion, score ni rentabilidad.
+
+---
+
+## v2.66 - La cantidad sugerida deja de mezclar euros y dolares en el presupuesto de riesgo
+
+Estado: implementado y verificado en ddev con la cartera real del usuario.
+
+Sale del analisis de divisa que `analista-mercado` hizo el 2026-08-08 sobre la propia `v2.65`, implementada horas antes el mismo dia.
+
+Objetivo:
+
+`Application::buildSuggestedPositions()` usaba `Portfolio::getMarketValue()` como valor de la cartera, y ese metodo **suma euros y dolares sin convertir** por diseño historico (`v2.25`/`v2.48`: el resto de metricas de rentabilidad dependen de importes nativos y no se tocan). Medido sobre la cartera real: 2.182,83 en unidades mixtas frente a 2.025,44 € de valor real en euros, que es lo que ya calcula `PortfolioConcentrationCalculator` desde `v2.61`. Ademas ese presupuesto inflado se aplicaba contra precios en divisa nativa, asi que el mismo parametro configurado significaba dos cosas distintas segun la divisa del valor:
+
+| lo configurado | lo aplicado a un ticker en EUR | ...y a uno en USD |
+|---|---|---|
+| riesgo por operacion 1,50% | 1,62% | 1,40% |
+| peso maximo por posicion 20,00% (`v2.65`) | 21,55% | 18,64% |
+
+Es decir, el mismo "1,5%" era un 16% mas grande para un valor en euros que para uno en dolares, y las cinco sugerencias en euros (`AMS.MC`, `BBVA.MC`, `ELE.MC`, `PUIG.MC`, `REP.MC`) pesaban en realidad un 21,55% del valor en euros de la cartera: **seguian disparando el mismo aviso de concentracion del 20% que `v2.65` pretendia respetar**.
+
+Causa raiz encontrada:
+
+Dos conocimientos distintos vivian en el mismo numero. El presupuesto de riesgo y el peso maximo son propiedades de la **cartera** (se miden en la divisa base del inversor, EUR); el precio, el stop-loss y el ATR del que sale son propiedades del **instrumento** (viven en su divisa nativa). `v2.50` y `v2.65` tomaron el unico "valor de cartera" que habia a mano (`getMarketValue()`, mixto por diseño) y lo pasaron a una formula que multiplica contra precios nativos. `v2.61` ya habia tenido que resolver exactamente la misma pregunta ("¿cuanto vale esto en euros?") para poder pesar posiciones, pero la respuesta se quedo encerrada en un privado de `PortfolioConcentrationCalculator`, asi que la pantalla de al lado no pudo reutilizarla y volvio a equivocarse.
+
+Decisiones de arquitectura:
+
+- **La conversion se hace una sola vez, en la frontera del presupuesto; el stop-loss y el ATR se quedan en divisa nativa, sin tocar.** Convertirlos seria incorrecto: el stop es un nivel de precio del instrumento (la orden de un valor en dolares se coloca en dolares) y el ATR es una propiedad de su serie nativa. Se lleva el valor en euros de la cartera a la divisa del ticker (`valorEur / tipoCambioAEur(divisa)`) y de ahi en adelante toda la aritmetica de precios sigue siendo nativa: `cantidadPorRiesgo = presupuestoEnDivisaDelTicker / (precioNativo - stopNativo)`, `cantidadPorPeso = topeEnDivisaDelTicker / precioNativo`.
+- **Fuera de alcance a proposito: el efecto de segundo orden del propio tipo de cambio.** Si el stop salta dentro de unas semanas, el cambio EUR/USD de ese dia no sera el de hoy, asi que la perdida real en euros no sera exactamente el 1,5%. Se mide todo con el cambio de **hoy**, mismo criterio que `v2.61` usa para los pesos de concentracion: vale mas que las dos pantallas sean coherentes entre si que afinar ese segundo orden en una sola de ellas y que dejen de cuadrar. Queda escrito en el docblock de `SuggestedPositionCalculator`, no solo aqui.
+- **La regla "cuanto vale esto en euros" sube de `PortfolioConcentrationCalculator` a `Models\Portfolio`, que es quien tiene los datos.** `PortfolioService::getPortfolio()` ya construia el mapa completo de tipos de cambio de hoy por divisa (`buildTodayRates()`, una peticion por divisa, ya cacheada 15 min) y lo **descartaba** despues de usarlo; ahora viaja tambien a `Portfolio` como `array<string,?float> $ratesToEur` indexado por **divisa** (no por ticker, para no repetir el mismo cambio una vez por posicion). **Cero llamadas nuevas al proveedor de mercado.** `$usdToEurRate` se queda exactamente como estaba: `v2.25`/`v2.48` no se tocan.
+- **`PortfolioConcentrationCalculator` pasa a delegar, no a duplicar.** Su privado `marketValueEur()` ahora es una llamada a `Portfolio::getMarketValueEurFor()`, con la misma semantica de nulos ("todo o nada") y sin ningun cambio de comportamiento: `tests/Services/PortfolioConcentrationCalculatorTest.php` (`v2.61`, 11 casos) sigue en verde **sin tocar una sola linea**, que es la prueba de que es refactor puro. Tener la regla duplicada fue justo lo que permitio que la cantidad sugerida se equivocara mientras el panel de concentracion acertaba.
+- **`DTO\RiskLevels` no cambia de formula: solo de documentacion y de nombre de parametro.** Es formula pura (lo dice su propio docblock desde `v2.19`) y el conocimiento de divisas vive en la capa de servicios desde `v2.61`. `$portfolioValue` pasa a `$portfolioValueInTickerCurrency`, con el docblock diciendo explicitamente que es el valor total de la cartera expresado en la MISMA divisa que `$price` y que quien llama es responsable de convertirlo. Comprobado antes de renombrar que las cuatro llamadas existentes son posicionales (`Application.php`, `tests/DTO/RiskLevelsTest.php`), asi que el renombrado no rompe nada.
+- **`buildSuggestedPositions()` sale de `Application` a `Services\SuggestedPositionCalculator`.** Era un privado de una clase cuyo constructor abre una conexion a base de datos: imposible de testear sin montar media aplicacion, y este es precisamente el calculo que un test habria cazado antes de llegar a produccion. El colaborador nuevo sigue el patron exacto de `PortfolioConcentrationCalculator` (`v2.61`): servicio sin estado, instanciado en la raiz de composicion (`renderPortfolio()`), que decide el "cuando" y el conocimiento de divisas mientras `DTO\RiskLevels` calcula el "cuanto". Recibe `RiskLevelsConfig` por constructor (antes se instanciaba dentro del privado) para que un test pueda fijar riesgo y peso maximo sin depender de `config/risk_levels.php`. Por eso el test nuevo se llama `SuggestedPositionCalculatorTest` y no `ApplicationSuggestedPositionsCurrencyTest`: un fichero de test por clase, como el resto del proyecto. `Application` pierde tres `use` que quedaban sin usar (`DTO\RiskLevels`, `DTO\SuggestedPosition`, `Models\Portfolio`).
+- **Los dos modos de fallo del tipo de cambio se codifican por separado, aunque hoy colapsen en la practica.** Denominador (valor de la cartera en euros): **todo o nada**, sin el se devuelve `[]`, porque ese total es el presupuesto de **todas** las posiciones y, si faltase una por convertir, seria otro numero mas pequeño que infradimensionaria en silencio todas las demas sugerencias (no es regresion: ya se devolvia `[]` cuando faltaba el precio de una sola posicion). Numerador (llevar el presupuesto a la divisa de un ticker): **por ticker**, esa fila se queda con `null` y el resto conserva su sugerencia, porque el badge ya sabe pintar una sugerencia ausente. Son preguntas independientes ("¿existe el total?" frente a "¿se puede expresar en esta divisa?") y estan comentadas como tales en el codigo para que nadie las unifique despues.
+- **Sin migracion de base de datos**: no hay ningun dato nuevo que persistir, solo un mapa que ya se calculaba y se tiraba.
+
+Incluye:
+
+- `Models/Portfolio.php`: parametro nuevo `array<string,?float> $ratesToEur` (por divisa) en el constructor, `getRateToEurFor()`, `getMarketValueEurFor()`, `getMarketValueEur()` y los privados `holdingFor()`/`normalizedCurrencyFor()`; constante `BASE_CURRENCY = 'EUR'` (coincide con `PortfolioConcentration::BASE_CURRENCY` deliberadamente, sin depender de ella: el dominio no debe importar un DTO de otra capa, mismo criterio que `Config` en `v2.65`).
+- `Services/PortfolioService.php`: `getPortfolio()` pasa a `Portfolio` los `$todayRates` que ya calculaba.
+- `Services/SuggestedPositionCalculator.php` (nuevo): `compute(Portfolio $portfolio, array $riskLevels): array<string,?SuggestedPosition>`, con la conversion del presupuesto y las dos ramas de fallo documentadas.
+- `Services/PortfolioConcentrationCalculator.php`: `marketValueEur()` delega en `Portfolio::getMarketValueEurFor()`.
+- `Services/Application.php`: `renderPortfolio()` usa `new SuggestedPositionCalculator(new RiskLevelsConfig())`; se elimina el privado `buildSuggestedPositions()` y tres `use` que quedan sin usar.
+- `DTO/RiskLevels.php`: `$portfolioValue` -> `$portfolioValueInTickerCurrency` en `suggestedQuantity()`, `isLimitedByMaxPositionWeight()`, `quantityByRisk()` y `quantityByMaxWeight()`, con docblock nuevo sobre la divisa. Ninguna formula cambia.
+- `tests/Models/PortfolioMarketValueEurTest.php` (nuevo): 9 casos — cartera solo-EUR igual a la suma nativa, cartera mixta que convierte antes de sumar (y `getMarketValue()` dando otro numero, la suma mixta), sin tipo de cambio el total es `null`, posicion sin precio actual `null`, divisa desconocida `null`, `getRateToEurFor()` = 1.0 para EUR y el cambio real para USD, sin divisa/sin cambio `null`, ticker que no es posicion abierta `null`, cartera vacia cero.
+- `tests/Services/SuggestedPositionCalculatorTest.php` (nuevo, **el test que habria cazado el defecto**): 7 casos — dos posiciones equivalentes en euros (100 €/90 € y 200 $/180 $ con el cambio a 0,5) reciben la misma sugerencia en euros y el mismo riesgo real del 1,5%; acotadas por peso, las dos dan exactamente el 20% del valor en euros de la cartera; fixture con los datos reales del 2026-08-08 (2.025,44 €, USD->EUR 0,8649, `ADBE` 265,21 $/236,65 $ -> 1,230 acciones = 30,38 € = 1,50%, `ELE.MC` 42,24 €/40,25 € -> 9,590 acciones = 405,09 € = 20,00%); sin valor en euros no se sugiere nada; sin cambio de un ticker concreto solo esa fila se queda sin sugerencia; posicion sin `RiskLevels` sin sugerencia.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los 8 ficheros PHP tocados/creados. `vendor/bin/phpunit`: **91 tests, 295 assertions**, sin regresiones (baseline confirmado antes de empezar: 76 tests / 243 assertions de `v2.65`). `tests/Services/PortfolioConcentrationCalculatorTest.php` y `tests/DTO/RiskLevelsTest.php` pasan **sin haber sido modificados**.
+
+Con la cartera real del usuario de prueba (`fvnavarro@hotmail.com`, id 3, **solo lecturas**: las 14 transacciones siguen intactas, 10 posiciones equiponderadas a ~200 € de coste que el usuario reequilibro a proposito) contra Yahoo real via `CachedMarketDataProvider`. Valor mixto `getMarketValue()` = 2.182,83 (el que se usaba mal); valor real `getMarketValueEur()` = **2.025,44 €**:
+
+| Ticker | Div | Cant. antes | % peso real antes | % riesgo real antes | Cant. ahora | % peso real ahora | % riesgo real ahora | Tope |
+|---|---|---|---|---|---|---|---|---|
+| ADBE | USD | 1,146431 | 12,98% | 1,40% | 1,229931 | 13,93% | **1,50%** | riesgo |
+| AMS.MC | EUR | 7,592456 | 21,55% | 1,46% | 7,045004 | **20,00%** | 1,35% | peso |
+| BBVA.MC | EUR | 17,746595 | 21,55% | 1,16% | 16,466980 | **20,00%** | 1,07% | peso |
+| EDU | USD | 6,687785 | 16,12% | 1,40% | 7,174891 | 17,29% | **1,50%** | riesgo |
+| ELE.MC | EUR | 10,335375 | 21,55% | 1,01% | 9,590145 | **20,00%** | 0,94% | peso |
+| MSA | USD | 2,248140 | 18,64% | 1,36% | 2,411883 | **20,00%** | 1,46% | peso |
+| PUIG.MC | EUR | 25,862929 | 21,55% | 1,06% | 23,998087 | **20,00%** | 0,99% | peso |
+| REP.MC | EUR | 17,269234 | 21,55% | 1,58% | 16,024039 | **20,00%** | 1,47% | peso |
+| TRV | USD | 1,135974 | 18,64% | 1,06% | 1,218713 | **20,00%** | 1,14% | peso |
+| VIPS | USD | 27,842235 | 18,64% | 1,11% | 29,870130 | **20,00%** | 1,19% | peso |
+
+La columna "antes" reproduce exactamente las 10 cantidades que dejo escritas `v2.65`. Tras el arreglo, las 8 posiciones acotadas por peso quedan **todas exactamente en el 20,00%** del valor en euros de la cartera (antes: 21,55% las de euros y 18,64% las de dolares) y las 2 acotadas por riesgo arriesgan **exactamente el 1,50%** (antes: 1,40%, porque su presupuesto venia infravalorado al dividir un total inflado en unidades mixtas por un cambio que nunca se aplicaba). El porcentaje de riesgo de las acotadas por peso queda por debajo del 1,5% por definicion: ahi manda el otro tope.
+
+Sin regresion en el resto de la aplicacion, comprobado con los mismos datos reales: el valor en euros de **cada una de las 10 posiciones** calculado con la regla de `v2.61` reproducida aparte y con `Portfolio::getMarketValueEurFor()` es identico (comparacion estricta `!==`, ninguna diferencia), y el panel de concentracion da exactamente lo mismo que antes del cambio: total **2.025,438537 €**, HHI **0,100106**, 9,989 posiciones efectivas, top 3 = 31,18%, mismos pesos por sector. Tampoco cambia nada del analisis: los 10 stop-loss, objetivos, recomendaciones y scores son los mismos (`ADBE` stop 236,649649 / objetivo 322,330702 / BUY / 91,22, etc.), igual que la cabecera de rentabilidad (invertido 2.156,2031, valor 2.182,8312, latente 26,6281 = 1,2350%, realizado 0,00). Este cambio solo toca la cantidad sugerida.
+
+Correccion sobre `v2.65`: su tabla afirmaba que `ELE.MC` bajaba "de 31,88% a 20,00%", pero ese porcentaje estaba expresado en unidades mixtas. En euros reales aquella sugerencia era del **21,55%**, o sea que seguia por encima del umbral de aviso de concentracion que `v2.65` decia respetar. Con `v2.66` la afirmacion de `v2.65` pasa a ser literalmente cierta.
+
+Resultado esperado:
+
+El "1,5% de riesgo por operacion" y el "20% maximo por posicion" significan por fin lo mismo para un valor en euros que para uno en dolares, medidos ambos sobre el valor real en euros de la cartera. La cantidad sugerida deja de contradecir al aviso de concentracion de `v2.61` tambien en la practica, y no solo en las unidades en que se miraba. El stop-loss, el objetivo y el ATR siguen en divisa nativa, sin ninguna conversion, y no cambia ninguna recomendacion, score, alerta ni metrica de rentabilidad. Cero llamadas nuevas al proveedor de mercado y sin migracion de base de datos.
+
+---
+
+## v2.67 - El grafico de evolucion de la cartera pasa a euros y deja de confundir un hueco de datos con una caida
+
+Estado: implementado y verificado en ddev con la cartera real del usuario.
+
+Continuacion directa de `v2.66`: `analista-mercado` encontro el mismo defecto de divisa en otros puntos de "Mi cartera", y este es el de la serie historica.
+
+Objetivo:
+
+`PortfolioService::getValueHistory()` tenia dos defectos distintos en la misma linea (`$value += $quantity * $close;`):
+
+1. **Sumaba cierres nativos de euros y de dolares sin convertir**, exactamente igual que hacia `getMarketValue()` (`v2.66`). Con la composicion actual de la cartera del usuario (50,25% EUR / 49,75% USD) eso sobrevaloraba el patrimonio en euros: el ultimo punto de la serie decia 1.751,59 cuando en euros eran 1.625,44 € (+7,8%).
+2. **Si un ticker no tenia cierre en una fecha concreta, su posicion se omitia en silencio de la suma de ese dia.** Un hueco de datos se dibujaba entonces exactamente igual que una caida de valor. Ocurrio de verdad: el 2026-07-31 ni `REP.MC` ni `AMS.MC` tenian vela, y la serie dibujo 456,72 tras 749,23 el dia anterior (**-39%**) y 1.231,10 al dia siguiente (+169%). No paso nada de eso en el mercado; faltaban dos de las cuatro posiciones.
+
+Causa raiz encontrada:
+
+Los dos defectos son el mismo error de fondo, cometido dos veces: dar por hecho que lo que falta no importa. El primero da por hecho que un numero sin divisa se puede sumar a otro; el segundo, que una posicion sin cierre vale cero. En ambos casos el resultado no es "casi correcto", es otro numero, y ademas uno que el usuario no puede distinguir del bueno mirando el grafico. La docstring del metodo llegaba a describir el defecto 2 como simplificacion asumida ("esa accion simplemente no aporta valor ese dia... un desajuste pequeño en dias festivos"), pero medido con datos reales el desajuste era del 39% en un dia.
+
+Decisiones de arquitectura:
+
+- **Hueco de datos: se arrastra el ultimo cierre conocido (forward-fill), no se descarta el dia.** Decision tomada con datos reales delante, no por costumbre. Sobre los mismos 10 tickers de la cartera (5 en EUR, 5 en USD) y los 2 años de historico que sirve Yahoo: la union de sesiones tiene **517 dias**, de los cuales **494 (95,6%) tienen el cierre de los 10** y **23 (4,4%) tienen algun hueco**; en **22 de esos 23 faltan 5 tickers a la vez**, es decir, es el festivo de un mercado entero (Madrid o Nueva York, que no cierran los mismos dias). Descartar el dia completo habria borrado un 4,4% de la serie de forma sistematica justo en los festivos de un mercado, y en la serie corta del usuario habria borrado 1 de 8 puntos (12,5%). El forward-fill es ademas lo habitual en series financieras y no inventa informacion: usa el ultimo precio que de verdad existia ese dia. Nunca mira hacia adelante (se recorren las fechas en orden ascendente y el ultimo cierre conocido se actualiza antes de valorar el dia).
+- **Si aun asi una posicion no se puede valorar, se descarta el DIA ENTERO, nunca la posicion.** No hay ningun cierre anterior que arrastrar (el hueco esta antes de la primera vela de ese ticker, o su historico no se pudo descargar), o falta el tipo de cambio de su divisa: entonces ese dia sale de la serie. Es el mismo criterio de "todo o nada" que ya usan `Portfolio::getMarketValueEur()` (`v2.66`) y `PortfolioConcentrationCalculator` (`v2.61`). Lo unico que queda descartado por completo es la tercera opcion, la que habia: omitir la posicion en silencio.
+- **La serie usa el tipo de cambio de CADA fecha, no el de hoy.** Aqui `v2.67` se separa a proposito de `v2.61`/`v2.66`, que miden con el cambio de hoy, y lo hace porque la pieza que hacia falta ya existia en el proyecto: `PortfolioService` ya descargaba el historico diario de `USDEUR=X` (una unica peticion por divisa, ya cacheada) para calcular el coste base en euros de cada compra desde `v2.48`. Comprobado con datos reales que da para toda la serie: `USDEUR=X` tiene 518 velas (2024-08-07 a 2026-08-07) y solo **1 de los 517 dias** de la union no tiene vela exacta de cambio, que se resuelve con la sesion anterior mas cercana. Usar el cambio de hoy para toda la serie habria sido aceptable y coherente con `v2.61`/`v2.66`, pero en una serie historica es una simplificacion mucho mas fuerte que en un valor puntual (no dice lo que valia la cartera en euros aquel dia, sino lo que valdria si el cambio de aquel dia hubiese sido el de hoy), y el coste de hacerlo bien era cero peticiones nuevas. **No queda ninguna limitacion conocida de tipo de cambio historico en esta serie**: el unico punto que sigue midiendose con el cambio de hoy es el valor actual de la cartera, que es de hoy por definicion.
+- **La regla "cuanto valia esta divisa en euros aquel dia" sube a `Services\HistoricalExchangeRateService`, hermano historico de `ExchangeRateService`.** Era un par de privados de `PortfolioService` (`buildHistoricalRatesByCurrency()` + `closestRateOnOrBefore()`) y ahora la necesitan dos calculos distintos; duplicarla habria repetido exactamente el error de `v2.66` (la regla encerrada en un privado, la pantalla de al lado volviendo a equivocarse). Memoriza la serie descargada y cada fecha ya resuelta, de modo que preguntar 517 veces por el mismo par divisa/fecha no cuesta ninguna peticion extra. Una diferencia deliberada con su hermano de contado: una divisa **desconocida** (cadena vacia porque el proveedor no devolvio la ficha del ticker) devuelve `null` y no `1.0`, porque dar por hecho que un importe ya esta en euros es justamente el error silencioso que esta version corrige.
+- **El calculo sale de `PortfolioService` a `Services\PortfolioValueHistoryCalculator`, y recibe el `Portfolio`, no el `User`.** Mismo patron y misma motivacion que `SuggestedPositionCalculator` en `v2.66`: era codigo de una clase cuyo constructor necesita un `TransactionRepository` (y con el, una conexion a base de datos), imposible de probar sin montar media aplicacion, y este es precisamente el calculo que un test habria cazado. Recibir el `Portfolio` que `renderPortfolio()` ya tiene, en vez del `User`, ahorra ademas releer las transacciones de la base de datos y da acceso a la divisa de cada ticker sin ninguna consulta nueva al proveedor. Como `Portfolio::getTransactions()` entrega el historial de la mas reciente a la mas antigua (asi se muestra en pantalla), la fecha de inicio de la serie se calcula con `min()` sobre todas las fechas y no con el primer elemento de la lista, que era una suposicion de orden que nadie garantizaba.
+- **Sin migracion de base de datos y sin llamadas nuevas al proveedor de mercado**: los cierres por ticker ya se pedian, y el historico de cambio por divisa tambien (`v2.48`), ambos por `CachedMarketDataProvider`.
+
+Incluye:
+
+- `Services/HistoricalExchangeRateService.php` (nuevo): `getRateToEurOn(string $currency, string $date): ?float`, con la serie por divisa y las fechas ya resueltas memorizadas.
+- `Services/PortfolioValueHistoryCalculator.php` (nuevo): `compute(Portfolio $portfolio): array{labels, values}`, con el forward-fill, la conversion a euros por fecha y el descarte del dia completo documentados en el codigo.
+- `Services/PortfolioService.php`: desaparece `getValueHistory()` y sus privados `quantitiesHeldOn()`, `buildHistoricalRatesByCurrency()` y `closestRateOnOrBefore()`; `buildEurPositions()` pasa a delegar el tipo de cambio historico en el servicio nuevo (ver `v2.68` para el resto de cambios de este fichero).
+- `Services/Application.php`: `renderPortfolio()` construye el calculador con el proveedor y el servicio de cambio historico ya existentes.
+- `Web/PortfolioPage.php`: el titulo del grafico y la leyenda del dataset dicen "(EUR)"; el mensaje de "todavia no hay suficiente historial" deja de hablar solo de dias transcurridos y menciona la condicion real (cierre de todas las posiciones y tipo de cambio de sus divisas).
+- `tests/Services/PortfolioValueHistoryCalculatorTest.php` (nuevo): 10 casos — serie de una cartera solo en euros; conversion con el cambio de **cada dia** (precio en dolares plano y valor en euros cayendo, que es lo que vio el inversor); un hueco arrastra el ultimo cierre y el dia se conserva (**el caso que reproduce el desplome falso**); un hueco sin ningun cierre anterior descarta el dia entero; un ticker sin historico descargable no cuenta como cero; sin tipo de cambio no hay serie; una divisa desconocida no se da por euros; la serie empieza en la operacion mas antigua sea cual sea el orden de la lista; los dias sin ninguna posicion abierta no son dias de valor cero; cartera vacia.
+- `tests/Services/HistoricalExchangeRateServiceTest.php` (nuevo): 6 casos — cambio de la fecha exacta, caida a la sesion anterior mas cercana (nunca a la siguiente), antes del historico disponible no hay cambio, EUR no necesita conversion (con espacios y minusculas), divisa desconocida sin cambio, divisa sin historico sin cambio.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en todos los ficheros tocados. `vendor/bin/phpunit`: **114 tests, 341 assertions** contando tambien `v2.68` (baseline confirmado antes de empezar: 91 tests / 295 assertions de `v2.66`), sin ninguna regresion.
+
+Con la cartera real del usuario de prueba (`fvnavarro@hotmail.com`, id 3, **solo lecturas**: las 14 transacciones y las 10 posiciones equiponderadas a ~200 € que el usuario reequilibro a proposito siguen intactas) contra Yahoo real via `CachedMarketDataProvider`:
+
+| Fecha | Serie antes (mixta, con huecos) | Serie ahora (EUR, con arrastre) |
+|---|---|---|
+| 2026-07-29 | 564,08 | 507,57 |
+| 2026-07-30 | 749,23 | 691,86 |
+| 2026-07-31 | **456,72** (-39,0%) | **697,18** (+0,8%) |
+| 2026-08-03 | 1.231,10 | 1.107,61 |
+| 2026-08-04 | 1.231,64 | 1.111,05 |
+| 2026-08-05 | 1.740,94 | 1.617,71 |
+| 2026-08-06 | 1.744,88 | 1.619,61 |
+| 2026-08-07 | 1.751,59 | 1.625,44 |
+
+**8 puntos antes y 8 puntos ahora**: el forward-fill no pierde ningun dia (descartar el dia entero habria dejado 7). El salto raro que reporto el usuario era el 2026-07-31 y desaparece: de -39% a +0,8%. El ultimo punto de la serie (1.625,44 € el 2026-08-07) cuadra exactamente con el valor actual de la cabecera (2.025,44 €, ver `v2.68`) sumandole las **cuatro compras de hoy** (2026-08-08: `REP.MC`, `MSA`, `PUIG.MC` y `VIPS`, 100 € cada una) que todavia no tienen cierre historico: 1.625,44 + 400,00 = 2.025,44 €.
+
+Sin regresion en el resto de la aplicacion, comprobado con los mismos datos reales: el panel de concentracion de `v2.61` sigue dando **2.025,438537 €**, HHI **0,100106**, 9,989 posiciones efectivas y top 3 = 31,18%; los 10 scores, stop-loss y objetivos son identicos a los de `v2.66` (`ADBE` 91,22 / stop 236,649649 / objetivo 322,330702, `TRV` 94,33 / stop 362,379937, etc.) y las 10 cantidades sugeridas reproducen exactamente la tabla de `v2.66` (`ADBE` 1,229931, `AMS.MC` 7,045004, `ELE.MC` 9,590145...).
+
+Resultado esperado:
+
+El grafico de evolucion de "Mi cartera" mide en euros, la misma unidad que el resto de la pagina, y un festivo de la bolsa de Madrid o de Nueva York deja de dibujarse como un desplome del patrimonio. Cada punto de la serie usa el tipo de cambio que de verdad habia ese dia, asi que la linea refleja tambien el efecto de la divisa, que es parte de lo que gana o pierde un inversor en euros. Cero llamadas nuevas al proveedor, sin migracion de base de datos y sin tocar ninguna recomendacion, score, stop-loss, alerta ni cantidad sugerida.
+
+---
+
+## v2.68 - Convencion de divisas en "Mi cartera": cada valor en la suya, los totales siempre en euros
+
+Estado: implementado y verificado en ddev con la cartera real del usuario.
+
+Objetivo:
+
+En "Mi cartera" convivian importes en unidades distintas sin avisar de ello. El caso mas visible: la cabecera decia que la cartera valia **2.182,83** (`getMarketValue()`, suma de euros y dolares sin convertir) mientras el panel de concentracion, tres centimetros mas abajo, decia **2.025,44 €** (`v2.61`, que si convierte). Los dos numeros eran "el valor de la cartera" y ninguno de los dos explicaba por que no coincidian.
+
+El usuario eligio explicitamente la convencion, entre tres alternativas que se le presentaron (todo en euros; todo en divisa nativa; nativa con equivalencia en euros al lado):
+
+- **Cada importe se muestra en la divisa en la que ese valor cotiza realmente, con su equivalencia en euros al lado**: `ADBE 265,21 $ (229,38 €)`, y `REP.MC 25,28 €` sin equivalencia, porque repetir `(25,28 €)` no aporta nada.
+- **Los totales y agregados de la cartera van siempre en euros**, porque mezclan divisas y por tanto no tienen ninguna divisa nativa en la que expresarse. La divisa de referencia del inversor es la unica unidad en la que un total significa algo.
+
+Ademas, los porcentajes de rentabilidad de la cabecera eran medias ponderadas con pesos equivocados: al sumar importes nativos, una posicion en dolares pesaba 1/0,8649 = **1,156 veces mas** de lo que le corresponde. Hoy el efecto es pequeño porque la cartera esta casi equiponderada, pero crece con cualquier desequilibrio.
+
+Decisiones de arquitectura:
+
+- **Cada importe en euros se mide en el momento en que ocurrio, no todo al cambio de hoy.** Lo comprado se convierte con el cambio del dia de cada compra (los euros que de verdad salieron de la cuenta, criterio ya establecido en `v2.48` por posicion) y el valor de mercado con el de hoy (`v2.61`/`v2.66`). El beneficio latente total incluye por tanto el efecto del tipo de cambio, igual que ya lo incluia la columna "en EUR (con cambio)" de cada fila.
+- **Consecuencia deliberada: el porcentaje elegido no es el que salia de "arreglar solo las unidades".** Medido sobre la cartera real: convertir tambien el coste al cambio de hoy daria 2.000,00 € invertidos y **1,2719%** (el numero que reporto `analista-mercado`); con el coste al cambio de cada compra sale 2.007,50 € invertidos y **0,8935%**. Se elige el segundo porque es el unico que cuadra con lo que ya muestra la tabla de posiciones: la suma de los beneficios en euros de las 10 filas (`v2.48`) es **17,937043 €**, exactamente el beneficio latente de la cabecera. Con el otro criterio la cabecera habria dicho 25,44 € y las filas 17,94 €, reintroduciendo en pequeño el mismo pecado que esta version corrige: dos cifras del mismo concepto en la misma pantalla que no cuadran.
+- **Nada de lo nativo se toca: se añade en paralelo, exactamente como hizo `v2.48`.** `getInvestedAmount()`, `getMarketValue()`, `getUnrealizedProfit()`, `getRealizedProfit()`, `getTotalBoughtAmount()` y sus porcentajes siguen existiendo con la misma semantica y el mismo comportamiento; lo que cambia es que la pagina consume los hermanos en euros. Comprobado uno a uno quien llama a cada metodo antes de tocar nada: `PortfolioCsvExporter` (nativo, ver mas abajo) y `PortfolioPage`.
+- **Los dos unicos totales que no se pueden deducir de las posiciones abiertas viajan desde `PortfolioService`.** El beneficio ya realizado y el importe total comprado hablan tambien de posiciones **ya cerradas**, que por definicion no son un `Holding`; y su conversion necesita el tipo de cambio del dia de cada operacion, que solo conoce `PortfolioService`. Llegan a `Portfolio` como dos `?float` de constructor con el mismo criterio de nulabilidad que el resto. El resto (invertido, valor, latente y sus porcentajes) se deriva de los `Holding`, sin duplicar ninguna regla.
+- **`buildEurPositions()` se convierte en `buildEurAccounting()` y pasa a cubrir todos los tickers, tambien los que ya cotizan en euros (con cambio 1).** Antes solo miraba las divisas extranjeras, asi que no habia forma de sumar un total de la cartera con una unica regla. Sigue entregando a `Holding::getInvestedAmountEur()` un `null` para los tickers en euros, tal y como decidio `v2.48` para no duplicar el mismo importe en la interfaz: eso no cambia. Y sigue aplicando el mismo criterio de coste medio que el bucle nativo de `getPortfolio()` (las ventas restan coste medio, no precio de venta), ahora acumulando ademas el beneficio realizado en euros (venta al cambio de su dia menos coste medio en euros).
+- **Todo o nada tambien aqui: sin el tipo de cambio de una sola operacion, el total es `null` y la tarjeta muestra "-".** Es peor enseñar un total al que le falta una posicion, indistinguible del bueno, que reconocer que hoy no se puede calcular; mismo criterio que `getMarketValueEur()` (`v2.66`) y que el panel de concentracion (`v2.61`).
+- **Filas de posiciones: la equivalencia en euros va donde ayuda a decidir, no en cada celda.** Con 10 columnas en una tabla `table-compact`, poner dos importes en las cuatro columnas de dinero la haria ilegible, asi que se aplica un criterio explicito: **precio actual** e **invertido** llevan equivalencia (son "cuanto vale hoy" y "cuanto me costo", las dos cifras que el usuario compara), el **precio medio** no la lleva (es un nivel de precio del instrumento, no dinero del inversor; su equivalente al cambio de hoy seria una ficcion y lo que costo en euros ya esta en "Invertido"), y el **beneficio** conserva la linea etiquetada "en EUR (con cambio)" de `v2.48` en vez de colapsarla en un parentesis: ahi el numero en euros **no es** una conversion del nativo (incluye el efecto de la divisa desde la compra), y un parentesis sin etiqueta daria a entender lo contrario. La equivalencia es un `<span class="muted">` en la misma linea, no un `<br>`: no añade altura de fila.
+- **Historial de operaciones: dos columnas ("Precio (EUR)" y "Precio (USD)", `v2.25`) se funden en una.** Aquella version mostraba las dos divisas fijas y un "-" en la que no aplicaba, lo que ademas no escala a una tercera divisa. Ahora hay una columna "Precio" con el precio nativo y su equivalencia entre parentesis, que es la convencion nueva y elimina de paso una columna con guiones. Se mantiene el criterio de `v2.25` de convertir con el cambio de **hoy** (es una vista, no una metrica de rentabilidad) y la nota al pie lo dice.
+- **La exportacion CSV no cambia.** `PortfolioCsvExporter` mantiene sus columnas nativas y sus dos columnas de precio: un CSV se abre en una hoja de calculo, donde una columna por concepto vale mas que un texto con parentesis dentro, y cambiar las cabeceras romperia cualquier hoja que el usuario ya tenga montada encima. Es una decision consciente de divergencia entre la vista HTML y la exportacion, no un olvido.
+- **Alcance limitado a "Mi cartera", a proposito.** `DashboardPage`, `StockDetailPage` y `WatchlistPage` no se tocan: ahi cada ticker se mira por separado en su divisa nativa, ya cumplen `v2.27` y no hay ningun agregado que mezcle divisas. Extender la equivalencia en euros a esas pantallas seria otro cambio, y no lo ha pedido el usuario.
+- **Sin migracion de base de datos y sin llamadas nuevas al proveedor de mercado**: todos los tipos de cambio que hacen falta ya se pedian (`v2.48` los historicos, `v2.61`/`v2.66` los de hoy).
+
+Incluye:
+
+- `Models/Portfolio.php`: parametros nuevos `?float $realizedProfitEur` y `?float $totalBoughtAmountEur`; metodos `getInvestedAmountEurFor()`, `getInvestedAmountEur()`, `getUnrealizedProfitEur()`, `getUnrealizedProfitEurPercent()`, `getRealizedProfitEur()`, `getTotalBoughtAmountEur()`, `getOverallProfitEur()` y `getOverallProfitEurPercent()`; `BASE_CURRENCY` pasa de `private` a `public` (ya la usan la capa de presentacion y `PortfolioService` para decidir que se convierte).
+- `Services/PortfolioService.php`: `buildEurPositions()` -> `buildEurAccounting()` (todos los tickers, con `realizedEur` y `boughtEur` ademas del coste), privado nuevo `sumEur()` con la regla de todo o nada, y los dos totales nuevos pasados a `Portfolio`.
+- `Web/PortfolioPage.php`: `renderCards()` en euros con nota explicativa de la convencion; equivalencia en euros en precio actual e invertido de cada fila y en el precio de cada operacion; historial con una unica columna "Precio"; helpers nuevos `eurEquivalent()`, `currentPriceEur()` y `eurMoney()`; se eliminan `nullableProfit()`, `nullableMoney()`, `nullableEur()`, `nullableUsd()` y `money()`, que ya no usa nadie.
+- `tests/Models/PortfolioEurTotalsTest.php` (nuevo): 7 casos — los totales se suman en euros y no en unidades mixtas (225/247,5 nativos frente a 200/220 €); el total en euros es **exactamente** la suma de las metricas por posicion de `v2.48`; el porcentaje deja de depender de los pesos por divisa (5,00% real frente al 4,44% que daba la media mixta); el rendimiento general suma lo ya realizado; sin el coste en euros de una posicion no hay total; sin el beneficio realizado en euros no hay rendimiento general; cartera vacia.
+
+Verificado en ddev con...:
+
+`php -l` sin errores en los ficheros tocados. `vendor/bin/phpunit`: **114 tests, 341 assertions** contando tambien `v2.67` (baseline: 91 tests / 295 assertions), sin regresiones; en particular `tests/Services/PortfolioConcentrationCalculatorTest.php`, `tests/Services/SuggestedPositionCalculatorTest.php`, `tests/Models/PortfolioMarketValueEurTest.php` y `tests/DTO/RiskLevelsTest.php` pasan **sin haber sido modificados**.
+
+Con la cartera real del usuario de prueba (`fvnavarro@hotmail.com`, id 3, **solo lecturas**, 14 transacciones y 10 posiciones intactas) contra Yahoo real:
+
+| Tarjeta de cabecera | Antes (unidades mixtas) | Ahora (EUR) |
+|---|---|---|
+| Invertido abierto | 2.156,20 | **2.007,50 €** |
+| Valor actual | 2.182,83 | **2.025,44 €** |
+| Beneficio latente | 26,63 (**1,2350%**) | **17,94 € (0,8935%)** |
+| Beneficio realizado | 0,00 | **0,00 €** |
+| Rendimiento general | 26,63 (1,2350%) | **17,94 € (0,8935%)** |
+
+La cifra de la cabecera (**2.025,44 €**) coincide ya exactamente con el "Valor total (EUR)" del panel de concentracion, que sigue dando lo mismo que antes del cambio: **2.025,438537 €**, HHI **0,100106**, 9,989 posiciones efectivas de 10, top 3 = 31,18%, divisas 50,25% EUR / 49,75% USD. El beneficio latente de la cabecera (17,937043 €) es identico a la suma de los beneficios en euros de las 10 filas.
+
+Filas renderizadas con los datos reales, tal como quedan: `ADBE` precio actual `265,21 $ (229,38 €)` — el ejemplo exacto que puso el usuario — e invertido `231,24 $ (200,67 €)`; `REP.MC` precio actual `25,28 €` e invertido `200,00 €`, sin equivalencia repetida. Historial: `2026-08-08 Compra MSA 194,19 $ (167,95 €)` y `2026-08-05 Compra ELE.MC 41,64 €`.
+
+Nada del analisis cambia, comprobado con los mismos datos reales: los 10 scores, stop-loss, objetivos y recomendaciones son identicos a los de `v2.66` y las 10 cantidades sugeridas reproducen su tabla exactamente (`ADBE` 1,229931, `AMS.MC` 7,045004, `BBVA.MC` 16,466980, `EDU` 7,174891, `ELE.MC` 9,590145, `MSA` 2,411883, `PUIG.MC` 23,998087, `REP.MC` 16,024039, `TRV` 1,218713, `VIPS` 29,870130). Tampoco cambia ninguna alerta: esta version no toca `AlertService`.
+
+Resultado esperado:
+
+"Mi cartera" habla una sola lengua. Los cinco totales de la cabecera estan en euros y coinciden con el panel de concentracion y con la serie de evolucion (`v2.67`); cada precio e importe de una posicion o de una operacion se ve en la divisa en la que cotiza, con su equivalencia en euros al lado cuando aporta algo; y los porcentajes de rentabilidad dejan de estar ponderados por un artefacto de la divisa. Sin migracion de base de datos, sin llamadas nuevas al proveedor y sin tocar el motor de analisis, las recomendaciones, los stop-loss ni las cantidades sugeridas.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
 
-- **Tendencia del propio score en el tiempo (re-rating) — captura ya implementada (`v2.53`), visualizacion pendiente de que se acumule historial real.** Se podria comparar la puntuacion (o una categoria como FUNDAMENTAL/TECHNICAL) de un ticker hoy contra hace N dias, para distinguir una accion cuyo score mejora progresivamente de otra con el mismo score absoluto pero deteriorandose — una señal de trayectoria distinta a cualquier nivel puntual que el motor ya calcula hoy, y una idea genuinamente distinta de las de tendencia tecnica ya descartadas (contexto de tendencia en RSI, sobreextension): esta es sobre la trayectoria del score compuesto, no de un indicador tecnico aislado. El bloqueo original (`daily_rankings`, `v1.6`, solo tenia una fecha real capturada, `2026-07-31`, por no correr ningun cron de verdad en ddev/local) ya no aplica: `v2.53` añade `score_history` (una fila por ticker/dia) y la rellena de forma organica en cada visita real a la ficha de detalle, sin depender de un cron. Sigue sin implementarse ninguna lectura de tendencia ni UI: no hay todavia semanas de historial real acumulado para que la señal sea fiable. Retomar cuando `score_history` tenga suficiente profundidad temporal (semanas, no dias) y diseñar entonces la lectura/visualizacion con datos reales delante.
+- **Tendencia del propio score en el tiempo (re-rating) — captura ya implementada (`v2.63`), visualizacion pendiente de que se acumule historial real.** Se podria comparar la puntuacion (o una categoria como FUNDAMENTAL/TECHNICAL) de un ticker hoy contra hace N dias, para distinguir una accion cuyo score mejora progresivamente de otra con el mismo score absoluto pero deteriorandose — una señal de trayectoria distinta a cualquier nivel puntual que el motor ya calcula hoy, y una idea genuinamente distinta de las de tendencia tecnica ya descartadas (contexto de tendencia en RSI, sobreextension): esta es sobre la trayectoria del score compuesto, no de un indicador tecnico aislado. El bloqueo original (`daily_rankings`, `v1.6`, solo tenia una fecha real capturada, `2026-07-31`, por no correr ningun cron de verdad en ddev/local) ya no aplica: `v2.63` añade `score_history` (una fila por ticker/dia) y la rellena de forma organica en cada visita real a la ficha de detalle, sin depender de un cron. Sigue sin implementarse ninguna lectura de tendencia ni UI: no hay todavia semanas de historial real acumulado para que la señal sea fiable. Retomar cuando `score_history` tenga suficiente profundidad temporal (semanas, no dias) y diseñar entonces la lectura/visualizacion con datos reales delante.
 
-- **Crecimiento de dividendo (estilo Chowder Rule) en la categoria DIVIDEND — implementado en `v2.54`.** Añadido un tercer componente a `FundamentalAnalyzer::dividend()` (CAGR de dividendo anualizado a 5 años, `Services\DividendGrowthCalculator`), financiado reduciendo `yieldPoints` de 3,5 a 2,5 pts para mantener el techo de la categoria DIVIDEND en 5,0. Backtest real via `BacktestingService` (pendiente en el analisis original de `analista-mercado`, que solo pudo hacer una prueba proxy inconclusa) ya ejecutado antes/despues sobre `largecap60`/`financials`/`consumer_staples`/`ibex35`: resultado neutro (cambios de avg_buy_forward_return <0,4pp en 3 de 4 universos, ningun colapso de señales BUY como el de `CurrentRatio` en `v2.51`), ver `v2.54` para el detalle completo y la limitacion conocida sobre dividendos especiales.
+- **Crecimiento de dividendo (estilo Chowder Rule) en la categoria DIVIDEND — implementado en `v2.64`.** Añadido un tercer componente a `FundamentalAnalyzer::dividend()` (CAGR de dividendo anualizado a 5 años, `Services\DividendGrowthCalculator`), financiado reduciendo `yieldPoints` de 3,5 a 2,5 pts para mantener el techo de la categoria DIVIDEND en 5,0. Backtest real via `BacktestingService` (pendiente en el analisis original de `analista-mercado`, que solo pudo hacer una prueba proxy inconclusa) ya ejecutado antes/despues sobre `largecap60`/`financials`/`consumer_staples`/`ibex35`: resultado neutro (cambios de avg_buy_forward_return <0,4pp en 3 de 4 universos, ningun colapso de señales BUY como el de `CurrentRatio` en `v2.51`), ver `v2.64` para el detalle completo y la limitacion conocida sobre dividendos especiales.
 

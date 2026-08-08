@@ -10,10 +10,7 @@ use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\DTO\RiskLevels;
-use StockAnalyzer\Models\Company;
-use StockAnalyzer\Models\Fundamentals;
 use StockAnalyzer\Models\HistoricalQuote;
-use StockAnalyzer\Models\Quote;
 use StockAnalyzer\Models\Stock;
 use StockAnalyzer\Services\BacktestingService;
 use StockAnalyzer\Services\RiskLevelsCalculator;
@@ -33,7 +30,7 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  * esperado, no solo una version simplificada). Para conseguir una
  * recomendacion BUY/STRONG BUY de forma determinista se usa:
  *
- * - Fundamentales excelentes y fijos (ver excellentFundamentals()), que por
+ * - Fundamentales excelentes y fijos (ver SyntheticStock), que por
  *   si solos ya cubren FUNDAMENTAL/VALUATION/QUALITY al maximo.
  * - Un historico con una tendencia alcista suave y constante antes del dia
  *   de entrada (ver baselineQuotes()): rango diario (high-low) constante
@@ -71,50 +68,13 @@ final class BacktestingServiceTest extends TestCase
         );
     }
 
-    private function company(): Company
-    {
-        return new Company('TST', 'Test Corp', 'technology', 'software', 'NASDAQ', 'USD');
-    }
-
     /**
-     * Fundamentales holgadamente excelentes en todas las ramas de
-     * FundamentalAnalyzer, para que FUNDAMENTAL/VALUATION/QUALITY puntuen
-     * cerca de su maximo y la recomendacion final dependa solo de la parte
-     * tecnica (que es la que varia entre tests).
+     * Stock sintetico con fundamentales excelentes, compartido con el resto
+     * de tests de BacktestingService (ver `SyntheticStock`).
      */
-    private function excellentFundamentals(): Fundamentals
-    {
-        return new Fundamentals(
-            per: 10.0,
-            peg: 0.5,
-            roe: 25.0,
-            roic: null,
-            eps: 5.0,
-            marketCap: 1_000_000_000.0,
-            debtToEquity: 0.1,
-            freeCashFlow: 100_000_000.0,
-            evToEbitda: 6.0,
-            priceToBook: 1.0,
-            dividendYield: null,
-            payoutRatio: null,
-            grossMargin: 60.0,
-            operatingMargin: 30.0,
-            netMargin: 25.0,
-            revenueGrowth: 20.0,
-            currentRatio: 2.0
-        );
-    }
-
     private function stock(): Stock
     {
-        // La Quote del propio Stock no la usa BacktestingService (construye
-        // una Quote nueva por cada dia via stockAt()); solo importan la
-        // Company y los Fundamentals.
-        return new Stock(
-            $this->company(),
-            new Quote(100.0, 100.0, 100.0, 100.0, 100.0, 1_000_000, new DateTimeImmutable('2024-01-01')),
-            $this->excellentFundamentals()
-        );
+        return SyntheticStock::create();
     }
 
     /**

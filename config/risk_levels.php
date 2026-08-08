@@ -29,4 +29,20 @@ return [
     // trading cuantitativo), usado por DTO\RiskLevels::suggestedQuantity()
     // para sugerir cuantas acciones comprar dado el stop-loss calculado.
     'position_risk_percent' => 1.5,
+
+    // Peso maximo que se admite para una sola posicion, en % del valor de
+    // la cartera: acota la cantidad sugerida por 'position_risk_percent'
+    // (ver DTO\RiskLevels::suggestedQuantity()). Sin este tope, la regla
+    // del riesgo por operacion pide posiciones tanto mayores cuanto menos
+    // volatil es el valor (peso = riesgo% / (atr_multiplier x ATR%)), y en
+    // la practica llega a sugerir varias veces la cartera entera repartida
+    // entre unas pocas posiciones.
+    //
+    // Este 20% es deliberadamente el MISMO umbral que
+    // DTO\PortfolioConcentration::POSITION_WARNING_PERCENT, que es con el
+    // que "Mi cartera" avisa de que una posicion esta demasiado
+    // concentrada: si no coincidieran, la aplicacion sugeriria comprar en
+    // una columna lo que marca como exceso de concentracion en el panel de
+    // al lado. Quien cambie uno de los dos deberia mirar el otro.
+    'max_position_percent' => 20.0,
 ];

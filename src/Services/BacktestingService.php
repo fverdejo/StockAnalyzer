@@ -58,9 +58,113 @@ class BacktestingService
         return [
             'horizon_days' => $horizonDays,
             'generated_at' => (new \DateTimeImmutable())->format(DATE_ATOM),
+            'aggregate' => $this->aggregateUniverse($results),
             'results' => $results,
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * Agrega en una sola cifra por universo lo que hasta ahora habia que
+     * promediar a ojo entre decenas de filas de `results` (ver versions.md
+     * v2.59), y añade la lectura por EPISODIOS de mercado.
+     *
+     * La vista por episodios existe porque las muestras BUY de tickers
+     * distintos en la misma fecha NO son independientes: comparten el
+     * movimiento del mercado de ese dia. `effective_independent_samples`
+     * (v2.31) solo corrige el solape temporal DENTRO de un ticker, no este
+     * agrupamiento entre tickers. Por eso `avg_of_monthly_avgs` (un mes = un
+     * voto) acompaña siempre a `avg_buy_forward_return` (una muestra = un
+     * voto): si ambas se separan mucho, la media global esta dominada por
+     * unos pocos episodios de mercado y no por la calidad de la señal.
+     *
+     * @param list<array<string,mixed>> $results
+     * @return array<string,mixed>
+     */
+    private function aggregateUniverse(array $results): array
+    {
+        $totalSamples = 0;
+        $allDaysWeightedSum = 0.0;
+        $allDaysSamples = 0;
+        $buyReturns = [];
+        $distinctBuyTickers = 0;
+        $returnsByMonth = [];
+
+        foreach ($results as $result) {
+            $tickerSamples = (int) ($result['samples'] ?? 0);
+            $totalSamples += $tickerSamples;
+
+            if (($result['avg_all_days_forward_return'] ?? null) !== null) {
+                $allDaysWeightedSum += (float) $result['avg_all_days_forward_return'] * $tickerSamples;
+                $allDaysSamples += $tickerSamples;
+            }
+
+            /** @var list<array{date: string, forward_return: float}> $buySamples */
+            $buySamples = $result['buy_samples'] ?? [];
+
+            if ($buySamples !== []) {
+                $distinctBuyTickers++;
+            }
+
+            foreach ($buySamples as $buySample) {
+                $return = (float) $buySample['forward_return'];
+                $buyReturns[] = $return;
+                $returnsByMonth[substr((string) $buySample['date'], 0, 7)][] = $return;
+            }
+        }
+
+        ksort($returnsByMonth);
+        $monthlyAverages = [];
+
+        foreach ($returnsByMonth as $month => $monthReturns) {
+            $monthlyAverages[$month] = (float) $this->average($monthReturns);
+        }
+
+        $avgBuy = $this->average($buyReturns);
+        $avgAll = $allDaysSamples > 0 ? round($allDaysWeightedSum / $allDaysSamples, 2) : null;
+
+        return [
+            'samples' => $totalSamples,
+            'buy_signals' => count($buyReturns),
+            'avg_buy_forward_return' => $avgBuy,
+            'avg_all_days_forward_return' => $avgAll,
+            'buy_alpha_vs_all_days' => ($avgBuy !== null && $avgAll !== null) ? round($avgBuy - $avgAll, 2) : null,
+            'win_rate_buy' => $this->winRate($buyReturns),
+            'distinct_buy_tickers' => $distinctBuyTickers,
+            'distinct_buy_months' => count($monthlyAverages),
+            'avg_of_monthly_avgs' => $this->average(array_values($monthlyAverages)),
+            'worst_month' => $this->worstMonth($monthlyAverages),
+        ];
+    }
+
+    /**
+     * Mes con la peor media de retornos BUY del universo, el episodio de
+     * mercado que mas pesa en contra de la señal. Mismo criterio de
+     * resiliencia que el resto del agregado: sin ningun mes con muestras,
+     * null. En caso de empate gana el mes mas antiguo (el array llega
+     * ordenado por fecha desde `aggregateUniverse()`), para que el resultado
+     * sea determinista.
+     *
+     * @param array<string,float> $monthlyAverages
+     * @return array{month: string, avg_forward_return: float}|null
+     */
+    private function worstMonth(array $monthlyAverages): ?array
+    {
+        $worstMonth = null;
+        $worstAverage = null;
+
+        foreach ($monthlyAverages as $month => $average) {
+            if ($worstAverage === null || $average < $worstAverage) {
+                $worstMonth = (string) $month;
+                $worstAverage = $average;
+            }
+        }
+
+        if ($worstMonth === null || $worstAverage === null) {
+            return null;
+        }
+
+        return ['month' => $worstMonth, 'avg_forward_return' => $worstAverage];
     }
 
     /**
@@ -259,6 +363,10 @@ class BacktestingService
         $allReturns = array_column($samples, 'forward_return');
         $avgAll = $this->average($allReturns);
         $avgBuy = $this->average($buyReturns);
+        $alpha = ($avgBuy !== null && $avgAll !== null) ? round($avgBuy - $avgAll, 2) : null;
+        $buyStdDev = $this->stdDev($buyReturns);
+        $buyStdErr = $buyStdDev !== null ? $buyStdDev / sqrt(count($buyReturns)) : null;
+        $alphaStdErr = $this->welchStdErr($buyReturns, $allReturns);
 
         return [
             'ticker' => strtoupper($ticker),
@@ -274,9 +382,22 @@ class BacktestingService
             'win_rate_sell' => $this->winRate($sellReturns),
             'avg_all_days_forward_return' => $avgAll,
             'win_rate_all_days' => $this->winRate($allReturns),
-            'buy_alpha_vs_all_days' => ($avgBuy !== null && $avgAll !== null) ? round($avgBuy - $avgAll, 2) : null,
+            'buy_alpha_vs_all_days' => $alpha,
+            'buy_return_stddev' => $buyStdDev !== null ? round($buyStdDev, 2) : null,
+            'buy_return_stderr' => $buyStdErr !== null ? round($buyStdErr, 2) : null,
+            'buy_return_ci95_low' => ($avgBuy !== null && $buyStdErr !== null)
+                ? round($avgBuy - (1.96 * $buyStdErr), 2)
+                : null,
+            'buy_return_ci95_high' => ($avgBuy !== null && $buyStdErr !== null)
+                ? round($avgBuy + (1.96 * $buyStdErr), 2)
+                : null,
+            'buy_alpha_stderr' => $alphaStdErr !== null ? round($alphaStdErr, 2) : null,
+            'buy_alpha_t_stat' => ($alpha !== null && $alphaStdErr !== null && $alphaStdErr > 0.0)
+                ? round($alpha / $alphaStdErr, 2)
+                : null,
             'benchmark_return' => round($benchmark, 2),
             'recent_samples' => array_slice($samples, -10),
+            'buy_samples' => $this->datedReturnsFor($samples, ['STRONG BUY', 'BUY']),
             'buy_managed_samples' => count($managedSamples),
             'avg_buy_managed_return' => $this->average(array_map(
                 static fn (array $sample): float => (float) $sample['managed_return'],
@@ -391,6 +512,33 @@ class BacktestingService
     }
 
     /**
+     * Muestras BUY con su fecha, no solo su retorno: base del agregado por
+     * universo/episodios de mercado de `run()` (ver versions.md v2.59), que
+     * necesita saber en que mes cayo cada muestra y de que ticker viene, no
+     * solo su valor. Version "con fecha" de `returnsFor()`, que se mantiene
+     * para todo lo que solo necesita la lista de retornos.
+     *
+     * @param list<array<string,mixed>> $samples
+     * @param list<string> $recommendations
+     * @return list<array{date: string, forward_return: float}>
+     */
+    private function datedReturnsFor(array $samples, array $recommendations): array
+    {
+        $dated = [];
+
+        foreach ($samples as $sample) {
+            if (in_array((string) $sample['recommendation'], $recommendations, true)) {
+                $dated[] = [
+                    'date' => (string) $sample['date'],
+                    'forward_return' => (float) $sample['forward_return'],
+                ];
+            }
+        }
+
+        return $dated;
+    }
+
+    /**
      * @param list<float> $values
      */
     private function average(array $values): ?float
@@ -400,6 +548,59 @@ class BacktestingService
         }
 
         return round(array_sum($values) / count($values), 2);
+    }
+
+    /**
+     * Desviacion tipica MUESTRAL (denominador n-1, no n): las muestras de un
+     * backtest son una muestra del comportamiento de la señal, no la
+     * poblacion completa de todos los dias posibles. Devuelve el valor sin
+     * redondear (quien lo publica en el resultado lo redondea, para que los
+     * estadisticos derivados no acumulen error de redondeo). Mismo criterio
+     * de resiliencia que `average()`/`winRate()`: sin dispersion calculable
+     * (menos de 2 valores), null en vez de dividir por cero.
+     *
+     * @param list<float> $values
+     */
+    private function stdDev(array $values): ?float
+    {
+        $count = count($values);
+
+        if ($count < 2) {
+            return null;
+        }
+
+        $mean = array_sum($values) / $count;
+        $sumOfSquares = 0.0;
+
+        foreach ($values as $value) {
+            $sumOfSquares += ($value - $mean) ** 2;
+        }
+
+        return sqrt($sumOfSquares / ($count - 1));
+    }
+
+    /**
+     * Error estandar de la diferencia entre dos medias por la formula de
+     * Welch (`sqrt(sB²/nB + sA²/nA)`), sin asumir que ambos grupos tengan la
+     * misma varianza: el grupo BUY es un subconjunto pequeño y mas selectivo
+     * que "todos los dias", asi que la version de varianza combinada seria
+     * una hipotesis que estos datos no respaldan. Sin redondear, igual que
+     * `stdDev()`. null si alguno de los dos grupos no tiene dispersion
+     * calculable (menos de 2 muestras).
+     *
+     * @param list<float> $groupB
+     * @param list<float> $groupA
+     */
+    private function welchStdErr(array $groupB, array $groupA): ?float
+    {
+        $stdDevB = $this->stdDev($groupB);
+        $stdDevA = $this->stdDev($groupA);
+
+        if ($stdDevB === null || $stdDevA === null) {
+            return null;
+        }
+
+        return sqrt((($stdDevB ** 2) / count($groupB)) + (($stdDevA ** 2) / count($groupA)));
     }
 
     /**

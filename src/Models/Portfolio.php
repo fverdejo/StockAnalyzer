@@ -9,11 +9,29 @@ use StockAnalyzer\Enums\TransactionType;
 class Portfolio
 {
     /**
+     * Divisa de referencia del inversor: aquella en la que tiene sentido
+     * medir el tamaño de la cartera y, con el, el presupuesto de riesgo y
+     * el peso maximo por posicion (ver versions.md v2.66). Coincide
+     * deliberadamente con DTO\PortfolioConcentration::BASE_CURRENCY, pero
+     * no se referencia esa constante desde aqui: el dominio no debe
+     * depender de un DTO de otra capa (mismo criterio que Config en
+     * v2.65).
+     */
+    public const BASE_CURRENCY = 'EUR';
+
+    /**
      * @param list<Holding> $holdings
      * @param list<Transaction> $transactions
      * @param array<string,float|null> $currentPrices ticker => precio de mercado actual (null si no se pudo consultar)
      * @param array<string,string> $currencies ticker => divisa nativa (ver versions.md v2.25)
      * @param ?float $usdToEurRate tipo de cambio USD->EUR del momento (null si no se pudo consultar)
+     * @param array<string,?float> $ratesToEur DIVISA (no ticker) => tipo de cambio a euros de HOY (ver versions.md
+     *     v2.66); lo construye PortfolioService::getPortfolio() con una unica peticion por divisa, ya cacheada
+     * @param ?float $realizedProfitEur beneficio ya realizado en ventas, en euros, con el tipo de cambio del dia de
+     *     cada operacion (null si algun ticker no se pudo expresar en euros; ver versions.md v2.68). No se puede
+     *     deducir de $holdings: habla tambien de posiciones ya cerradas, que ya no son una posicion abierta.
+     * @param ?float $totalBoughtAmountEur importe total comprado en toda la historia, en euros, con el mismo
+     *     criterio de tipo de cambio y de nulabilidad que $realizedProfitEur
      */
     public function __construct(
         private readonly array $holdings,
@@ -21,7 +39,10 @@ class Portfolio
         private readonly float $realizedProfit,
         private readonly array $currentPrices = [],
         private readonly array $currencies = [],
-        private readonly ?float $usdToEurRate = null
+        private readonly ?float $usdToEurRate = null,
+        private readonly array $ratesToEur = [],
+        private readonly ?float $realizedProfitEur = null,
+        private readonly ?float $totalBoughtAmountEur = null
     ) {
     }
 
@@ -194,6 +215,230 @@ class Portfolio
         }
 
         return $total;
+    }
+
+    /**
+     * Tipo de cambio de HOY de la divisa nativa de un ticker a euros (ver
+     * versions.md v2.66). 1.0 si ya cotiza en euros (no hay nada que
+     * convertir) y null si su divisa es desconocida o si no se pudo
+     * obtener el cambio de esa divisa.
+     *
+     * Se expone por ticker y no por divisa porque quien lo necesita
+     * (Services\SuggestedPositionCalculator) razona siempre sobre un
+     * ticker concreto; el mapa interno esta indexado por divisa para no
+     * repetir el mismo cambio una vez por posicion.
+     */
+    public function getRateToEurFor(string $ticker): ?float
+    {
+        $currency = $this->normalizedCurrencyFor($ticker);
+
+        if ($currency === '') {
+            return null;
+        }
+
+        if ($currency === self::BASE_CURRENCY) {
+            return 1.0;
+        }
+
+        return $this->ratesToEur[$currency] ?? null;
+    }
+
+    /**
+     * Valor de mercado de una posicion en euros con el tipo de cambio de
+     * HOY. Una posicion que ya cotiza en euros no tiene nada que
+     * convertir: para esos tickers Holding::getMarketValueEur() es null
+     * por diseño (v2.48, para no duplicar el mismo importe en la UI), asi
+     * que se usa su valor nativo, que ya esta en euros. Para el resto se
+     * reutiliza el valor en euros que PortfolioService ya calculo con una
+     * unica peticion de tipo de cambio por divisa, sin ninguna llamada
+     * nueva al proveedor.
+     *
+     * Null si la divisa del ticker es desconocida, si no hay precio
+     * actual, si no se pudo obtener el tipo de cambio, o si el ticker no
+     * corresponde a ninguna posicion abierta.
+     */
+    public function getMarketValueEurFor(string $ticker): ?float
+    {
+        $holding = $this->holdingFor($ticker);
+
+        if ($holding === null) {
+            return null;
+        }
+
+        $currency = $this->normalizedCurrencyFor($ticker);
+
+        if ($currency === '') {
+            return null;
+        }
+
+        return $currency === self::BASE_CURRENCY
+            ? $holding->getMarketValue()
+            : $holding->getMarketValueEur();
+    }
+
+    /**
+     * Valor total de la cartera expresado en euros, a diferencia de
+     * getMarketValue(), que suma divisas nativas sin convertir (deliberado
+     * desde v2.25/v2.48: el resto de metricas de rentabilidad dependen de
+     * esos importes nativos y no se tocan).
+     *
+     * Todo o nada: null si alguna posicion no se puede expresar en euros,
+     * mismo criterio que getMarketValue() (que ya devuelve null si falta
+     * el precio de una sola posicion) y que
+     * Services\PortfolioConcentrationCalculator::compute(). Un total al
+     * que le falta una posicion no es "casi correcto": es otro numero mas
+     * pequeño, y quien lo use como presupuesto infradimensionaria en
+     * silencio todo lo que calcule con el (ver versions.md v2.66).
+     */
+    public function getMarketValueEur(): ?float
+    {
+        $total = 0.0;
+
+        foreach ($this->holdings as $holding) {
+            $value = $this->getMarketValueEurFor($holding->getTicker());
+
+            if ($value === null) {
+                return null;
+            }
+
+            $total += $value;
+        }
+
+        return $total;
+    }
+
+    /**
+     * Coste base de una posicion en euros, con el tipo de cambio del dia de
+     * cada compra (los euros que de verdad salieron de la cuenta). Misma
+     * asimetria deliberada que getMarketValueEurFor(): un ticker que ya
+     * cotiza en euros tiene Holding::getInvestedAmountEur() a null por
+     * diseño (v2.48, para no duplicar el mismo importe en la interfaz), asi
+     * que se usa su importe nativo, que ya esta en euros.
+     */
+    public function getInvestedAmountEurFor(string $ticker): ?float
+    {
+        $holding = $this->holdingFor($ticker);
+
+        if ($holding === null) {
+            return null;
+        }
+
+        $currency = $this->normalizedCurrencyFor($ticker);
+
+        if ($currency === '') {
+            return null;
+        }
+
+        return $currency === self::BASE_CURRENCY
+            ? $holding->getInvestedAmount()
+            : $holding->getInvestedAmountEur();
+    }
+
+    /**
+     * Importe invertido en las posiciones abiertas, en euros, frente a
+     * getInvestedAmount(), que suma divisas nativas sin convertir. Todo o
+     * nada, igual que getMarketValueEur() (ver versions.md v2.68).
+     */
+    public function getInvestedAmountEur(): ?float
+    {
+        $total = 0.0;
+
+        foreach ($this->holdings as $holding) {
+            $invested = $this->getInvestedAmountEurFor($holding->getTicker());
+
+            if ($invested === null) {
+                return null;
+            }
+
+            $total += $invested;
+        }
+
+        return $total;
+    }
+
+    /**
+     * Beneficio latente en euros de toda la cartera: valor de mercado de
+     * hoy (al cambio de hoy) menos los euros realmente pagados (al cambio
+     * del dia de cada compra). Incluye por tanto el efecto del tipo de
+     * cambio, igual que Holding::getUnrealizedProfitEur() por posicion
+     * (v2.48), del que es exactamente la suma.
+     */
+    public function getUnrealizedProfitEur(): ?float
+    {
+        $marketValue = $this->getMarketValueEur();
+        $invested = $this->getInvestedAmountEur();
+
+        if ($marketValue === null || $invested === null) {
+            return null;
+        }
+
+        return $marketValue - $invested;
+    }
+
+    public function getUnrealizedProfitEurPercent(): ?float
+    {
+        $invested = $this->getInvestedAmountEur();
+        $profit = $this->getUnrealizedProfitEur();
+
+        if ($invested === null || $invested <= 0 || $profit === null) {
+            return null;
+        }
+
+        return ($profit / $invested) * 100;
+    }
+
+    public function getRealizedProfitEur(): ?float
+    {
+        return $this->realizedProfitEur;
+    }
+
+    public function getTotalBoughtAmountEur(): ?float
+    {
+        return $this->totalBoughtAmountEur;
+    }
+
+    /**
+     * Rendimiento agregado de todo el historico en euros: latente de lo que
+     * sigue abierto mas lo ya realizado en ventas.
+     */
+    public function getOverallProfitEur(): ?float
+    {
+        $unrealized = $this->getUnrealizedProfitEur();
+
+        if ($unrealized === null || $this->realizedProfitEur === null) {
+            return null;
+        }
+
+        return $unrealized + $this->realizedProfitEur;
+    }
+
+    public function getOverallProfitEurPercent(): ?float
+    {
+        $overall = $this->getOverallProfitEur();
+
+        if ($overall === null || $this->totalBoughtAmountEur === null || $this->totalBoughtAmountEur <= 0) {
+            return null;
+        }
+
+        return ($overall / $this->totalBoughtAmountEur) * 100;
+    }
+
+    private function holdingFor(string $ticker): ?Holding
+    {
+        $ticker = strtoupper(trim($ticker));
+
+        foreach ($this->holdings as $holding) {
+            if (strtoupper($holding->getTicker()) === $ticker) {
+                return $holding;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizedCurrencyFor(string $ticker): string
+    {
+        return strtoupper(trim($this->getCurrencyFor($ticker)));
     }
 
     public function getUnrealizedProfit(): ?float

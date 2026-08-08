@@ -625,6 +625,24 @@ class Layout
             color: var(--accent-strong);
         }
 
+        .concentration-list {
+            margin-top: 8px;
+            gap: 4px;
+            font-size: 13px;
+        }
+
+        .concentration-warning {
+            display: inline-block;
+            margin-left: 6px;
+            border-radius: 999px;
+            padding: 2px 7px;
+            background: #fff1d2;
+            color: var(--warn);
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
         .watch-star {
             background: transparent;
             border: 0;

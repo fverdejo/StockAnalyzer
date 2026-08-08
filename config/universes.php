@@ -35,9 +35,27 @@ return [
         'label' => '7 Magníficas',
         'tickers' => ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA'],
     ],
+    // Composicion completa (30/30) verificada el 2026-08-08 contra los dos
+    // ultimos cambios anunciados por S&P Dow Jones Indices:
+    //   - 2024-11-08: NVDA entra por INTC y SHW entra por DOW.
+    //   - 2026-06-29: GOOGL (Alphabet clase A) entra por VZ (Verizon), que
+    //     salio tras 22 anos por pesar solo ~0,5% en un indice ponderado por
+    //     precio. Es el unico cambio del indice desde noviembre de 2024.
+    // Hasta v2.60 esta lista tenia 29 tickers: faltaba NVDA (olvido de 2024,
+    // las otras dos patas de aquel cambio si estaban aplicadas) y seguia
+    // VZ en lugar de GOOGL.
+    // HON se mantiene en el indice pese al spin-off de Honeywell Aerospace
+    // (completado el 2026-06-29, la escindida cotiza aparte como HONA en
+    // Nasdaq y NO forma parte del DJIA): la matriz pasa a llamarse Honeywell
+    // Technologies pero conserva el ticker HON. Ojo al leer su historico:
+    // ademas del spin-off hizo un contrasplit 1x2 en esa misma fecha.
     'dow30' => [
         'label' => 'Dow Jones 30',
-        'tickers' => ['AAPL', 'AMGN', 'AMZN', 'AXP', 'BA', 'CAT', 'CRM', 'CSCO', 'CVX', 'DIS', 'GS', 'HD', 'HON', 'IBM', 'JNJ', 'JPM', 'KO', 'MCD', 'MMM', 'MRK', 'MSFT', 'NKE', 'PG', 'SHW', 'TRV', 'UNH', 'V', 'VZ', 'WMT'],
+        'tickers' => [
+            'AAPL', 'AMGN', 'AMZN', 'AXP', 'BA', 'CAT', 'CRM', 'CSCO', 'CVX', 'DIS',
+            'GOOGL', 'GS', 'HD', 'HON', 'IBM', 'JNJ', 'JPM', 'KO', 'MCD', 'MMM',
+            'MRK', 'MSFT', 'NKE', 'NVDA', 'PG', 'SHW', 'TRV', 'UNH', 'V', 'WMT',
+        ],
     ],
     // Composicion completa verificada contra la revision oficial del comite
     // asesor tecnico del IBEX 35 (BME, revision num. 136 del 22/06/2026, sin
@@ -53,6 +71,13 @@ return [
             'ROVI.MC', 'SAB.MC', 'SCYR.MC', 'SLR.MC', 'UNI.MC',
         ],
     ],
+    // OJO: la clave 'tech40' NO significa "40 tickers", son 20. El nombre es
+    // historico y se conserva a proposito porque cambiarlo romperia los
+    // rankings ya guardados en la tabla 'daily_rankings' y cualquier enlace
+    // existente con ?universe=tech40. La etiqueta visible ("Tecnologia
+    // ampliada") no promete un numero, asi que el usuario final no se ve
+    // afectado; a diferencia de 'dow30' o 'ibex35', aqui no hay un indice
+    // real de referencia contra el que cuadrar la lista.
     'tech40' => [
         'label' => 'Tecnologia ampliada',
         'tickers' => ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'ORCL', 'AMD', 'ADBE', 'CRM', 'CSCO', 'INTC', 'IBM', 'QCOM', 'TXN', 'NOW', 'AMAT', 'MU', 'LRCX', 'PANW', 'SNOW', 'SHOP'],

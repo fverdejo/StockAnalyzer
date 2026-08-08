@@ -15,13 +15,11 @@ use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
-use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Infrastructure\Mail\LogMailer;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
-use StockAnalyzer\Models\Portfolio;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\CachedMarketMoversProvider;
@@ -38,6 +36,8 @@ use StockAnalyzer\Repository\ScoreHistoryRepository;
 use StockAnalyzer\Repository\TickerAlertStateRepository;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 use StockAnalyzer\Repository\TickerDividendAlertStateRepository;
+use StockAnalyzer\Repository\TickerEarningsAlertStateRepository;
+use StockAnalyzer\Repository\TickerStopLossAlertStateRepository;
 use StockAnalyzer\Repository\TransactionRepository;
 use StockAnalyzer\Repository\UserRepository;
 use StockAnalyzer\Repository\WatchlistRepository;
@@ -85,6 +85,7 @@ class Application
     private RecommendationExplainer $explainer;
     private AuthService $auth;
     private PortfolioService $portfolioService;
+    private HistoricalExchangeRateService $historicalExchangeRates;
     private WatchlistRepository $watchlistRepository;
     private AlertRepository $alertRepository;
     private AlertService $alertService;
@@ -134,14 +135,18 @@ class Application
         $this->alertService = new AlertService(
             $this->alertRepository,
             new TickerAlertStateRepository($this->connection),
-            new TickerDividendAlertStateRepository($this->connection)
+            new TickerDividendAlertStateRepository($this->connection),
+            new TickerStopLossAlertStateRepository($this->connection),
+            new TickerEarningsAlertStateRepository($this->connection)
         );
         $this->corporateProfileCache = new CorporateProfileCacheRepository($this->connection);
         $this->scoreHistoryRepository = new ScoreHistoryRepository($this->connection);
+        $this->historicalExchangeRates = new HistoricalExchangeRateService($this->marketDataProvider);
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
             $this->marketDataProvider,
-            new ExchangeRateService($this->marketDataProvider)
+            new ExchangeRateService($this->marketDataProvider),
+            $this->historicalExchangeRates
         );
     }
 
@@ -621,6 +626,7 @@ class Application
                         $this->corporateProfileCache
                     );
                     $this->alertService->checkUpcomingDividend($user, $item->getTicker(), $corporateEvents);
+                    $this->alertService->checkUpcomingEarnings($user, $item->getTicker(), $corporateEvents);
                 } catch (Throwable $exception) {
                     $errors[$item->getTicker()] = $exception->getMessage();
                 }
@@ -716,12 +722,15 @@ class Application
                 CsrfToken::get(),
                 $message,
                 $error,
-                $this->portfolioService->getValueHistory($user),
+                (new PortfolioValueHistoryCalculator($this->marketDataProvider, $this->historicalExchangeRates))
+                    ->compute($portfolio),
                 $holdingsAnalysis['recommendations'],
                 $this->alertRepository->countUnread($user),
                 $this->watchedTickers($user),
                 $holdingsAnalysis['riskLevels'],
-                $this->buildSuggestedQuantities($portfolio, $holdingsAnalysis['riskLevels'])
+                (new SuggestedPositionCalculator(new RiskLevelsConfig()))
+                    ->compute($portfolio, $holdingsAnalysis['riskLevels']),
+                (new PortfolioConcentrationCalculator())->compute($portfolio, $holdingsAnalysis['sectors'])
             );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
@@ -769,19 +778,21 @@ class Application
      * Analiza cada posicion abierta para saber su recomendacion actual
      * (se muestra en "Mi cartera" y ademas alimenta las alertas de v2.15)
      * y de paso captura su stop-loss/objetivo sugeridos (ver versions.md,
-     * columna compacta "Stop/Objetivo" de la cartera) sin volver a llamar
-     * al analisis por ticker. Un fallo al analizar un ticker concreto no
-     * rompe el resto de la cartera: simplemente no se muestra
+     * columna compacta "Stop/Objetivo" de la cartera) y su sector (ver
+     * versions.md v2.47, para el bloque de concentracion) sin volver a
+     * llamar al analisis por ticker. Un fallo al analizar un ticker
+     * concreto no rompe el resto de la cartera: simplemente no se muestra
      * recomendacion/niveles de riesgo ni se actualiza su estado de alerta
      * esa vez.
      *
      * @param list<\StockAnalyzer\Models\Holding> $holdings
-     * @return array{recommendations: array<string,string>, riskLevels: array<string,?\StockAnalyzer\DTO\RiskLevels>}
+     * @return array{recommendations: array<string,string>, riskLevels: array<string,?\StockAnalyzer\DTO\RiskLevels>, sectors: array<string,string>}
      */
     private function analyzeHoldingsForAlerts(User $user, array $holdings): array
     {
         $recommendations = [];
         $riskLevels = [];
+        $sectors = [];
 
         foreach ($holdings as $holding) {
             $ticker = $holding->getTicker();
@@ -791,7 +802,22 @@ class Application
                 $recommendation = $analysis->getScore()->getRecommendation();
                 $recommendations[$ticker] = $recommendation;
                 $riskLevels[$ticker] = $analysis->getRiskLevels();
+                // Ya viene en el Stock del mismo analisis (v2.47): coste
+                // cero, ninguna llamada nueva al proveedor.
+                $sectors[$ticker] = $analysis->getStock()->getCompany()->getSector();
                 $this->alertService->checkRecommendationChange($user, $ticker, $recommendation);
+
+                // Solo posiciones abiertas (v2.56): el stop-loss sugerido
+                // ya calculado arriba, contrastado con el precio del mismo
+                // analisis, sin ninguna llamada nueva al proveedor. En la
+                // watchlist no aplica: no hay posicion que cerrar.
+                $this->alertService->checkStopLossBreach(
+                    $user,
+                    $ticker,
+                    $analysis->getRiskLevels(),
+                    $analysis->getStock()->getQuote()->getPrice(),
+                    $analysis->getStock()->getCompany()->getCurrency()
+                );
 
                 // Version cacheada (ver CorporateProfileCacheRepository,
                 // TTL 24h, v2.41): sin cache, esto pediria quoteSummary a
@@ -805,6 +831,11 @@ class Application
                     $this->corporateProfileCache
                 );
                 $this->alertService->checkUpcomingDividend($user, $ticker, $corporateEvents);
+                // Mismo dato cacheado, ya obtenido para el dividendo
+                // (v2.57): la fecha de resultados no costaba ninguna
+                // llamada extra y hasta ahora solo se mostraba en la ficha
+                // de detalle, sin avisar.
+                $this->alertService->checkUpcomingEarnings($user, $ticker, $corporateEvents);
             } catch (Throwable) {
                 // Fallo puntual del proveedor para este ticker: no se
                 // muestra recomendacion ni niveles de riesgo, ni se
@@ -813,42 +844,7 @@ class Application
             }
         }
 
-        return ['recommendations' => $recommendations, 'riskLevels' => $riskLevels];
-    }
-
-    /**
-     * Cantidad de acciones sugerida por posicion abierta segun el riesgo
-     * maximo por operacion configurado (position sizing, ver versions.md):
-     * reutiliza el valor de cartera y el precio actual ya calculados en
-     * $portfolio (Portfolio::getMarketValue()/getCurrentPriceFor()), sin
-     * ninguna llamada nueva a mercado, junto al stop-loss ya calculado en
-     * $riskLevels para ese mismo ticker.
-     *
-     * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos
-     * @return array<string,?float> ticker => cantidad de acciones sugerida
-     */
-    private function buildSuggestedQuantities(Portfolio $portfolio, array $riskLevels): array
-    {
-        $portfolioValue = $portfolio->getMarketValue();
-
-        if ($portfolioValue === null) {
-            return [];
-        }
-
-        $riskPercent = (new RiskLevelsConfig())->getPositionRiskPercent();
-        $quantities = [];
-
-        foreach ($portfolio->getHoldings() as $holding) {
-            $ticker = $holding->getTicker();
-            $levels = $riskLevels[$ticker] ?? null;
-            $price = $portfolio->getCurrentPriceFor($ticker);
-
-            $quantities[$ticker] = ($levels === null || $price === null)
-                ? null
-                : $levels->suggestedQuantity($portfolioValue, $riskPercent, $price);
-        }
-
-        return $quantities;
+        return ['recommendations' => $recommendations, 'riskLevels' => $riskLevels, 'sectors' => $sectors];
     }
 
     private function renderProviderConfig(?string $message, ?string $error): string
