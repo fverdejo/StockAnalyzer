@@ -14,11 +14,50 @@ use Throwable;
 
 class YahooFinanceProvider implements MarketDataProviderInterface
 {
+    /**
+     * Rangos de historico diario que acepta el endpoint de Yahoo. La lista
+     * es cerrada a proposito: un rango inventado no falla en la peticion,
+     * Yahoo devuelve silenciosamente el rango por defecto, y el llamador
+     * creeria estar analizando 10 años cuando en realidad tiene 1 mes.
+     */
+    private const SUPPORTED_HISTORY_RANGES = ['6mo', '1y', '2y', '5y', '10y', 'max'];
+
+    /**
+     * $historyRange es el rango que se pide en getHistoricalQuotes(). Por
+     * defecto 2 años, que es lo que necesita la aplicacion web (indicadores
+     * tecnicos + grafico) y lo unico que conviene mantener en cache para
+     * todo el universo: un historico de 10 años pesa unas 5 veces mas por
+     * ticker. Los rangos largos son para investigacion offline
+     * (bin/backtest.php), donde el numero de fechas independientes es lo que
+     * decide si un resultado significa algo.
+     *
+     * La serie `close` de Yahoo ya viene ajustada por splits, asi que
+     * ampliar el rango no introduce discontinuidades artificiales.
+     */
     public function __construct(
         private readonly HttpClient $httpClient = new HttpClient(),
         private readonly YahooParser $parser = new YahooParser(),
-        private readonly ?YahooFundamentalsFetcher $fundamentalsFetcher = null
+        private readonly ?YahooFundamentalsFetcher $fundamentalsFetcher = null,
+        private readonly string $historyRange = '2y'
     ) {
+        if (!in_array($this->historyRange, self::SUPPORTED_HISTORY_RANGES, true)) {
+            throw new \InvalidArgumentException(sprintf(
+                "Rango de historico no soportado: '%s'. Valores validos: %s.",
+                $this->historyRange,
+                implode(', ', self::SUPPORTED_HISTORY_RANGES)
+            ));
+        }
+    }
+
+    /**
+     * Rango que pide realmente getHistoricalQuotes(). Lo usa quien envuelve
+     * este proveedor en CachedMarketDataProvider para etiquetar la cache con
+     * el mismo rango, en vez de repetir la cadena en el punto de montaje y
+     * arriesgarse a que ambos se desincronicen.
+     */
+    public function getHistoryRange(): string
+    {
+        return $this->historyRange;
     }
 
     public function getStock(string $ticker): Stock
@@ -61,8 +100,9 @@ class YahooFinanceProvider implements MarketDataProviderInterface
         }
 
         $url = sprintf(
-            'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=2y',
-            rawurlencode($ticker)
+            'https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=%s',
+            rawurlencode($ticker),
+            rawurlencode($this->historyRange)
         );
 
         $response = $this->httpClient->get($url);

@@ -6,14 +6,14 @@ Estado del proyecto.
 
 # Estado actual
 
-Esta seccion (y la tabla de progreso de debajo) llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el proyecto, mientras que `versions.md` si se ha ido actualizando version a version. Para no mantener dos tablas de estado que puedan desincronizarse (que es justo lo que paso aqui), a partir de ahora:
+Esta seccion llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el proyecto, mientras que `versions.md` si se ha ido actualizando version a version. Para no mantener dos tablas de estado que puedan desincronizarse (que es justo lo que paso aqui), a partir de ahora:
 
 - `versions.md` es el documento con el estado real, detallado, categoria por categoria.
 - `roadmap.md` (este documento) se centra en que falta por hacer y en que orden, no en repetir el estado exacto de cada pieza.
 
-Resumen muy rapido a fecha de esta revision (2026-08-01): la app esta avanzada hasta `v2.45` y cubre tambien cache/persistencia de mercado, universos configurables (incluido `ibex35` completo, 4 universos ADR geograficos (`v2.24`) y subgrupos sectoriales mas homogeneos en Consumo/Financieras, `v2.33`), filtros/busqueda por nombre, universo por defecto dinamico (mayores subidas/bajadas del dia), watchlist personal (con estrella-toggle y stop/objetivo compacto en las tablas, `v2.29`), alertas basicas, evolucion de la cartera en el tiempo, precio de cada operacion en EUR y USD en el historial de cartera (`v2.25`), exportacion CSV de la cartera y del historial de operaciones (`v2.26`), simbolo de divisa en todo precio mostrado en la app (`v2.27`), explicaciones que combinan analisis tecnico y fundamental, stop-loss/objetivo sugeridos con ATR14 y su simulacion en el backtesting (`v2.19`/`v2.21`) ademas de su version compacta en Watchlist/Cartera (`v2.29`), graficos de MACD y RSI en la ficha de detalle junto a SMA/Bollinger (`v2.28`/`v2.30`), historial real de la señal de compra en la ficha de detalle con prediccion por grupo sectorial cuando el historico propio es corto (`v2.23`/`v2.34`), API JSON, backtesting basico con muestreo no solapado y modo "solo tecnico" via CLI (`v2.31`/`v2.32`), ranking diario por CLI y noticias/sentimiento por CSV. Los pesos de `config/weights.php` se revisaron con backtesting real en `v2.34` y se decidio no tocarlos (sin evidencia limpia que respalde un cambio). El detalle exacto esta en `versions.md`.
+**Se volvio a desincronizar igualmente.** El `2026-08-09` este documento seguia diciendo `v2.45`/`v2.47` con el proyecto ya en `v2.68`, o sea 23 versiones de retraso: la enumeracion version a version que habia aqui era exactamente la duplicacion que la regla de arriba prohibe, y se ha retirado. Si hace falta saber que hay implementado, la respuesta esta en `versions.md` y solo ahi.
 
-La fase pedida directamente por el usuario el mismo dia (`v2.4` a `v2.11`: diseno visual, filtros del Home, cartera con importe en dinero, rentabilidad por operacion, el bug visual de "Mi cartera", enlaces a la ficha de detalle desde cualquier mencion de una accion, graficos mas altos con temporalidades intradia, tooltips educativos ampliados y verificacion de email en el registro), las correcciones/mejoras posteriores (`v2.5.2`, `v2.11.1`, `v2.12`), las tres ideas implementadas a continuacion (`v2.13` evolucion de cartera, `v2.14` watchlist, `v2.15` alertas), la ronda de ajustes posterior (`v2.16` numeracion de version y estrella de watchlist, `v2.17` fundamentales explicitos en la explicacion), las rondas de mantenimiento de los agentes especializados (`v2.18`/`v2.22` recalibracion de Bollinger, `v2.19` stop-loss/objetivo con ATR14, `v2.20` enlace de verificacion de email, `v2.21` simulacion de stop-loss/objetivo en backtesting, `v2.23` historial real de la señal en la ficha de detalle, `v2.24` curacion de universos), la sesion del 2026-08-01 (`v2.25` precio en EUR/USD en el historial de cartera, `v2.26` exportacion CSV), la sesion siguiente del mismo dia (`v2.27` simbolo de divisa en todos los precios, `v2.28` MACD en el grafico de detalle, `v2.29` stop/objetivo compactos en Watchlist y Cartera), una tercera sesion tambien del mismo dia (`v2.30` RSI en el grafico de detalle, `v2.31` backtest con muestras no solapadas, `v2.32` modo de backtesting "solo tecnico", `v2.33` universos por sector menos heterogeneos en Consumo/Financieras) una cuarta sesion del mismo dia (`v2.34` revision de los pesos de `config/weights.php` con backtesting real, sin cambios por falta de evidencia limpia, y prediccion del movimiento por grupo sectorial en el historial de señal) una quinta sesion del mismo dia (`v2.35` universo "Manual" por defecto y campo de tickers coherente en el formulario de backtesting) una sexta sesion del mismo dia (`v2.36` tabla de ranking del Home sin columnas tecnicas ni de categorias) una septima sesion del mismo dia (`v2.37` categoria NEWS retirada del score, `v2.38` cache de backtesting por ticker) una octava sesion del mismo dia (`v2.39` sin ningun rastro visible de "Noticias" mientras la categoria este a 0) una novena sesion del mismo dia (`v2.40` Finnhub como proveedor alternativo con limitaciones documentadas, `v2.41` informacion de empresa/resultados/dividendo en la ficha de detalle, `v2.42` alerta de dividendo proximo en watchlist) y una decima sesion del mismo dia (`v2.43` alerta de dividendo tambien en Mi cartera, `v2.44` traduccion al español investigada y pendiente de decision, `v2.45` ajustes de diseño en "Sobre la empresa" y "Posiciones abiertas") ya estan implementadas. El detalle tecnico completo, incluidas las limitaciones honestas de cada pieza, esta en `versions.md`.
+Resumen a fecha de la ultima revision (`2026-08-09`, `v2.70`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
 
 ---
 
@@ -25,20 +25,35 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 # Proxima tarea
 
-## Tests y proveedores oficiales
+## Recalibrar la escala de recomendacion, ahora que por fin se puede medir
 
 Objetivo
 
-Con la fase `v2.4` a `v2.45` ya implementada (ver `versions.md`; incluye watchlist con estrella-toggle y stop/objetivo compacto, alertas basicas (incluida la de dividendo proximo en watchlist Y cartera, `v2.42`/`v2.43`), explicaciones tecnico+fundamental equilibradas, stop-loss/objetivo con ATR14 (version grande en la ficha de detalle y version compacta en Watchlist/Cartera desde `v2.29`) y su simulacion en el backtesting, precio en EUR/USD y exportacion CSV en la cartera, simbolo de divisa en todo precio (`v2.27`), graficos de MACD y RSI en la ficha de detalle (`v2.28`/`v2.30`), backtest con muestreo no solapado y modo "solo tecnico" via CLI (`v2.31`/`v2.32`), universos por sector menos heterogeneos en Consumo/Financieras (`v2.33`), prediccion del movimiento por grupo sectorial en el historial de señal cacheada por ticker (`v2.34`/`v2.38`), categoria NEWS retirada del score por no aportar señal real (`v2.37`), Finnhub integrado como proveedor alternativo aunque no recomendado con el plan gratuito actual (`v2.40`), informacion de empresa/proximos resultados/proximo dividendo en la ficha de detalle (`v2.41`) y ajustes de diseño en esa misma seccion y en "Mi cartera" (`v2.45`)), el siguiente trabajo de valor vuelve a ser el que quedo pendiente tras la segunda fase del 2026-07-27: convertir la demo avanzada en una herramienta mas robusta con tests automatizados de cobertura amplia y proveedores oficiales para datos/noticias. La exportacion CSV, que era el punto 2 de este orden, ya esta cubierta desde `v2.26`. De la lista de "Ideas adicionales sugeridas" al final de `versions.md`, las dos que quedaban abiertas ya se cerraron en `v2.46`/`v2.47`: Finnhub se elimino por completo, y los ratios fundamentales sensibles al sector se investigaron con datos reales de sector (ya disponibles desde `v2.47`) y se descartaron — el efecto medido es marginal y concentrado en una sola empresa (Goldman Sachs), no un patron de sector. No queda ninguna idea abierta pendiente en esa lista. Pendiente de decision del usuario: si traducir la descripcion de empresa al español via un servicio externo de pago (DeepL u otro), investigado y documentado en `v2.44` pero no implementado.
+`v2.70` cambio la situacion de fondo: hasta esa version todo el backtesting vivia sobre `range=2y`, o sea ~21 fechas independientes por universo de un unico regimen alcista, y ademas no existia ninguna metrica transversal (top-N del ranking contra su universo), que es justo la pregunta que responde el producto. Ahora hay **121 fechas independientes** (2016-11 → 2026-06, con el desplome de 2020 dentro) y `runCrossSectional()`.
+
+Eso deja al descubierto un problema de calibracion que ya no es una hipotesis:
+
+- **`Score::recommendationFor()` pide >= 90% para STRONG BUY, y eso no ha ocurrido ni una sola vez en 10.972 muestras** (maximo real 84,58%, p99 79,1%). La etiqueta existe en el codigo y es inalcanzable en la practica. La causa es que cada categoria llega a su techo por separado pero nunca a la vez: VALUATION promedia el 45% de su maximo porque exige simultaneamente PER<12, PEG<1, EV/EBITDA<8 y P/B<1,5, y RISK solo daria 10/10 con volatilidad y ATR exactamente cero.
+- Simetricamente, **el motor etiqueta entre el 43% y el 61% de los dias como SELL/STRONG SELL** en mercados que subieron. El tramo SELL hoy no significa "vende", significa "score medio-bajo".
+- Medido con `--cross-sectional`, el top-10 no bate a su universo: **-0,27 pp con t=-1,33 e IC95 de -0,66 a +0,13** sobre 121 fechas. No hay evidencia de que destruya valor (el -1,30 pp / t=-2,60 de 2 años era en buena parte muestra pequeña), pero tampoco de que lo cree.
 
 Orden recomendado (detalle tecnico completo en `versions.md`):
 
-1. Tests automatizados de servicios/repositorios/rutas (hay una suite `phpunit` desde `v2.21`, 26 tests, pero limitada a `BacktestingService` y el analisis de Bollinger; falta cobertura del resto de `Services`/`Repository`/rutas de `Application.php`).
-2. ~~Exportacion CSV (cartera e historial de operaciones).~~ Implementado en `v2.26`.
-3. Proveedor oficial de noticias o datos fundamentales.
-4. Universos mantenidos automaticamente.
+1. **Recalibrar los cortes de `Score::recommendationFor()`** contra la distribucion empirica de 121 fechas, o pasar la etiqueta a percentil dentro del universo del dia **conservando un suelo absoluto**, para que la app siga pudiendo decir "hoy no hay nada bueno que comprar". Ojo al alcance: tocar esos cortes afecta al ranking, a `BacktestingService` y a las alertas de cambio de recomendacion (`v2.15`).
+2. **Fuerza relativa / momentum 12-1.** Todas las señales de `TechnicalScoreAnalyzer::technical()` son absolutas (precio contra su propia media), asi que en mercado alcista casi todo puntua igual: el top-10 solo por TECHNICAL da alpha +0,29 pp (t=0,44), o sea que no discrimina. `TechnicalAnalyzer::momentum()` mide ademas 30 sesiones, justo el horizonte donde domina la reversion a corto plazo.
+3. **Fundamentales point-in-time.** `BacktestingService::stockAt()` reutiliza los fundamentales de HOY para cada fecha pasada, asi que 65 de 115 puntos (**56% del peso**) entran en todo backtest como constante por ticker y con sesgo de anticipacion; los veredictos "neutro en backtest" de `v2.51` y `v2.64` en realidad solo midieron el bloque tecnico. Una tabla `fundamentals_history` que se siembre desde ya no da valor hasta dentro de unos meses, y por eso conviene empezarla pronto aunque no luzca.
+4. **Costes y huecos de apertura en `simulateManagedExit()`**, que hoy asume ejecucion exacta en stop/objetivo, sin comisiones ni deslizamiento, y cobra el stop aunque la sesion abra por debajo.
+5. Proveedor oficial de noticias o datos fundamentales; universos mantenidos automaticamente.
 
-Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/` (y en Mailpit en local, ver `v2.11.1`).
+Tests: el punto que llevaba tiempo como prioridad 1 ya no lo es. La suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **139 tests / 457 assertions**, cubriendo tambien cartera en euros, concentracion, cantidad sugerida, alertas (acciones, aislamiento entre usuarios y render) y el backtest transversal. Falta todavia cobertura de buena parte de `Repository/` y de las rutas de `Application.php`, pero ya no es el cuello de botella.
+
+Pendiente aparte, no bloqueante:
+
+- Configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/` (y en Mailpit en local, ver `v2.11.1`).
+- `historyTtl` sigue siendo `P1D` para todos los rangos, asi que un backtest de 10y refetchea ~22 MB cada dia que se ejecute; los cierres de hace 9 años no cambian y admiten un TTL mucho mayor.
+- Sesgo de supervivencia de `config/universes.php`: son listas de hoy, y con ventana de 10 años el problema se agrava (un universo de 2016 no contenia estos 60 tickers).
+- Un test de integracion contra MySQL para el `AND user_id` de las alertas (`v2.69`): la comprobacion manual con dos usuarios ya se hizo y pasa, pero nada impide una regresion futura. Hoy la suite no habla con MySQL en ningun test.
+- Decision del usuario: si traducir la descripcion de empresa al español via un servicio externo de pago (DeepL u otro), investigado y documentado en `v2.44` pero no implementado.
 
 ---
 
@@ -46,14 +61,19 @@ Pendiente aparte, no bloqueante: configurar un mailer SMTP real (o un MTA en la 
 
 ## Prioridad alta
 
-- Tests automatizados (ampliar la suite `phpunit` de `v2.21` mas alla de `BacktestingService`/Bollinger)
+- Recalibrar los cortes de `Score::recommendationFor()` (STRONG BUY inalcanzable, SELL sobrerrepresentado) con las 121 fechas que habilito `v2.70`
+- Fuerza relativa / momentum 12-1 en el bloque tecnico, que hoy no discrimina entre tickers
 
 ---
 
 ## Prioridad media
 
+- Fundamentales point-in-time (`fundamentals_history`): sin ellos, el 56% del peso del score no es backtesteable
+- Costes, deslizamiento y huecos de apertura en `simulateManagedExit()`
+- Ampliar la cobertura de tests a `Repository/` y a las rutas de `Application.php` (la suite ya esta en 139 tests desde `v2.70`)
 - Proveedor oficial de noticias/datos
 - Universo completo mantenido automaticamente, tipo S&P 500 (`v1.2` avanzado)
+- Aviso de concentracion sectorial en el propio ranking (el sector dominante ocupa de media 3,6 de las 10 primeras posiciones en `largecap60`, y hasta 6)
 
 ---
 

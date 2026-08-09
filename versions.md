@@ -3182,6 +3182,169 @@ Resultado esperado:
 
 ---
 
+## v2.69 - Alertas gestionables: borrar, marcar leida/no leida por separado y dejar de pintar en rojo lo que no es malo
+
+Estado: implementado y verificado. Suite verde, aislamiento entre usuarios comprobado a mano contra MySQL (ver limitaciones) y las cuatro acciones (marcar leida, marcar no leida, borrar y borrar las leidas) ejercitadas por el usuario en el navegador sobre sus 13 alertas reales de prueba, hasta vaciar la bandeja.
+
+Objetivo:
+
+El usuario pidio poder **borrar alertas** y poder **marcarlas como leidas o no leidas de forma independiente (toggle)**. Hasta aqui la pantalla de alertas solo ofrecia un boton "Marcar todas como leidas": una accion masiva e irreversible. Una alerta leida por error se quedaba leida para siempre, y la lista solo crecia.
+
+La auditoria previa de `diseno-usabilidad` encontro ademas tres defectos reales que no eran cosmeticos, y se corrigen en la misma version porque dos de ellos bloqueaban la funcionalidad nueva.
+
+Decisiones de arquitectura:
+
+- **Las acciones son explicitas (`mark_read` / `mark_unread`), no un `toggle` que el servidor invierta.** Mismo criterio que la estrella de watchlist (`v2.29`): asi son idempotentes, y un doble submit o un "atras + reenviar formulario" no invierte el estado por accidente. Con un `toggle` el resultado dependeria de cuantas veces se enviase el formulario, que es justo lo que un usuario no puede predecir.
+- **Todas las operaciones sobre una alerta concreta filtran por `id` **y** `user_id`.** El `alert_id` llega del POST del cliente: con un `WHERE id = :id` a secas, cualquier usuario autenticado podria marcar o borrar alertas ajenas iterando ids. Es el punto de seguridad de esta version y el motivo de que exista un test especifico de aislamiento entre usuarios.
+- **El `match` de las acciones vive en `applyAlertsAction()`, no inline en `handleAlertsAction()`.** `handleAlertsAction()` termina en `redirect()`, que hace `exit`, asi que un `match` inline no seria testeable de ninguna manera. Extraerlo es lo que permite cubrir las cinco acciones y los casos de error con tests.
+- **Sin migracion de base de datos.** `alerts` (`009_create_alerts.sql`) ya tenia `read_at DATETIME NULL`, asi que volver a "no leida" es un `SET read_at = NULL`, y el indice `idx_alerts_user_unread (user_id, read_at)` ya sirve tal cual para el filtro "sin leer" y para `deleteRead()`.
+- **Borrado sin confirmacion, y sin "Borrar todas".** Una alerta es una notificacion, no un dato del usuario: no hay nada que reconstruir, y "quitar de la watchlist" tampoco confirma, asi que confirmar aqui seria incoherente. Entre el boton por fila y "Borrar las leidas" (que nunca destruye algo no visto) el caso queda cubierto; "Borrar todas" seria la unica accion que si exigiria una pantalla de confirmacion, la primera de la app, y no se ha pedido.
+- **"Sin leer" deja de usar `--bad` y pasa a `--accent`.** La clase `signal-negative` que se reutilizaba significa "señal bajista" en el resto de la app. Con cuatro tipos de alerta vivos (cambio de recomendacion, dividendo proximo, perdida de stop-loss, resultados proximos), tres de ellos no son malas noticias: un dividendo o un cambio a STRONG BUY se pintaban en rojo solo por estar sin leer. La pantalla deja de reutilizar `.signal-*` y estrena clases `.alert-*` propias, para que el rojo vuelva a significar una sola cosa.
+- **La accion masiva cambia de nombre, de `mark_read` a `mark_all_read`**, porque `mark_read` pasa a ser la individual.
+
+Incluye:
+
+- `Repository/AlertRepository.php`: `markRead()`, `markUnread()`, `delete()`, `deleteRead()`, `findRecentUnreadByUser()`, constante `RECENT_LIMIT = 30` y `mapRows()` privado.
+- `Services/Application.php`: `handleAlertsAction()` reescrito (CSRF + `requireUser()` + `applyAlertsAction()` + `redirect()`), `match` con `default => throw`, un metodo privado por accion, helper nuevo `postInt()` junto a `postString()`/`postFloat()`, `requireAlertId()` rechazando id ausente o <= 0, y redireccion con ancla `#alert-<id>` en los dos toggles (en `delete` no, porque ese id ya no existe).
+- `Web/AlertsPage.php`: botones ● / ○ y × por alerta con el patron `inline-form` + CSRF de `WatchlistStar`, barra con "Marcar todas como leidas" y "Borrar las leidas", filtro `?page=alerts&filter=unread|all`, nota "Mostrando las 30 alertas mas recientes." al alcanzar el limite, estado vacio con titulo y enlaces a Watchlist/Cartera, fechas unificadas a `d/m/Y H:i` dentro de `<time datetime="ISO">`.
+- `Web/Layout.php`: bloque `.alert-*` nuevo detras de `.signal-*`; `.panel-notice` nueva; `.watch-star` de `--line-strong` (1,76:1, por debajo del 3:1 exigido a un control) a `--muted` con `padding: 8px`; botones-icono con `width: 40px; min-width: 40px` para ganar por especificidad a `form button { width: 100% }` de `@media (max-width: 920px)`, y 44x44 bajo 640px.
+- `Web/WatchlistPage.php` y `Web/PortfolioPage.php`: el aviso "Tienes N alertas sin leer" deja de usar `panel errors` (el panel de errores, fondo rosa y texto `--bad`) y pasa a `.panel-notice`.
+- `tests/Services/ApplicationAlertsActionTest.php` (nuevo, 10 tests) y `tests/Web/AlertsPageTest.php` (nuevo, 8 tests); `tests/Services/InMemoryAlertRepository.php` reescrito como doble en memoria real con `user_id` y filtro de propiedad en todas las operaciones, manteniendo `created()`/`countCreated()`/`lastMessage()` para los tests ya existentes de `AlertService`.
+
+Bugs corregidos (no eran ideas, estaban mal):
+
+- **Banner verde de exito falso.** En `handleAlertsAction()` el `redirect()` con "Alertas marcadas como leidas" estaba **fuera** del `if`, asi que cualquier POST con `alerts_action` vacio o desconocido respondia "hecho" sin haber hecho nada. Bloqueante: sin arreglarlo, un `alert_id` invalido en las acciones nuevas habria dado exito silencioso.
+- **El contador de sin leer mentia por encima de 30.** `AlertsPage` lo calculaba sobre la lista ya recortada por `LIMIT 30`, mientras Cartera y Watchlist usan `countUnread()`. Con 35 sin leer, la cartera decia 35 y la pantalla de alertas 30. Ahora `render()` recibe `countUnread()` y el conteo local solo decide si se pintan los botones masivos.
+- **Una alerta leida era invisible.** `border-left: 4px solid var(--line)` sobre `--surface-alt` da un contraste de **1,22:1** (el minimo WCAG para elementos no textuales es 3:1), y la unica diferencia con una no leida era el color de ese borde, o sea informacion transmitida solo por color. Ahora hay tres canales: color de barra, fondo (`--surface` sin leer / `--surface-alt` leida) y una pildora de texto "Sin leer".
+
+Verificado en ddev con...:
+
+`php -l` limpio en los 9 ficheros tocados. `vendor/bin/phpunit`: **132 tests, 401 assertions** en verde (baseline `v2.68`: 114 tests, 341 assertions), 18 tests nuevos. Los tests cubren las cinco acciones del `match`, accion vacia y desconocida lanzando, id ausente lanzando sin tocar nada, el render en los tres estados (con alertas, vacia, filtrada) y el **aislamiento entre usuarios**: un intruso no puede `mark_read`, `mark_unread` ni `delete` una alerta ajena, ni alcanzarla con `mark_all_read`/`delete_read`.
+
+`tests/Web/AlertsPageTest.php` encontro durante su escritura un bug real recien introducido: al `sprintf` de la alerta le faltaba el argumento del mensaje (`ArgumentCountError`, fatal en produccion). Corregido antes de cerrar la version.
+
+Contrastes medidos con los tokens reales, todos por encima de umbral: `--muted` sobre `--surface-alt` 4,90:1 y sobre blanco 5,38:1 (iconos en reposo); `--accent` sobre `--surface-alt` 4,98:1 (barra de "sin leer"); `--accent-strong` sobre `--accent-soft` 8,08:1 (pildora y `.panel-notice`); `--bad` sobre `--accent-soft` 5,74:1 (hover de borrar).
+
+Limitaciones conocidas:
+
+- **El `WHERE ... AND user_id` no esta cubierto por la suite** (los tests lo comprueban sobre el doble en memoria, porque el SQL real no se puede testear sin base de datos: el `NOW()` de MySQL descarta SQLite), pero **si se ha verificado a mano contra MySQL en ddev**, con dos usuarios reales y las cuatro operaciones: un intruso que envia un `alert_id` ajeno no consigue `markRead`, `markUnread` ni `delete` (la fila queda intacta, `user_id=3`, `read_at=NULL` tras los tres intentos), y su `deleteRead()` solo borra lo suyo (victima 5 filas / 2 sin leer antes y despues; intruso de 3 a 1). Las mismas operaciones ejecutadas por el dueño legitimo si funcionan. Sigue sin haber test automatico que lo proteja de una regresion futura.
+- **El filtro no se conserva tras una accion**: se vuelve siempre a `?page=alerts`. Se arregla con un `<input type="hidden" name="filter">` en cada formulario; no se ha hecho para no alargar la version.
+- Los cuatro tipos de alerta siguen siendo **indistinguibles entre si**: toda la diferencia esta en la prosa del mensaje. Distinguirlos con una pildora por tipo (y poder filtrar por tipo) exige una columna `type` en `alerts`, o sea migracion nueva y tocar los cuatro `create()` de `AlertService`. Anotado como idea, no implementado.
+- Los glifos ● (U+25CF) y ○ (U+25CB) no se han visto en un navegador real: si en algun sistema salen desalineados respecto a la linea base, la alternativa segura es un `<span>` circular hecho con CSS.
+
+Resultado esperado:
+
+La pantalla de alertas pasa de ser un registro de solo lectura con un boton destructivo a una bandeja gestionable: cada alerta se puede marcar y desmarcar tantas veces como haga falta y borrarse por separado, la lista se puede vaciar de lo ya leido sin tocar lo pendiente, el contador dice lo mismo en las tres pantallas que lo muestran, y el rojo vuelve a significar "señal bajista" en vez de "tienes algo pendiente".
+
+---
+
+## v2.70 - Diez años de historico para el backtesting y la primera medida transversal del ranking
+
+Estado: implementado y medido con datos reales de Yahoo. La conclusion sobre la calidad del score es deliberadamente negativa; ver "Resultado".
+
+Objetivo:
+
+`YahooFinanceProvider` pedia `range=2y` fijo, asi que **toda** calibracion validada hasta hoy (Bollinger `v2.22`, pesos `v2.34`, cruce MACD `v2.53`, crecimiento de dividendo `v2.64`) se apoyaba en ~21 fechas independientes de un unico regimen alcista. Con esa base, cualquier recalibracion es sobreajuste disfrazado de evidencia.
+
+Y habia un hueco mas grave: `backtestTicker()` solo mide umbrales absolutos ticker a ticker y **nunca compara tickers entre si en la misma fecha**, pero el producto que publica la app es un ranking ("que acciones son las mejores para comprar hoy"). La metrica que corresponde a esa promesa no existia.
+
+Decisiones de arquitectura:
+
+- **El rango forma parte de la identidad del dato, asi que entra en la clave de cache.** `market_data_cache` tenia PK `ticker` a secas: `findHistory('AAPL')` devolvia lo ultimo que hubiera escrito quien fuese. El riesgo era real y bidireccional — una ejecucion de backtest con `range=10y` habria dejado a la web sirviendo 10 años (≈5x de payload por ticker **y por peticion**) hasta el siguiente refresco, y la web habria dejado al backtest con 2 años sin avisar. Se separa en `market_history_cache (ticker, history_range)`, mismo criterio que `ticker_backtest_cache (ticker, horizon_days, step)`.
+- **`stock_payload` y `dividend_history_payload` no se duplican por rango**, porque no dependen del rango: separarlos obligaria a pedirlos dos veces al proveedor sin ganar nada.
+- **La web se queda en `2y`.** El rango largo lo usa solo `bin/backtest.php`. `historyRange` es un parametro de constructor con default `'2y'`, asi que ningun punto de montaje existente cambia de comportamiento.
+- **`--persist` se rechaza con rango distinto de `2y`.** Escribe en `ticker_backtest_cache`, cuya clave **no** incluye el rango y que si lee la web; mismo espiritu que `runForTickerCached()` no cacheando `--mode=technical`.
+- **El t-stat transversal es pareado, no de dos muestras.** El top-N y su universo comparten fecha, asi que el ruido de mercado comun se cancela al restar. En los tests sinteticos la diferencia es visible: t pareado 4,00 frente a 2,41 sin emparejar sobre los mismos datos.
+- **Paso >= horizonte por defecto en modo transversal**, para que las fechas no solapen y el t-stat signifique algo; se reportan explicitamente las fechas descartadas por solape y por amplitud insuficiente.
+
+Incluye:
+
+- `Providers/YahooFinanceProvider.php`: `historyRange` por constructor (default `'2y'`), lista cerrada de rangos validos y `getHistoryRange()`.
+- `Providers/CachedMarketDataProvider.php`: tercer parametro `string $historyRange = '2y'` que etiqueta la cache.
+- `Repository/MarketDataCacheRepository.php`: `findHistory()`/`saveHistory()` con `$range`, leyendo y escribiendo en la tabla nueva.
+- `database/migrations/017_create_market_history_cache.sql`: tabla con PK `(ticker, history_range)`, copia las 536 filas existentes como `'2y'` (no fuerza redescarga) y elimina `history_payload`/`history_cached_at` de `market_data_cache`.
+- `Services/BacktestingService.php`: `runCrossSectional()`, `crossSectionalStatistics()`, `rankByPercentage()`, `assertValidMode()`, y extraccion de `sampleHistory()`/`collectSamples()` desde `backtestTicker()`. Reutiliza `stdDev()`/`welchStdErr()` ya existentes.
+- `bin/backtest.php`: flags `--history=`, `--cross-sectional`, `--top=`.
+- `tests/Services/BacktestingServiceCrossSectionalTest.php` (nuevo, 7 tests).
+
+Verificado en ddev con...:
+
+`vendor/bin/phpunit`: **139 tests, 457 assertions** en verde, suite completa incluyendo `v2.69`. Los 7 nuevos usan universos sinteticos de 4 tickers con el resultado calculado a mano: top-2 deliberadamente el mejor (alpha +5,00 y +3,00 → media +4,00, sd √2, stderr 1,00, t 4,00), top-2 deliberadamente el peor (alpha -5,00, t `null` por n=1, 0% de fechas positivas), mas amplitud insuficiente, fechas solapadas, `--step < --horizon`, `topN < 1` y ticker que falla.
+
+Medida real, `--universe=largecap60 --horizon=20 --top=10`:
+
+| | `--history=2y` | `--history=10y` |
+|---|---|---|
+| Fechas independientes | 21 | **121** (2016-11-30 → 2026-06-22) |
+| Alpha media del top-10 | -1,30 pp | **-0,27 pp** |
+| t-stat | -2,60 | **-1,33** |
+| IC95 | — | **-0,66 / +0,13** |
+| Fechas con alpha positiva | 33,33% | **47,11%** |
+
+Con 2 años reproduce casi exactamente el -1,32 pp / t=-2,75 que midio `analista-mercado` por su cuenta, lo que valida la implementacion contra una medida independiente.
+
+Sin `--cross-sectional` y con 10 años: 60 tickers, 0 errores, `effective_independent_samples` = **121 en los 60** (con 2y eran ~21); `buy_signals` 402, `avg_buy_forward_return` 0,72, `avg_all_days` 1,39, `buy_alpha_vs_all_days` **-0,67**, `win_rate_buy` 55,97, 100 meses distintos, peor mes 2020-02 (-13,2).
+
+Impacto en cache, medido: 2y = 536 filas a 71,9 KB/ticker (37,65 MB); 10y = 60 filas a 374,4 KB/ticker (21,94 MB), en filas separadas. Comprobado que la web no se toco: el `history_cached_at` maximo de las filas 2y (17:44) es anterior a la ejecucion de 10y (18:18). `bin/analyze.php --tickers="AAPL MSFT"` sirve desde las filas 2y migradas y la home responde 200.
+
+Resultado:
+
+**El ranking no bate a su universo, pero tampoco hay evidencia de que lo destruya.** El -1,3 pp con t=-2,60 que asustaba a 2 años era en buena parte muestra pequeña y un solo regimen: con 121 fechas el efecto se encoge a -0,27 pp y el intervalo de confianza cruza el cero. Sigue sin haber alpha positiva que justifique el producto tal cual, y esa es la conclusion honesta.
+
+Lo que esta version entrega no es una mejora del score, sino **la capacidad de medirlo**: a partir de aqui, recalibrar los umbrales de `Score::recommendationFor()` (que hoy piden ≥90% para STRONG BUY, un valor que no ha ocurrido ni una vez en 10.972 muestras, con maximo real 84,58%) deja de ser una apuesta y pasa a ser una medida sobre 121 fechas y varios regimenes de mercado, incluido el desplome de 2020.
+
+Limitaciones conocidas:
+
+- **`historyTtl` sigue siendo `P1D` para todos los rangos**, asi que un backtest de 10y refetchea 60 tickers (≈22 MB) cada dia que se ejecute. Los cierres de hace 9 años no cambian: un TTL por rango tiene sentido, pero los TTL son terreno de `fiabilidad-datos-mercado` y no se han tocado.
+- **El sesgo de supervivencia empeora con ventana larga**: `config/universes.php` son listas de hoy aplicadas a 2016. Un universo de hace 10 años no contenia estos 60 tickers.
+- **Los fundamentales siguen sin ser point-in-time**: `stockAt()` reutiliza los de hoy para cada fecha pasada, asi que 65 de 115 puntos del score entran en todo backtest como constante por ticker y con sesgo de anticipacion. Ampliar la ventana no arregla esto; lo agrava.
+- El refactor de `sampleHistory()` toca el corazon de `BacktestingService`. Los tests existentes cubren esa ruta y siguen verdes, pero merece una segunda mirada de `qa-tests`.
+
+---
+
+## v2.71 - Comprar y vender solo desde la ficha del valor
+
+Estado: implementado, con tests de regresion y comprobado en el navegador.
+
+Objetivo:
+
+Habia dos formularios de compra/venta en la app y ninguno de los dos estaba donde debia. "Mi cartera" abria con un panel "Nueva operacion" que pedia **escribir un ticker** ("AAPL o Endesa") aunque el usuario estuviese mirando precisamente sus posiciones, y la tabla de posiciones abiertas remataba con una columna "Operacion" con una caja de cantidad y un boton `↓` por fila. El usuario pidio lo contrario y es lo coherente: se compra y se vende **desde la accion que estas viendo**, asi que el ticker sobra porque ya lo determina la pantalla.
+
+Decisiones de arquitectura:
+
+- **Una sola puerta de entrada, tambien en el servidor.** No basta con quitar los formularios: la ruta POST `?page=portfolio` seguia mapeada a `handleTrade()`. Se retira del `match` de `handlePost()` y queda solo `trade`, para que no exista una segunda via de registrar operaciones sin ninguna pantalla que la use.
+- **El resultado de la operacion vuelve a la ficha, no a "Mi cartera".** Mientras el formulario vivia en la cartera, redirigir alli era natural; ahora seria expulsar al usuario de donde estaba. `StockDetailPage` acepta `message`/`error` y los pinta con los mismos `.form-success`/`.form-error` del resto de la app, y el panel de operacion lleva un enlace "Ver mi cartera completa" para el que quiera ir.
+- **El error tambien vuelve a la ficha, salvo que no haya ficha a la que volver.** Si el ticker no se pudo resolver (formulario manipulado, valor inexistente) no hay pagina de detalle valida, asi que ese caso concreto sigue mostrando el error en la cartera. Sin esa distincion, un ticker invalido redirigiria a una ficha que no existe y el usuario perderia el mensaje.
+- **La columna liberada se usa para lo que se pidio: las acciones que se tienen.** Pasa a llamarse "Acciones", con la cantidad en negrita y la unidad en gris, `tabular-nums` para que los digitos se alineen entre filas, y **4 decimales en vez de 6**: con fracciones de accion los dos ultimos son ruido en una tabla de 9 columnas. El valor exacto no se pierde — sigue en el `title` de la celda, en la exportacion CSV y en el historial de operaciones, que es el libro de registro y conserva su precision completa.
+- **Una cantidad que se redondearia a cero conserva los 6 decimales.** Decir "0 acciones" de una posicion que existe seria peor que un decimal de mas.
+- **Se retira el CSS que se queda sin dueño** (`.mini-form`, `.icon-button` y sus reglas responsive), en vez de dejarlo muerto en la hoja de estilos. De paso desaparece el boton `↓` de vender, que la auditoria de diseño ya habia señalado como glifo ambiguo (podia leerse como "ordenar" o "descargar").
+
+Incluye:
+
+- `Web/PortfolioPage.php`: fuera el panel "Nueva operacion" y el metodo `sellForm()`; cabecera "Cantidad" -> "Acciones"; `sharesCell()` nuevo; nota que explica donde se opera ahora.
+- `Web/StockDetailPage.php`: `render()` acepta `?string $message` y `?string $error`; titulo del panel "Operacion simulada" -> "Comprar o vender TICKER", con el ticker tambien en el texto explicativo; enlace a la cartera.
+- `Services/Application.php`: `handlePost()` sin la ruta `portfolio`; `tradeRedirect()` nuevo; `renderDetail()` pasa `message`/`error` desde la query.
+- `Web/Layout.php`: `.shares` nueva; retiradas `.mini-form`, `.icon-button` y su regla de `@media (max-width: 920px)`.
+- `tests/Web/PortfolioPageTest.php` (nuevo, 6 tests).
+
+Verificado en ddev con...:
+
+`php -l` limpio en los ficheros tocados. `vendor/bin/phpunit`: **145 tests, 473 assertions** en verde (baseline `v2.70`: 139/457). Los 6 nuevos fijan la decision para que no se deshaga sin querer: no hay `trade_action` ni "Nueva operacion" en la cartera, no hay `<th>Operacion</th>` ni boton "Vender", la estrella de watchlist (que tambien es un formulario dentro de la tabla) sigue estando, la cantidad se pinta con 4 decimales y unidad conservando el exacto en el `title`, y una posicion de 0,000012 acciones no se redondea a cero.
+
+Ficha de detalle y home responden 200; "Mi cartera" responde 303 a login, como debe sin sesion.
+
+Limitaciones conocidas:
+
+- **El historial de operaciones sigue con 6 decimales** (`number()`), a proposito: es el libro de registro de lo que se ejecuto, no un resumen. Si se prefiere la misma presentacion que en posiciones abiertas, es cambiar una llamada.
+- La ficha no muestra **cuantas acciones tienes ya de ese valor** junto al formulario, que seria el complemento natural ahora que se opera desde ahi. No se ha hecho porque no se pidio y obliga a pasar la cartera a `StockDetailPage`, que hoy no la recibe.
+- El panel de operacion queda por debajo de los graficos y del historial de señal en el orden de la ficha; con el formulario como unica via de operar, quiza deba subir. Es una decision de diseño que conviene mirar en pantalla antes de tocarla.
+
+Resultado esperado:
+
+Comprar o vender es una accion de la ficha del valor y solo de ahi: sin campo de ticker (lo determina la pantalla), sin un formulario suelto en la cartera que pedia teclear lo que ya estabas viendo, y sin una columna por fila compitiendo con los datos. "Mi cartera" pasa a ser lo que su nombre dice, una vista de estado, y la columna que ocupaba el boton de vender ahora dice de un vistazo cuantas acciones tienes de cada valor.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
@@ -3190,3 +3353,17 @@ Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tr
 
 - **Crecimiento de dividendo (estilo Chowder Rule) en la categoria DIVIDEND — implementado en `v2.64`.** Añadido un tercer componente a `FundamentalAnalyzer::dividend()` (CAGR de dividendo anualizado a 5 años, `Services\DividendGrowthCalculator`), financiado reduciendo `yieldPoints` de 3,5 a 2,5 pts para mantener el techo de la categoria DIVIDEND en 5,0. Backtest real via `BacktestingService` (pendiente en el analisis original de `analista-mercado`, que solo pudo hacer una prueba proxy inconclusa) ya ejecutado antes/despues sobre `largecap60`/`financials`/`consumer_staples`/`ibex35`: resultado neutro (cambios de avg_buy_forward_return <0,4pp en 3 de 4 universos, ningun colapso de señales BUY como el de `CurrentRatio` en `v2.51`), ver `v2.64` para el detalle completo y la limitacion conocida sobre dividendos especiales.
 
+
+Ideas nuevas anotadas por `analista-mercado` el 2026-08-09, tras revisar el motor completo (`Analyzer/`, `BacktestingService`, `config/weights.php`, `config/universes.php`) y medir con las clases de produccion sobre `largecap60`/`ibex35`/`healthcare` (10.972 muestras walk-forward, 2024-11 a 2026-07). Tampoco estan pedidas ni comprometidas.
+
+- **Historico de precios de 10 años (solo para backtesting), hoy limitado a 2 por `range=2y` — implementado en `v2.70`.** `YahooFinanceProvider::getHistoricalQuotes()` (linea 64) pide `range=2y`, asi que TODA calibracion validada hasta hoy (Bollinger `v2.22`, cruce MACD `v2.53`, pesos `v2.34`, crecimiento de dividendo `v2.64`) se apoya en un unico regimen de mercado y en ~21 fechas independientes por universo con `--step=20`. Verificado que el mismo endpoint sirve `range=10y` (2.514 sesiones, 276 KB para AAPL) y que la serie `close` ya viene ajustada por splits (comprobado el 4x1 de AAPL en 2020 y el 10x1 de NVDA en 2024, sin discontinuidad), asi que bastaria con hacer el rango parametrizable y usar el largo solo en `bin/backtest.php`, dejando la web en 2y para no inflar `market_data_cache`; coordinar con `fiabilidad-datos-mercado` el tamaño de cache y el sesgo de supervivencia de los universos.
+
+- **Backtest transversal (top-N del ranking contra el universo), que es lo que la app promete de verdad — implementado en `v2.70`.** `BacktestingService::backtestTicker()` solo mide umbrales absolutos ticker a ticker y nunca compara tickers en la misma fecha, pero el producto es un ranking ("que acciones son las mejores para comprar hoy"). Un metodo `runCrossSectional()` que agrupe por fecha las muestras que ya se calculan, tome el top-N por score y lo compare con la media del universo ese dia (reutilizando `stdDev()`/`welchStdErr()` para el t-stat) mediria eso directamente: medido a mano da alpha del top-10 de -1,32 pp (t=-2,75) en `largecap60`, +0,20 pp (t=0,38) en `ibex35` y -0,21 pp (t=-0,57) en `healthcare` a 20 dias, es decir, ninguna ventaja demostrable en la unica metrica que le importa al usuario.
+
+- **Fuerza relativa y momentum 12-1, el eje que hoy no existe.** Todas las señales de `TechnicalScoreAnalyzer::technical()` son absolutas (precio contra SU propia media), asi que en un mercado alcista casi todo puntua igual y el bloque tecnico pierde capacidad de discriminar justo cuando el ranking tiene que elegir (top-10 solo por TECHNICAL: alpha +0,29 pp, t=0,44). Cabria un componente de fuerza relativa dentro de `momentum()` (retorno a 125 sesiones del ticker menos la mediana del universo/indice, por tramos de percentil) y sustituir o acompañar `TechnicalAnalyzer::momentum()` a 30 sesiones — que es justo el horizonte donde domina la reversion a corto plazo — por el 12-1 clasico (250 sesiones excluyendo el ultimo mes); no subiria el techo de MOMENTUM, solo repartiria sus 10 puntos.
+
+- **Fundamentales point-in-time: hoy el 56% del peso del score es invalidable.** `BacktestingService::stockAt()` (linea 470) reutiliza los fundamentales de HOY para cada fecha pasada, asi que FUNDAMENTAL+VALUATION+QUALITY+DIVIDEND (65 de 115 puntos) entran en todo backtest como una constante por ticker y con sesgo de anticipacion; los veredictos "neutro en backtest" de `v2.51` y `v2.64` en realidad solo midieron el bloque tecnico. Extender la infraestructura de snapshots de `v2.63` a una tabla `fundamentals_history` (ticker/fecha + los ~11 ratios, escrita donde ya se piden los fundamentales) permitiria dentro de unos meses un backtest fundamental real, sin datos externos nuevos.
+
+- **Costes y huecos de precio en la simulacion gestionada.** `BacktestingService::simulateManagedExit()` (linea 424) asume ejecucion exacta en el stop/objetivo, sin comisiones ni deslizamiento y sin tratar el hueco de apertura: si una sesion abre por debajo del stop, la simulacion cobra el stop y no la apertura, lo que sobreestima sistematicamente `avg_buy_managed_return` y `max_drawdown_managed`. Salida a `min(open, stopLoss)` cuando el hueco ya abre por debajo, mas un coste configurable en puntos basicos a la entrada y a la salida, es un cambio contenido en una sola clase y mejora la honestidad de toda la pagina de backtesting.
+
+- **Diversificacion sectorial del propio ranking.** `PortfolioConcentrationCalculator` (`v2.61`) vigila la concentracion de la cartera ya comprada, pero el ranking que la alimenta no: medido sobre `largecap60`, el sector dominante ocupa de media 3,6 de las 10 primeras posiciones y llega a 6 de 10. Ahora que `Company::getSector()` trae sector real (`v2.47`), bastaria con un aviso (o un tope opcional de N por sector) en la tabla de resultados para que "las 10 mejores de hoy" no sean en la practica una apuesta sectorial sin avisar.

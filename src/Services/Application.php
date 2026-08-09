@@ -256,7 +256,12 @@ class Application
             'register' => $this->handleRegister(),
             'resend-verification' => $this->handleResendVerification(),
             'logout' => $this->handleLogout(),
-            'portfolio', 'trade' => $this->handleTrade(),
+            // Solo `trade`: desde v2.71 el unico formulario de compra/venta
+            // es el de la ficha del valor. `portfolio` acepto POST mientras
+            // "Mi cartera" tuvo su propio formulario y el boton de vender
+            // por fila, y dejarlo vivo seria una segunda puerta de entrada
+            // a las operaciones sin ninguna pantalla que la use.
+            'trade' => $this->handleTrade(),
             'watchlist' => $this->handleWatchlistAction(),
             'alerts' => $this->handleAlertsAction(),
             'provider' => $this->handleProviderSave(),
@@ -372,7 +377,9 @@ class Application
             CsrfToken::get(),
             $isWatched,
             $companyProfile,
-            $corporateEvents
+            $corporateEvents,
+            $this->queryString('message'),
+            $this->queryString('error')
         );
     }
 
@@ -544,18 +551,43 @@ class Application
 
             if ($action === 'buy') {
                 $this->portfolioService->buy($user, $ticker, $quantity, $price);
-                $this->redirect('?page=portfolio&message=' . urlencode(sprintf('Compra registrada: %s x %s (%s invertidos).', $this->fmt($quantity), strtoupper($ticker), $this->fmt($quantity * $price))));
+                $this->redirect($this->tradeRedirect($ticker, sprintf('Compra registrada: %s x %s (%s invertidos).', $this->fmt($quantity), strtoupper($ticker), $this->fmt($quantity * $price))));
             }
 
             if ($action === 'sell') {
                 $this->portfolioService->sell($user, $ticker, $quantity, $price);
-                $this->redirect('?page=portfolio&message=' . urlencode(sprintf('Venta registrada: %s x %s (%s recibidos).', $this->fmt($quantity), strtoupper($ticker), $this->fmt($quantity * $price))));
+                $this->redirect($this->tradeRedirect($ticker, sprintf('Venta registrada: %s x %s (%s recibidos).', $this->fmt($quantity), strtoupper($ticker), $this->fmt($quantity * $price))));
             }
 
             throw new \RuntimeException('Operacion no soportada.');
         } catch (Throwable $exception) {
-            return $this->renderPortfolio(null, $exception->getMessage());
+            // El ticker puede no haberse podido resolver (formulario
+            // manipulado o valor inexistente): en ese caso no hay ficha a la
+            // que volver y el error se muestra en la cartera.
+            $ticker = $this->postString('ticker');
+
+            if ($ticker === '') {
+                return $this->renderPortfolio(null, $exception->getMessage());
+            }
+
+            $this->redirect(sprintf(
+                '?ticker=%s&error=%s',
+                urlencode(strtoupper($ticker)),
+                urlencode($exception->getMessage())
+            ));
         }
+    }
+
+    /**
+     * Desde v2.71 comprar y vender solo se puede hacer desde la ficha del
+     * valor, asi que el resultado vuelve a esa misma ficha en vez de
+     * mandar al usuario a "Mi cartera": es donde estaba y desde donde
+     * puede seguir operando. La cartera queda a un enlace de distancia
+     * dentro del propio panel de operacion.
+     */
+    private function tradeRedirect(string $ticker, string $message): string
+    {
+        return sprintf('?ticker=%s&message=%s', urlencode(strtoupper($ticker)), urlencode($message));
     }
 
     /**
@@ -646,8 +678,21 @@ class Application
     {
         try {
             $user = $this->auth->requireUser();
+            $filter = $this->queryString('filter') === 'unread' ? 'unread' : 'all';
+            $alerts = $filter === 'unread'
+                ? $this->alertRepository->findRecentUnreadByUser($user)
+                : $this->alertRepository->findRecentByUser($user);
 
-            return AlertsPage::render($user, $this->alertRepository->findRecentByUser($user), CsrfToken::get(), $message, $error);
+            return AlertsPage::render(
+                $user,
+                $alerts,
+                $this->alertRepository->countUnread($user),
+                $filter,
+                AlertRepository::RECENT_LIMIT,
+                CsrfToken::get(),
+                $message,
+                $error
+            );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
                 $this->redirect('?page=login');
@@ -662,15 +707,94 @@ class Application
         try {
             $this->assertValidCsrf();
             $user = $this->auth->requireUser();
+            $action = $this->postString('alerts_action');
+            $alertId = $this->postInt('alert_id');
+            $message = $this->applyAlertsAction($user, $action, $alertId);
 
-            if ($this->postString('alerts_action') === 'mark_read') {
-                $this->alertRepository->markAllRead($user);
-            }
-
-            $this->redirect('?page=alerts&message=' . urlencode('Alertas marcadas como leidas.'));
+            $this->redirect('?page=alerts&message=' . urlencode($message) . $this->alertsAnchor($action, $alertId));
         } catch (Throwable $exception) {
             return $this->renderAlerts(null, $exception->getMessage());
         }
+    }
+
+    /**
+     * Acciones de la pagina de alertas. Cada una es explicita ("marcar como
+     * leida" / "marcar como no leida", nunca un "toggle" que el servidor
+     * invierta): asi es idempotente y un doble envio, o un "atras + reenviar
+     * formulario", no cambia el estado por accidente.
+     *
+     * El id de la alerta llega del POST del cliente; quien garantiza que
+     * solo se toquen alertas propias es el WHERE ... AND user_id del
+     * repositorio, no esta capa.
+     */
+    private function applyAlertsAction(User $user, string $action, int $alertId): string
+    {
+        return match ($action) {
+            'mark_read' => $this->markAlertRead($user, $alertId),
+            'mark_unread' => $this->markAlertUnread($user, $alertId),
+            'delete' => $this->deleteAlert($user, $alertId),
+            'mark_all_read' => $this->markAllAlertsRead($user),
+            'delete_read' => $this->deleteReadAlerts($user),
+            default => throw new \RuntimeException('Accion de alertas no soportada.'),
+        };
+    }
+
+    /**
+     * Tras marcar/desmarcar se vuelve a la alerta concreta para no dejar al
+     * usuario al principio de la lista. Al borrar no hay ancla: ese id ya
+     * no existe.
+     */
+    private function alertsAnchor(string $action, int $alertId): string
+    {
+        if ($alertId <= 0 || !in_array($action, ['mark_read', 'mark_unread'], true)) {
+            return '';
+        }
+
+        return '#alert-' . $alertId;
+    }
+
+    private function markAlertRead(User $user, int $alertId): string
+    {
+        $this->alertRepository->markRead($user, $this->requireAlertId($alertId));
+
+        return 'Alerta marcada como leida.';
+    }
+
+    private function markAlertUnread(User $user, int $alertId): string
+    {
+        $this->alertRepository->markUnread($user, $this->requireAlertId($alertId));
+
+        return 'Alerta marcada como no leida.';
+    }
+
+    private function deleteAlert(User $user, int $alertId): string
+    {
+        $this->alertRepository->delete($user, $this->requireAlertId($alertId));
+
+        return 'Alerta borrada.';
+    }
+
+    private function markAllAlertsRead(User $user): string
+    {
+        $this->alertRepository->markAllRead($user);
+
+        return 'Alertas marcadas como leidas.';
+    }
+
+    private function deleteReadAlerts(User $user): string
+    {
+        $this->alertRepository->deleteRead($user);
+
+        return 'Alertas leidas borradas.';
+    }
+
+    private function requireAlertId(int $alertId): int
+    {
+        if ($alertId <= 0) {
+            throw new \RuntimeException('No se indico que alerta.');
+        }
+
+        return $alertId;
     }
 
     private function handleProviderSave(): string
@@ -1111,6 +1235,11 @@ class Application
         $value = $_POST[$key] ?? '';
 
         return is_string($value) ? trim($value) : '';
+    }
+
+    private function postInt(string $key): int
+    {
+        return (int) $this->postString($key);
     }
 
     private function postFloat(string $key): float

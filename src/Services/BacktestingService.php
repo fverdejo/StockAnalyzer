@@ -168,6 +168,228 @@ class BacktestingService
     }
 
     /**
+     * Backtest TRANSVERSAL: mide lo que el producto promete de verdad, que es
+     * un ranking ("las N mejores acciones para comprar hoy"), no un umbral
+     * absoluto.
+     *
+     * `backtestTicker()` responde "cuando este ticker marca BUY, ¿sube?", y
+     * compara cada ticker consigo mismo: si el mercado entero sube, la señal
+     * parece buena aunque el ranking no aporte nada. Este metodo responde la
+     * pregunta que si decide: en cada fecha, ¿el top-N por puntuacion lo hace
+     * mejor que la media de las acciones disponibles ESE MISMO DIA? Al
+     * comparar dentro de la misma fecha, el movimiento comun del mercado se
+     * cancela por construccion (no hace falta un benchmark externo) y
+     * desaparece el problema de que las muestras BUY de tickers distintos en
+     * la misma fecha no sean independientes: cada fecha aporta UN dato, la
+     * alpha de ese dia.
+     *
+     * Sobre la independencia entre fechas se apoyan tres reglas:
+     *
+     * - $step >= $horizonDays (obligatorio): dentro de un ticker, dos
+     *   muestras consecutivas no comparten dias de retorno futuro.
+     * - Una fecha necesita mas de $topN tickers para evaluarse: con
+     *   exactamente $topN, el top-N ES el universo y la alpha valdria 0 por
+     *   construccion. Este filtro tambien descarta las fechas sueltas que
+     *   aportan los tickers con historico corto, cuya rejilla de muestreo no
+     *   coincide con la del resto del universo.
+     * - Entre dos fechas evaluadas deben pasar al menos $horizonDays dias
+     *   naturales. Es un suelo conservador (con $step sesiones de por medio
+     *   el hueco real es mayor), pensado para que un ticker desalineado no
+     *   cuele una fecha solapada con la anterior.
+     *
+     * @param list<string> $tickers
+     * @param int $topN Cuantas acciones se "compran" cada fecha, las de mayor
+     *        puntuacion, igual que el Top del dashboard.
+     * @param string $mode 'full' o 'technical', mismo significado que en `run()`.
+     * @return array<string,mixed>
+     */
+    public function runCrossSectional(
+        array $tickers,
+        int $horizonDays = 20,
+        int $step = 20,
+        int $topN = 10,
+        string $mode = 'full'
+    ): array {
+        $this->assertValidMode($mode);
+
+        if ($topN < 1) {
+            throw new \InvalidArgumentException("El top-N debe ser al menos 1, recibido $topN.");
+        }
+
+        if ($step < $horizonDays) {
+            throw new \InvalidArgumentException(
+                "Un backtest transversal necesita fechas independientes: el paso ($step) no puede ser menor que el horizonte ($horizonDays)."
+            );
+        }
+
+        $samplesByDate = [];
+        $errors = [];
+
+        foreach ($tickers as $ticker) {
+            try {
+                foreach ($this->collectSamples($ticker, $horizonDays, $step, $mode) as $sample) {
+                    $samplesByDate[$sample['date']][] = [
+                        'ticker' => strtoupper($ticker),
+                        'percentage' => $sample['percentage'],
+                        'forward_return' => $sample['forward_return'],
+                    ];
+                }
+            } catch (\Throwable $exception) {
+                $errors[$ticker] = $exception->getMessage();
+            }
+        }
+
+        ksort($samplesByDate);
+
+        $dates = [];
+        $alphas = [];
+        $topAverages = [];
+        $universeAverages = [];
+        $topReturns = [];
+        $universeReturns = [];
+        $droppedLowBreadth = 0;
+        $droppedOverlapping = 0;
+        $lastEvaluated = null;
+
+        foreach ($samplesByDate as $date => $daySamples) {
+            if (count($daySamples) <= $topN) {
+                $droppedLowBreadth++;
+                continue;
+            }
+
+            $currentDate = new \DateTimeImmutable((string) $date);
+
+            if ($lastEvaluated !== null && (int) $lastEvaluated->diff($currentDate)->days < $horizonDays) {
+                $droppedOverlapping++;
+                continue;
+            }
+
+            $lastEvaluated = $currentDate;
+            $selected = array_slice($this->rankByPercentage($daySamples), 0, $topN);
+            $selectedReturns = array_column($selected, 'forward_return');
+            $dayReturns = array_column($daySamples, 'forward_return');
+            $topAverage = array_sum($selectedReturns) / count($selectedReturns);
+            $universeAverage = array_sum($dayReturns) / count($dayReturns);
+
+            $alphas[] = $topAverage - $universeAverage;
+            $topAverages[] = $topAverage;
+            $universeAverages[] = $universeAverage;
+            $topReturns = array_merge($topReturns, $selectedReturns);
+            $universeReturns = array_merge($universeReturns, $dayReturns);
+
+            $dates[] = [
+                'date' => (string) $date,
+                'universe_size' => count($daySamples),
+                'top_tickers' => array_column($selected, 'ticker'),
+                'top_avg_forward_return' => round($topAverage, 2),
+                'universe_avg_forward_return' => round($universeAverage, 2),
+                'alpha' => round($topAverage - $universeAverage, 2),
+            ];
+        }
+
+        return array_merge(
+            [
+                'horizon_days' => $horizonDays,
+                'step' => $step,
+                'top_n' => $topN,
+                'mode' => $mode,
+                'generated_at' => (new \DateTimeImmutable())->format(DATE_ATOM),
+                'dates_evaluated' => count($dates),
+                'dates_dropped_low_breadth' => $droppedLowBreadth,
+                'dates_dropped_overlapping' => $droppedOverlapping,
+            ],
+            $this->crossSectionalStatistics($alphas, $topAverages, $universeAverages, $topReturns, $universeReturns),
+            [
+                'dates' => $dates,
+                'errors' => $errors,
+            ]
+        );
+    }
+
+    /**
+     * Estadistica del backtest transversal. La cifra principal es la alpha
+     * media POR FECHA (una fecha = un voto, igual criterio que
+     * `avg_of_monthly_avgs` en `aggregateUniverse()`) y su t-stat pareado:
+     * al restar en la misma fecha, la volatilidad del mercado desaparece del
+     * denominador y el t-stat mide de verdad si el ranking ordena.
+     *
+     * `pooled_alpha_t_stat` acompaña a la cifra principal como contraste: es
+     * el mismo calculo que ya usa `backtestTicker()` (Welch sobre las dos
+     * nubes de retornos sin emparejar por fecha) y, al ignorar que dos
+     * muestras del mismo dia comparten mercado, tiende a dar un error
+     * estandar mucho mayor. Si ambos t coinciden en signo pero no en
+     * magnitud, la diferencia es exactamente el ruido de mercado que el
+     * diseño pareado elimina.
+     *
+     * @param list<float> $alphas
+     * @param list<float> $topAverages
+     * @param list<float> $universeAverages
+     * @param list<float> $topReturns
+     * @param list<float> $universeReturns
+     * @return array<string,mixed>
+     */
+    private function crossSectionalStatistics(
+        array $alphas,
+        array $topAverages,
+        array $universeAverages,
+        array $topReturns,
+        array $universeReturns
+    ): array {
+        $meanAlpha = $alphas !== [] ? array_sum($alphas) / count($alphas) : null;
+        $alphaStdDev = $this->stdDev($alphas);
+        $alphaStdErr = $alphaStdDev !== null ? $alphaStdDev / sqrt(count($alphas)) : null;
+        $pooledStdErr = $this->welchStdErr($topReturns, $universeReturns);
+        $positiveAlphas = count(array_filter($alphas, static fn (float $alpha): bool => $alpha > 0.0));
+
+        return [
+            'avg_top_n_forward_return' => $this->average($topAverages),
+            'avg_universe_forward_return' => $this->average($universeAverages),
+            'avg_alpha' => $meanAlpha !== null ? round($meanAlpha, 2) : null,
+            'alpha_stddev' => $alphaStdDev !== null ? round($alphaStdDev, 2) : null,
+            'alpha_stderr' => $alphaStdErr !== null ? round($alphaStdErr, 2) : null,
+            'alpha_ci95_low' => ($meanAlpha !== null && $alphaStdErr !== null)
+                ? round($meanAlpha - (1.96 * $alphaStdErr), 2)
+                : null,
+            'alpha_ci95_high' => ($meanAlpha !== null && $alphaStdErr !== null)
+                ? round($meanAlpha + (1.96 * $alphaStdErr), 2)
+                : null,
+            'alpha_t_stat' => ($meanAlpha !== null && $alphaStdErr !== null && $alphaStdErr > 0.0)
+                ? round($meanAlpha / $alphaStdErr, 2)
+                : null,
+            'dates_with_positive_alpha' => $positiveAlphas,
+            'pct_dates_positive_alpha' => $alphas !== []
+                ? round(($positiveAlphas / count($alphas)) * 100, 2)
+                : null,
+            'win_rate_top_n' => $this->winRate($topReturns),
+            'win_rate_universe' => $this->winRate($universeReturns),
+            'pooled_alpha_stderr' => $pooledStdErr !== null ? round($pooledStdErr, 2) : null,
+            'pooled_alpha_t_stat' => ($meanAlpha !== null && $pooledStdErr !== null && $pooledStdErr > 0.0)
+                ? round($meanAlpha / $pooledStdErr, 2)
+                : null,
+        ];
+    }
+
+    /**
+     * Ranking de una fecha por puntuacion descendente. El desempate por
+     * ticker (alfabetico) no es cosmetico: sin el, dos acciones empatadas
+     * entrarian o no en el top-N segun el orden en que se pidieron los
+     * tickers, y el mismo backtest daria numeros distintos.
+     *
+     * @param list<array{ticker: string, percentage: float, forward_return: float}> $daySamples
+     * @return list<array{ticker: string, percentage: float, forward_return: float}>
+     */
+    private function rankByPercentage(array $daySamples): array
+    {
+        usort(
+            $daySamples,
+            static fn (array $left, array $right): int
+                => [$right['percentage'], $left['ticker']] <=> [$left['percentage'], $right['ticker']]
+        );
+
+        return $daySamples;
+    }
+
+    /**
      * Version de un solo ticker de `backtestTicker()`, pensada para uso
      * interactivo (ver versions.md v2.23: historial de la señal de compra
      * en la ficha de detalle). A diferencia de `run()`, nunca lanza: si el
@@ -285,16 +507,38 @@ class BacktestingService
     }
 
     /**
-     * @return array<string,mixed>
+     * Recorrido walk-forward de un ticker: una muestra por cada fecha de
+     * señal, con la puntuacion que habria visto el usuario ese dia y el
+     * retorno a $horizonDays vistas.
+     *
+     * Esta separado de `backtestTicker()` porque hay dos lecturas distintas
+     * de las MISMAS muestras: la absoluta (umbrales BUY/SELL de un ticker
+     * contra si mismo, `backtestTicker()`) y la transversal (ranking de
+     * tickers en una misma fecha, `runCrossSectional()`). Duplicar el
+     * recorrido para la segunda habria significado dos definiciones de
+     * "muestra" que podrian divergir con el tiempo.
+     *
+     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>
      */
-    private function backtestTicker(string $ticker, int $horizonDays, int $step, string $mode = 'full'): array
+    private function collectSamples(string $ticker, int $horizonDays, int $step, string $mode): array
     {
-        if (!in_array($mode, ['full', 'technical'], true)) {
-            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical'.");
-        }
+        $this->assertValidMode($mode);
 
-        $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
-        $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+        return $this->sampleHistory(
+            $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker),
+            $this->marketDataProvider->getHistoricalQuotes($ticker),
+            $horizonDays,
+            $step,
+            $mode
+        );
+    }
+
+    /**
+     * @param list<HistoricalQuote> $history
+     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>
+     */
+    private function sampleHistory(Stock $stock, array $history, int $horizonDays, int $step, string $mode): array
+    {
         $samples = [];
         $minimumLookback = 80;
         $count = count($history);
@@ -353,6 +597,28 @@ class BacktestingService
                 'exit_day' => $exitDay,
             ];
         }
+
+        return $samples;
+    }
+
+    private function assertValidMode(string $mode): void
+    {
+        if (!in_array($mode, ['full', 'technical'], true)) {
+            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical'.");
+        }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function backtestTicker(string $ticker, int $horizonDays, int $step, string $mode = 'full'): array
+    {
+        $this->assertValidMode($mode);
+
+        $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
+        $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+        $samples = $this->sampleHistory($stock, $history, $horizonDays, $step, $mode);
+        $count = count($history);
 
         $buyReturns = $this->returnsFor($samples, ['STRONG BUY', 'BUY']);
         $sellReturns = $this->returnsFor($samples, ['SELL', 'STRONG SELL']);

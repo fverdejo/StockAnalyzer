@@ -38,7 +38,9 @@ class StockDetailPage
         string $csrfToken = '',
         bool $isWatched = false,
         ?Company $companyProfile = null,
-        ?CorporateEvents $corporateEvents = null
+        ?CorporateEvents $corporateEvents = null,
+        ?string $message = null,
+        ?string $error = null
     ): string
     {
         $stock = $analysis->getStock();
@@ -160,9 +162,22 @@ class StockDetailPage
 
         $companyOverview = self::renderCompanyOverview($companyProfile, $corporateEvents);
 
+        // Desde v2.71 comprar y vender solo se puede hacer aqui, asi que el
+        // resultado de la operacion tiene que verse aqui tambien: antes el
+        // exito y el error viajaban siempre a "Mi cartera", que era donde
+        // vivia el formulario.
+        $messageHtml = $message !== null && $message !== ''
+            ? sprintf('<div class="form-success">%s</div>', Layout::escape($message))
+            : '';
+        $errorHtml = $error !== null && $error !== ''
+            ? sprintf('<div class="form-error">%s</div>', Layout::escape($error))
+            : '';
+
         $body = sprintf(
-            '<header class="topbar detail-topbar">%s</header>%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
+            $messageHtml,
+            $errorHtml,
             $companyOverview,
             $charts,
             $signalHistory,
@@ -296,7 +311,9 @@ class StockDetailPage
         }
 
         return sprintf(
-            '<section class="panel"><h2>Operacion simulada</h2><p class="muted panel-note">Indica cantidad de acciones (admite decimales) o un importe en dinero; el importe tiene prioridad si rellenas ambos. Si dejas el precio en blanco se usa el precio de mercado actual; indicalo para registrar una compra o venta real ya hecha a otro precio.</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en dinero</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><div><label for="price">Precio de compra/venta (opcional)</label><input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form></section>',
+            '<section class="panel"><h2>Comprar o vender %s</h2><p class="muted panel-note">La operacion es siempre sobre %s, el valor que estas viendo. Indica cantidad de acciones (admite decimales) o un importe en dinero; el importe tiene prioridad si rellenas ambos. Si dejas el precio en blanco se usa el precio de mercado actual; indicalo para registrar una compra o venta real ya hecha a otro precio.</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en dinero</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><div><label for="price">Precio de compra/venta (opcional)</label><input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form><p class="muted panel-note"><a href="?page=portfolio">Ver mi cartera completa</a></p></section>',
+            Layout::escape($ticker),
+            Layout::escape($ticker),
             Layout::escape($csrfToken),
             Layout::escape($ticker)
         );

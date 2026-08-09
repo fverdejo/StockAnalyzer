@@ -34,7 +34,7 @@ class WatchlistPage
         $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
         $errorHtml = $error !== null && $error !== '' ? sprintf('<div class="form-error">%s</div>', Layout::escape($error)) : '';
         $alertsNote = $unreadAlerts > 0 ? sprintf(
-            '<section class="panel errors"><strong>Tienes %d alerta%s sin leer.</strong> <a href="?page=alerts">Ver alertas</a></section>',
+            '<section class="panel panel-notice"><strong>Tienes %d alerta%s sin leer.</strong> <a href="?page=alerts">Ver alertas</a></section>',
             $unreadAlerts,
             $unreadAlerts === 1 ? '' : 's'
         ) : '';

@@ -56,32 +56,6 @@ class PortfolioPage
         {$valueChart}
 
         <section class="panel">
-            <h2>Nueva operacion</h2>
-            <p class="muted panel-note">Indica la cantidad de acciones (pueden ser decimales, por ejemplo 2,5) o, si lo prefieres, un importe en dinero y se calculara la cantidad equivalente al precio actual. Si dejas el precio en blanco se usa el precio de mercado actual; indicalo para registrar una compra o venta real ya hecha a otro precio.</p>
-            <form method="post" action="?page=portfolio" class="trade-form">
-                <input type="hidden" name="csrf_token" value="{$token}">
-                <div>
-                    <label for="ticker">Ticker o nombre</label>
-                    <input id="ticker" name="ticker" placeholder="AAPL o Endesa" required>
-                </div>
-                <div>
-                    <label for="quantity">Cantidad (acciones)</label>
-                    <input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001">
-                </div>
-                <div>
-                    <label for="amount">o importe en dinero</label>
-                    <input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150">
-                </div>
-                <div>
-                    <label for="price">Precio de compra/venta (opcional)</label>
-                    <input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco">
-                </div>
-                <button type="submit" name="trade_action" value="buy">Comprar a mercado</button>
-                <button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button>
-            </form>
-        </section>
-
-        <section class="panel">
             <h2>Posiciones abiertas</h2>
             {$holdings}
         </section>
@@ -267,11 +241,11 @@ HTML;
             $recommendation = $recommendations[$holding->getTicker()] ?? null;
             $star = WatchlistStar::render($holding->getTicker(), $user, isset($watched[$holding->getTicker()]), $csrfToken, '?page=portfolio');
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td></tr>',
                 $star,
                 urlencode($holding->getTicker()),
                 $ticker,
-                self::number($holding->getQuantity()),
+                self::sharesCell($holding->getQuantity()),
                 Layout::formatMoney($holding->getAveragePrice(), $currency),
                 Layout::formatNullableMoney($holding->getCurrentPrice(), $currency)
                     . self::eurEquivalent(self::currentPriceEur($portfolio, $holding), $currency),
@@ -282,18 +256,18 @@ HTML;
                 self::nullableProfitMoney($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent(), $currency)
                     . self::eurProfitSuffix($holding, $currency),
                 self::recommendationBadge($recommendation),
-                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency, $suggestedPositions[$holding->getTicker()] ?? null),
-                self::sellForm($holding, $csrfToken)
+                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency, $suggestedPositions[$holding->getTicker()] ?? null)
             );
         }
 
-        return '<div class="table-wrap"><table class="table-compact"><thead><tr><th>&#9733;</th><th>Ticker</th><th>Cantidad</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th><th>Operacion</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, entre parentesis, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact"><thead><tr><th>&#9733;</th><th>Ticker</th><th>Acciones</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operacion se hace siempre desde la accion que estas mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, entre parentesis, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
     }
 
     /**
      * Aviso de alertas sin leer (ver versions.md v2.15), visible en las
      * paginas donde se generan (cartera y watchlist), con enlace a la
-     * pagina de alertas completa.
+     * pagina de alertas completa. Usa .panel-notice y no .errors: tener
+     * alertas sin leer es informacion, no un fallo.
      */
     private static function renderUnreadAlertsNote(int $unreadAlerts): string
     {
@@ -302,7 +276,7 @@ HTML;
         }
 
         return sprintf(
-            '<section class="panel errors"><strong>Tienes %d alerta%s sin leer.</strong> <a href="?page=alerts">Ver alertas</a></section>',
+            '<section class="panel panel-notice"><strong>Tienes %d alerta%s sin leer.</strong> <a href="?page=alerts">Ver alertas</a></section>',
             $unreadAlerts,
             $unreadAlerts === 1 ? '' : 's'
         );
@@ -321,14 +295,25 @@ HTML;
         );
     }
 
-    private static function sellForm(Holding $holding, string $csrfToken): string
+    /**
+     * Acciones en cartera. Desde v2.71 esta columna ya no compite por el
+     * espacio con el formulario de venta, asi que puede leerse de un
+     * vistazo: cantidad destacada y la unidad en gris. Se muestran 4
+     * decimales en vez de los 6 de `number()` porque con fracciones de
+     * accion los dos ultimos son ruido visual en una tabla de 9 columnas;
+     * el valor exacto sigue disponible en el `title` y, sin redondear, en
+     * la exportacion CSV y en el historial de operaciones. Una cantidad
+     * tan pequeña que se redondearia a cero conserva los 6 decimales:
+     * antes "0" que mentir sobre una posicion que existe.
+     */
+    private static function sharesCell(float $quantity): string
     {
+        $decimals = round($quantity, 4) == 0.0 && $quantity > 0 ? 6 : 4;
+
         return sprintf(
-            '<form method="post" action="?page=portfolio" class="mini-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><input name="quantity" type="number" min="0.000001" max="%s" step="0.000001" value="%s"><button type="submit" name="trade_action" value="sell" class="secondary-button icon-button" title="Vender" aria-label="Vender">&#8595;</button></form>',
-            $csrfToken,
-            Layout::escape($holding->getTicker()),
-            Layout::escape((string) $holding->getQuantity()),
-            Layout::escape((string) $holding->getQuantity())
+            '<span class="shares" title="%s"><strong>%s</strong> <span class="muted">acc.</span></span>',
+            Layout::escape(self::number($quantity)),
+            Layout::escape(rtrim(rtrim(number_format($quantity, $decimals, ',', '.'), '0'), ','))
         );
     }
 

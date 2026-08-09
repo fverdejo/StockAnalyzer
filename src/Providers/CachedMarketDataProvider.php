@@ -11,9 +11,19 @@ use StockAnalyzer\Repository\MarketDataCacheRepository;
 
 class CachedMarketDataProvider implements MarketDataProviderInterface
 {
+    /**
+     * $historyRange NO cambia lo que se pide al proveedor (eso lo decide el
+     * propio proveedor envuelto, p.ej. YahooFinanceProvider): es la etiqueta
+     * con la que se guarda el historico en cache, y debe coincidir con el
+     * rango que ese proveedor pide de verdad. Existe porque un historico de
+     * 2 años y uno de 10 no son el mismo dato: si se guardasen bajo la misma
+     * clave, una ejecucion de bin/backtest.php con rango largo envenenaria
+     * el historico que sirve la web (y la web, el del backtest).
+     */
     public function __construct(
         private readonly MarketDataProviderInterface $inner,
         private readonly MarketDataCacheRepository $cache,
+        private readonly string $historyRange = '2y',
         private readonly DateInterval $stockTtl = new DateInterval('PT15M'),
         private readonly DateInterval $historyTtl = new DateInterval('P1D'),
         private readonly DateInterval $dividendHistoryTtl = new DateInterval('P30D')
@@ -51,7 +61,7 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
         $cached = null;
 
         try {
-            $cached = $this->cache->findHistory($ticker, $this->historyTtl);
+            $cached = $this->cache->findHistory($ticker, $this->historyTtl, $this->historyRange);
         } catch (\Throwable) {
             $cached = null;
         }
@@ -63,7 +73,7 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
         $quotes = $this->inner->getHistoricalQuotes($ticker);
 
         try {
-            $this->cache->saveHistory($ticker, $quotes);
+            $this->cache->saveHistory($ticker, $quotes, $this->historyRange);
         } catch (\Throwable) {
         }
 

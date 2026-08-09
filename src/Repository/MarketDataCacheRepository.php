@@ -53,13 +53,30 @@ class MarketDataCacheRepository
     }
 
     /**
+     * El historico se cachea en market_history_cache, con clave
+     * (ticker, rango), y no junto al resto de payloads de este ticker: el
+     * rango que se pidio al proveedor forma parte de la identidad del dato
+     * (la web trabaja con 2 años y bin/backtest.php puede pedir 10). Con una
+     * clave que solo fuese el ticker, una ejecucion de backtest con rango
+     * largo dejaria en cache un historico que la web no ha pedido, y
+     * viceversa.
+     *
      * @return list<HistoricalQuote>|null
      */
-    public function findHistory(string $ticker, DateInterval $ttl): ?array
+    public function findHistory(string $ticker, DateInterval $ttl, string $range): ?array
     {
-        $row = $this->findRow($ticker);
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT history_payload, history_cached_at
+             FROM market_history_cache
+             WHERE ticker = :ticker AND history_range = :range'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'range' => $range,
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
 
-        if ($row === null || !is_string($row['history_payload'] ?? null) || !$this->isFresh($row['history_cached_at'] ?? null, $ttl)) {
+        if (!is_array($row) || !is_string($row['history_payload'] ?? null) || !$this->isFresh($row['history_cached_at'] ?? null, $ttl)) {
             return null;
         }
 
@@ -75,16 +92,17 @@ class MarketDataCacheRepository
     /**
      * @param list<HistoricalQuote> $quotes
      */
-    public function saveHistory(string $ticker, array $quotes): void
+    public function saveHistory(string $ticker, array $quotes, string $range): void
     {
         $payload = json_encode(MarketDataSerializer::historyToArray($quotes), JSON_THROW_ON_ERROR);
         $statement = $this->connection->getPdo()->prepare(
-            'INSERT INTO market_data_cache (ticker, history_payload, history_cached_at, updated_at)
-             VALUES (:ticker, :payload, NOW(), NOW())
+            'INSERT INTO market_history_cache (ticker, history_range, history_payload, history_cached_at, updated_at)
+             VALUES (:ticker, :range, :payload, NOW(), NOW())
              ON DUPLICATE KEY UPDATE history_payload = VALUES(history_payload), history_cached_at = NOW(), updated_at = NOW()'
         );
         $statement->execute([
             'ticker' => strtoupper($ticker),
+            'range' => $range,
             'payload' => $payload,
         ]);
     }
@@ -136,7 +154,7 @@ class MarketDataCacheRepository
     private function findRow(string $ticker): ?array
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT ticker, stock_payload, stock_cached_at, history_payload, history_cached_at,
+            'SELECT ticker, stock_payload, stock_cached_at,
                     dividend_history_payload, dividend_history_cached_at
              FROM market_data_cache
              WHERE ticker = :ticker'

@@ -285,24 +285,6 @@ class Layout
             align-items: end;
         }
 
-        .mini-form {
-            display: grid;
-            grid-template-columns: minmax(64px, 1fr) auto;
-            gap: 6px;
-        }
-
-        .mini-form input {
-            height: 34px;
-            font-size: 13px;
-        }
-
-        .mini-form button {
-            min-height: 34px;
-            height: 34px;
-            padding: 0 10px;
-            font-size: 13px;
-        }
-
         label {
             display: block;
             margin-bottom: 7px;
@@ -365,8 +347,6 @@ class Layout
             background: #e5edf1;
         }
 
-        .icon-button { padding: 0; font-size: 16px; line-height: 1; }
-        .mini-form .icon-button { width: 38px; min-width: 38px; }
 
         .danger-button {
             background: var(--bad);
@@ -643,14 +623,17 @@ class Layout
             white-space: nowrap;
         }
 
+        /* --muted y no --line-strong (1,76:1 sobre blanco): es un control
+           interactivo y necesita al menos 3:1. El padding le da area
+           tactil suficiente. */
         .watch-star {
             background: transparent;
             border: 0;
-            color: var(--line-strong);
+            color: var(--muted);
             font-size: 20px;
             line-height: 1;
             min-height: auto;
-            padding: 2px 4px;
+            padding: 8px;
             cursor: pointer;
         }
 
@@ -735,6 +718,191 @@ class Layout
         .signal-positive { border-left-color: var(--good); }
         .signal-negative { border-left-color: var(--bad); }
         .signal-neutral { border-left-color: var(--warn); }
+
+        /* Aviso informativo a nivel de panel (por ejemplo "tienes N alertas
+           sin leer"). Deliberadamente distinto de .errors: aquel es el
+           panel de fallos y su rojo significa que algo ha ido mal. */
+        .panel-notice {
+            border-color: var(--accent);
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+        }
+
+        .panel-notice a {
+            color: var(--accent-strong);
+        }
+
+        /* Alertas (ver versions.md v2.15). Clases propias en vez de
+           reutilizar .signal-*: alli el color codifica el veredicto
+           (--bad = SELL) y aqui codificaria "sin leer", que no es lo
+           mismo ni siempre es mala noticia. */
+        .alert-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin: 12px 0 14px;
+        }
+
+        .alert-filter {
+            display: inline-flex;
+            align-items: center;
+            min-height: 36px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 0 13px;
+            background: var(--surface);
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .alert-filter:hover {
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+        }
+
+        .alert-filter-active {
+            border-color: var(--accent);
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+        }
+
+        /* Gana a `form button { width: 100% }` (max-width: 920px) por
+           especificidad de clase, no por orden. */
+        .alert-toolbar button {
+            width: auto;
+            min-height: 36px;
+            height: 36px;
+            padding: 0 13px;
+            font-size: 13px;
+        }
+
+        /* Acciones en cartera (v2.71). La columna heredo el espacio que
+           ocupaba el formulario de venta por fila, asi que la cantidad se
+           destaca y la unidad queda en gris: el numero es el dato, "acc."
+           solo lo etiqueta. `tabular-nums` alinea los digitos entre filas
+           para poder comparar cantidades de un vistazo. */
+        .shares {
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .shares strong { font-size: 15px; }
+        .shares .muted { font-size: 12px; }
+
+        .alert-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .alert {
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--line-strong);
+            border-radius: 6px;
+            background: var(--surface-alt);
+            padding: 9px 12px;
+        }
+
+        /* Leido/sin leer no se distingue solo por el color del borde: la
+           alerta sin leer cambia tambien de fondo y lleva pildora de texto. */
+        .alert-unread {
+            border-left-color: var(--accent);
+            background: var(--surface);
+        }
+
+        .alert:focus-visible {
+            outline: 3px solid rgba(37, 99, 235, 0.22);
+            outline-offset: 2px;
+        }
+
+        .alert-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .alert-ticker {
+            font-size: 13px;
+            text-transform: uppercase;
+        }
+
+        .alert-date {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .alert-pill {
+            border-radius: 999px;
+            padding: 2px 8px;
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .alert-actions {
+            display: flex;
+            gap: 4px;
+            margin-left: auto;
+        }
+
+        .alert-message {
+            margin: 0;
+            font-size: 14px;
+            overflow-wrap: anywhere;
+        }
+
+        .alert-action {
+            width: 40px;
+            min-width: 40px;
+            min-height: 40px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            padding: 0;
+            background: transparent;
+            color: var(--muted);
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        /* Fondo --accent-soft y no --surface: la alerta sin leer ya es
+           blanca y el hover no se notaria. */
+        .alert-action:hover {
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+        }
+
+        .alert-action-delete:hover {
+            background: #fdf1ef;
+            color: var(--bad);
+        }
+
+        .alert-empty {
+            border: 1px dashed var(--line-strong);
+            border-radius: 8px;
+            background: var(--surface-alt);
+            padding: 22px 18px;
+            text-align: center;
+        }
+
+        .alert-empty h3 {
+            margin: 0 0 6px;
+            font-size: 16px;
+        }
+
+        .alert-empty p {
+            margin: 0 0 6px;
+        }
+
+        .alert-empty p:last-child {
+            margin-bottom: 0;
+        }
 
         .summary-box {
             background: var(--surface-alt);
@@ -1001,17 +1169,25 @@ class Layout
 
             form,
             .trade-form,
-            .mini-form,
             .footer-shell,
             .score-bar-head {
                 grid-template-columns: 1fr;
             }
 
-            /* Con .mini-form en una sola columna, el boton-icono (width fijo
-               de 38px) queda anclado a la izquierda en su propia fila; se
-               centra para que no parezca un elemento suelto/roto. */
-            .mini-form .icon-button {
-                justify-self: center;
+            /* Objetivo tactil de 44x44 en movil para los controles de
+               icono (estrella de watchlist y acciones de alerta). */
+            .watch-star {
+                width: 44px;
+                min-width: 44px;
+                height: 44px;
+                min-height: 44px;
+                padding: 10px;
+            }
+
+            .alert-action {
+                width: 44px;
+                min-width: 44px;
+                min-height: 44px;
             }
 
             .footer-shell,
