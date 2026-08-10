@@ -20,7 +20,7 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
 /**
  * Cubre la simulacion de stop-loss/objetivo dia a dia añadida a
  * BacktestingService (ver versions.md): ademas del `forward_return` a
- * ciegas que ya existia, cada muestra BUY/STRONG BUY con niveles de riesgo
+ * ciegas que ya existia, cada muestra BUY con niveles de riesgo
  * calculables (RiskLevelsCalculator, mismo motor que usa la ficha de
  * detalle) recorre el historico dia a dia para saber si el stop-loss o el
  * objetivo basado en ATR14 se dispara antes que el horizonte fijo.
@@ -30,7 +30,7 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  * ScoreCalculator/TechnicalScoreAnalyzer/FundamentalAnalyzer, asi que el
  * test debe demostrar que la integracion real produce el comportamiento
  * esperado, no solo una version simplificada). Para conseguir una
- * recomendacion BUY/STRONG BUY de forma determinista se usa:
+ * recomendacion BUY de forma determinista se usa:
  *
  * - Fundamentales excelentes y fijos (ver SyntheticStock), que por
  *   si solos ya cubren FUNDAMENTAL/VALUATION/QUALITY al maximo.
@@ -198,7 +198,7 @@ final class BacktestingServiceTest extends TestCase
         $sample = $this->runSingleSample($history);
         $riskLevels = $this->expectedRiskLevels();
 
-        self::assertContains($sample['recommendation'], ['BUY', 'STRONG BUY']);
+        self::assertSame('BUY', $sample['recommendation']);
         self::assertSame('stop_loss', $sample['exit_reason']);
         self::assertSame(3, $sample['exit_day']);
 
@@ -221,7 +221,7 @@ final class BacktestingServiceTest extends TestCase
         $sample = $this->runSingleSample($history);
         $riskLevels = $this->expectedRiskLevels();
 
-        self::assertContains($sample['recommendation'], ['BUY', 'STRONG BUY']);
+        self::assertSame('BUY', $sample['recommendation']);
         self::assertSame('target', $sample['exit_reason']);
         self::assertSame(10, $sample['exit_day']);
 
@@ -252,7 +252,7 @@ final class BacktestingServiceTest extends TestCase
         $history = $this->historyWithPostEntryPath($days);
         $sample = $this->runSingleSample($history);
 
-        self::assertContains($sample['recommendation'], ['BUY', 'STRONG BUY']);
+        self::assertSame('BUY', $sample['recommendation']);
         self::assertSame('horizon', $sample['exit_reason']);
         self::assertSame(self::HORIZON_DAYS, $sample['exit_day']);
         self::assertNotNull($sample['managed_return']);
@@ -450,7 +450,7 @@ final class BacktestingServiceTest extends TestCase
         $expectedDate = $history[200]->getDate()->format('Y-m-d');
         $sample = $this->findSampleByDate($ticker['recent_samples'], $expectedDate);
 
-        self::assertContains($sample['recommendation'], ['BUY', 'STRONG BUY']);
+        self::assertSame('BUY', $sample['recommendation']);
         self::assertNull($sample['managed_return']);
         self::assertNull($sample['exit_reason']);
         self::assertNull($sample['exit_day']);

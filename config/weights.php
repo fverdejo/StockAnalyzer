@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Peso maximo (en puntos) de cada categoria del score final.
  *
  * Cambia estos numeros para ajustar cuanto pesa cada aspecto en la
- * recomendacion (STRONG BUY / BUY / HOLD / SELL / STRONG SELL). No hace
+ * recomendacion (BUY / HOLD / SELL / STRONG SELL). No hace
  * falta tocar ningun analizador ni la clase Score: la recomendacion se
  * calcula siempre como porcentaje sobre la suma real de estos valores, asi
  * que la escala se reajusta sola.

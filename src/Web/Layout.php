@@ -1302,7 +1302,7 @@ HTML;
     public static function recommendationClass(string $recommendation): string
     {
         return match ($recommendation) {
-            'STRONG BUY', 'BUY' => 'buy',
+            'BUY' => 'buy',
             'HOLD' => 'hold',
             default => 'sell',
         };

@@ -18,6 +18,7 @@ use StockAnalyzer\Repository\DailyRankingRepository;
 use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
+use StockAnalyzer\Repository\ScoreHistoryRepository;
 use StockAnalyzer\Services\AnalysisJsonPresenter;
 use StockAnalyzer\Services\RiskLevelsCalculator;
 use StockAnalyzer\Services\StockAnalysisService;
@@ -55,11 +56,17 @@ $presenter = new AnalysisJsonPresenter();
 $results = [];
 $errors = [];
 
-// Snapshot diario de fundamentales (ver versions.md v2.74). Se siembra
-// tambien desde aqui, y no solo desde la ficha de detalle, porque este CLI
-// recorre un universo entero por ejecucion: es la unica via de acumular
-// cobertura real en vez de depender de que alguien abra cada ficha.
+// Snapshots diarios de fundamentales (v2.74) y de score (v2.63). Se
+// siembran tambien desde aqui, y no solo desde la ficha de detalle, porque
+// este CLI recorre un universo entero por ejecucion: es la unica via de
+// acumular cobertura real en vez de depender de que alguien abra cada ficha.
+//
+// Las dos series son irrecuperables hacia atras (ni Yahoo ni ningun
+// proveedor gratuito sirve fundamentales fechados, y el score depende de
+// los pesos vigentes ese dia), asi que cada ejecucion que no las siembre es
+// un hueco permanente.
 $fundamentalsHistory = new FundamentalsHistoryRepository($connection);
+$scoreHistory = new ScoreHistoryRepository($connection);
 
 foreach ($tickers as $ticker) {
     try {
@@ -68,6 +75,7 @@ foreach ($tickers as $ticker) {
 
         try {
             $fundamentalsHistory->recordSnapshot($ticker, $analysis->getStock()->getFundamentals());
+            $scoreHistory->recordSnapshot($ticker, $analysis->getScore());
         } catch (Throwable $snapshotError) {
             // Captura de historial "best effort", mismo criterio que en
             // Application::renderDetail(): que falle no debe tumbar el

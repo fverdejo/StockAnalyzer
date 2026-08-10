@@ -3597,6 +3597,207 @@ Se retira del motor una señal que empujaba en la direccion contraria y se deja 
 
 ---
 
+## v2.77 - La escala pierde el tramo `STRONG BUY`
+
+Estado: implementado.
+
+Objetivo:
+
+Peticion directa del usuario: "podemos prescindir de la etiqueta strong buy ya que no la vamos a usar casi nunca". La escala pasa de cinco tramos a cuatro: `BUY` (>=75%), `HOLD` (>=60%), `SELL` (>=40%), `STRONG SELL` (resto).
+
+Por que la peticion es correcta y no solo cosmetica:
+
+- `STRONG BUY` exigia >=90% y **no ocurrio ni una sola vez en 10.972 muestras de 11 años** (maximo real medido: 84,58%, ver `v2.76`). Era una etiqueta que la aplicacion no podia emitir.
+- La salida obvia —bajar el corte para que apareciera— quedo descartada con datos en `v2.76`: el tramo alto del score es justo el que peor se ha comportado historicamente, asi que hacer visible la etiqueta habria significado decir "compra fuerte" sobre el cubo peor.
+
+Entre dejar una etiqueta muerta en el codigo o retirarla, retirarla es lo honesto: la escala deja de prometer un grado de conviccion que el motor no sabe emitir.
+
+Decisiones:
+
+- **`STRONG SELL` se queda.** La asimetria es deliberada, no un descuido: el tramo extremo vendedor SI ocurre y con frecuencia (el 44% de los dias salen `SELL` o `STRONG SELL`, `v2.76`), asi que ahi la etiqueta describe algo real.
+- **`Score::isStrongBuy()` se elimina** (no tenia ni un solo uso en `src/`, `bin/` ni `tests/`).
+- Se limpian los cinco puntos donde el codigo hacia `in_array($rec, ['STRONG BUY', 'BUY'])`: `RecommendationExplainer` (intro, señales destacadas y matiz "aun asi, conviene tener en cuenta"), `BacktestingService` (simulacion gestionada, `returnsFor`, `managedSamplesFor`, `buy_samples`), `DashboardPage` (lista "Top compras", contador "Candidatas compra" y desplegable de filtro), `Layout::recommendationClass()` y las notas de `StockDetailPage`/`AlertsPage`/`config/weights.php`.
+
+Verificado en ddev:
+
+- `php -l` sin errores en los 11 ficheros tocados.
+- `vendor/bin/phpunit`: **168 tests, 541 assertions** en verde. Los cuatro `assertContains($sample['recommendation'], ['BUY', 'STRONG BUY'])` de `BacktestingServiceTest` pasan a `assertSame('BUY', ...)`, que es una asercion mas estricta que la anterior, no una relajada.
+- **No hay ningun `STRONG BUY` persistido en base de datos**, comprobado antes de cambiar nada: `ticker_alert_state` solo contiene `BUY` (2), `HOLD` (11) y `SELL` (1). Es lo que descarta el unico efecto secundario que preocupaba —que las alertas de cambio de recomendacion (`v2.15`) dispararan un aviso falso "pasa de STRONG BUY a BUY" en la primera visita despues del despliegue—, asi que no hace falta migracion.
+- HTML real de Home (`magnificent7`), ficha de detalle de AAPL y pantalla de backtesting: HTTP 200 y `grep -c "STRONG BUY"` = **0** en los tres. El Home renderiza 1 `BUY`, 11 `HOLD`, 3 `SELL` y 3 `STRONG SELL`; la API JSON devuelve recomendaciones correctas.
+
+Resultado:
+
+La aplicacion deja de tener una etiqueta que nunca podia emitir. Ningun umbral de los que si se usan cambia de valor: una accion que ayer era `BUY` sigue siendo `BUY` hoy, y ninguna recomendacion existente se mueve de tramo.
+
+---
+
+## v2.78 - Se miden los tres frentes abiertos del score: ninguno lo endereza, y aparece de donde viene el lastre
+
+Estado: **ninguna medicion justifica un cambio de puntuacion; no se ha tocado `src/Analyzer/` ni `config/weights.php`.** Esta version es medicion y documentacion.
+
+Objetivo:
+
+Cerrar con datos los puntos 1, 2 y 3 de "Proxima tarea" del roadmap, que llevaban abiertos desde `v2.76`: fuerza relativa contra el universo, revision señal por señal del bloque `TECHNICAL`, y revision del horizonte. Todo medido con 10 años de historico (`v2.70`), muestras no solapadas (`--step` = horizonte) y las clases de produccion, no reimplementaciones.
+
+### 1. Fuerza relativa: no supera al momentum 12-1 que ya esta implementado
+
+Era la prioridad 1 del roadmap, y llegaba avalada por dos universos en `v2.76` (+0,74 en `largecap60`, +1,42 en `ibex35`). Ampliada a seis universos, no se sostiene. Spread D10-D1 del retorno a 20 dias:
+
+| Universo | Momentum 12-1 (implementado) | Fuerza relativa vs mediana | Fuerza relativa vs indice |
+|---|---|---|---|
+| largecap60 | **+1,15** | +0,74 | +0,63 |
+| ibex35 | +0,15 | **+1,33** | +0,77 |
+| healthcare | -0,74 | **-1,68** | -0,74 |
+| energy | -3,16 | -0,11 | **-3,28** |
+| consumer_staples | **+0,90** | +0,29 | +0,81 |
+| industrials | -1,20 | +0,02 | -0,22 |
+| **media** | -0,48 | **+0,10** | -0,34 |
+
+La primera columna reproduce exactamente las cifras de `v2.76` (+1,15 y +0,15), lo que confirma que el metodo es comparable y que la diferencia esta en la muestra, no en el calculo.
+
+- **La version implementable pierde.** "Vs mediana del universo" haria que el score de una accion dependiera de la pantalla desde la que se mire (AAPL puntuaria distinto en `largecap60` que en `general`, y la ficha de detalle no tiene universo). La variante sin ese defecto —contra un indice de referencia, `^GSPC`/`^IBEX`— es la peor de las tres (media -0,34).
+- **Ni siquiera la mejor variante gana lo suficiente.** +0,10 pp de media, positiva en 4 de 6 universos y negativa justo donde mas duele (`healthcare` -1,68), no justifica la plomeria nueva que exige.
+- **El spread ocultaba la forma real.** Las curvas por decil no son monotonas sino en forma de U: en `largecap60`, D1 (el peor momentum) rinde +1,94 y es el segundo mejor decil, por encima de D2 a D9. Un score lineal como el actual (`3,5 + momentum * 0,05`) no puede representar eso, y el spread D10-D1 —la metrica que `v2.76` uso— no lo deja ver.
+
+**Decision: no se implementa la fuerza relativa.** La idea se cierra.
+
+### 2. El horizonte no es el problema: a 120 dias es peor
+
+La hipotesis era que el score quiza fuese razonable a 6-12 meses y solo estuviera mal alineado con la vara de 20 dias del backtest. Backtest transversal (`--cross-sectional`, top-10 contra la media del universo, 10 años):
+
+| Universo | alpha a 20d (t) | alpha a 120d (t) |
+|---|---|---|
+| largecap60 | -0,27 (-1,31) | **-4,76 (-3,94)** |
+| ibex35 | -0,09 (-0,38) | -0,24 (-0,22) |
+| healthcare | -0,18 (-0,98) | -0,31 (-0,32) |
+
+En `largecap60` el top-10 rinde +3,76% a 120 dias frente al +8,52% del universo: se queda a **4,76 puntos** del simple promedio, con t=-3,94 y solo el 25% de las fechas con alpha positiva. Es el unico resultado significativo de toda la tabla, y va en contra de la hipotesis. **Decision: la idea se cierra; alargar el horizonte no rescata el score.**
+
+Nota lateral util: a 20 dias la alpha actual (-0,27, t=-1,31 en `largecap60`) es bastante mejor que la que `v2.76` midio a mano (-1,32, t=-2,75) sobre una ventana mas corta. Con 10 años y el momentum 12-1 ya dentro, el ranking no es demostrablemente peor que el azar; simplemente sigue sin ser mejor.
+
+### 3. Señal por señal del bloque TECHNICAL: dos hallazgos claros
+
+Medida cada entrada por separado con el `TechnicalAnalyzer` **real** sobre cortes del historico (identico a `BacktestingService::sampleHistory()`, para que lo medido sea exactamente lo que puntua la app). 22.727 muestras en seis universos. `DIFF` = D10-D1 en las continuas, (señal activa - señal inactiva) en las binarias; positivo significa que ordena BIEN.
+
+**Hallazgo A - el cruce de medias puntua invertido, en 6 de 6 universos.**
+
+| Señal (puntos que da hoy) | largecap60 | ibex35 | healthcare | industrials | consumer_staples | energy |
+|---|---|---|---|---|---|---|
+| `cruce SMA20>SMA50` (4 pts) | **-1,12** (t -4,93) | **-0,59** (t -2,06) | **-1,00** (t -3,53) | **-0,73** (t -2,42) | **-0,92** (t -2,98) | **-1,55** (t -3,30) |
+| `precio > SMA50` (6 pts) | -0,56 (t -2,45) | -0,59 (t -2,06) | -0,68 (t -2,39) | -0,33 (t -1,09) | -0,66 (t -2,14) | -0,18 (t -0,38) |
+
+El cruce alcista sale negativo en **6 de 6 universos y significativo (|t|>2) en 6 de 6**. Es el resultado mas limpio de todo el trabajo: la aplicacion regala 4 puntos por una condicion que, medida sobre 10 años, precede a un retorno a 20 dias entre 0,6 y 1,6 puntos MENOR. `precio > SMA50` (6 puntos) es negativo tambien en 6 de 6, significativo en 4.
+
+**Hallazgo B - el bloque RISK es el lastre mas consistente del ranking, y es asi a proposito.**
+
+| Señal | largecap60 | ibex35 | healthcare | industrials | consumer_staples | energy |
+|---|---|---|---|---|---|---|
+| `volatilidad20` | +3,53 (t 6,06) | +2,71 (t 3,93) | +3,13 (t 4,00) | +4,18 (t 5,93) | +3,01 (t 4,17) | +8,73 (t 6,90) |
+| `ATR %` | +3,87 (t 6,23) | +4,07 (t 5,51) | +4,45 (t 5,44) | +3,94 (t 5,60) | +2,52 (t 3,09) | +8,87 (t 7,02) |
+
+Es el efecto **mas fuerte de toda la tabla**: 6 de 6 universos, t entre 3,1 y 7,0. Y va justo al reves de como puntua `RISK`, que da mas puntos cuanta MENOS volatilidad y menos ATR.
+
+**Esto NO es un bug, y conviene decirlo con claridad para que nadie lo "arregle" mas adelante.** `RISK` es una penalizacion de riesgo deliberada, no un predictor de retorno. Lo que la tabla mide es la prima de riesgo clasica sobre una decada mayoritariamente alcista: lo mas volatil rindio mas en bruto, con muchisima mas dispersion. Invertir el signo de `RISK` haria que la aplicacion recomendase sistematicamente lo mas volatil del universo, reventaria `max_drawdown_managed` y contradiria las dos piezas que ya dependen del ATR (stop-loss/objetivo de `v2.19` y cantidad sugerida de `v2.50`). **Se deja como esta.**
+
+### 4. Y sin embargo, quitar los inputs invertidos no arregla el compuesto
+
+Es la comprobacion que `v2.76` hizo con el momentum, repetida aqui. Alpha del backtest transversal (top-10 vs universo, 20 dias, 10 años), neutralizando bloques a modo de experimento temporal:
+
+| Configuracion | largecap60 | ibex35 | healthcare | media |
+|---|---|---|---|---|
+| Actual | -0,27 (t -1,31) | -0,09 (t -0,38) | -0,18 (t -0,98) | -0,18 |
+| Sin `precio>SMA50` ni cruce | -0,22 | **+0,17** | **-0,37** (t -2,22) | -0,14 |
+| Sin bloque `RISK` | **-0,17** | +0,04 | **-0,04** | **-0,06** |
+| Sin ambos | -0,23 | +0,28 | -0,35 | -0,10 |
+
+- **Quitar las dos señales SMA mejora dos universos y empeora el tercero** (`healthcare` pasa de -0,18 a -0,37, y ahi si es significativo). Exactamente el mismo patron que dio el cambio de momentum en `v2.76`: retirar un input demostradamente invertido no endereza el conjunto.
+- **Neutralizar `RISK` es lo unico que mejora los tres universos a la vez** y acerca la media de -0,18 a -0,06. Retira un lastre consistente; no genera alpha.
+- **Ninguna configuracion produce alpha positiva demostrable.** La mejor deja el ranking en "indistinguible del promedio del universo", no por encima.
+
+Decisiones:
+
+- **No se toca `TechnicalScoreAnalyzer` ni `config/weights.php`.** Dos rondas independientes (`v2.76` con el momentum, esta con el bloque SMA) han demostrado ahora que quitar un input invertido no mueve el compuesto de forma fiable. Cambiar la puntuacion real que el usuario opera con dinero, a cambio de un efecto medido como ruido y con un universo empeorando, no sale a cuenta.
+- **Se descartan formalmente las ideas 1 y 3** (fuerza relativa, horizonte largo), y la 2 queda medida y cerrada como investigacion.
+- Todos los experimentos se hicieron con parches temporales revertidos con `git checkout` al terminar; `git status` y `vendor/bin/phpunit` (168 tests/541 assertions) confirman que no queda rastro en `src/`.
+
+Limitaciones conocidas:
+
+- El bloque `RISK` es hoy el candidato con mejor evidencia para una recalibracion de peso (unico cambio que mejora 3 de 3), pero es una **decision de producto, no un arreglo tecnico**: implica elegir entre un ranking que ordena por retorno esperado y uno que penaliza riesgo. Queda anotado, sin implementar, a la espera de que lo decida el usuario.
+- Todo se mide a **retorno bruto**; con los costes de `v2.73` los spreads se reducen.
+- Los fundamentales siguen entrando con sesgo de anticipacion (`stockAt()`, pendiente de `fundamentals_history`, `v2.74`), asi que estas mediciones describen sobre todo el bloque tecnico.
+- Los universos siguen teniendo sesgo de supervivencia (`config/universes.php` son listas de hoy), agravado por la ventana de 10 años.
+
+Resultado:
+
+Los tres frentes que bloqueaban la recalibracion de la escala estan medidos y cerrados. La conclusion es incomoda pero util: **la inversion del score no vive en ningun input concreto**, porque ya van dos inputs identificados como invertidos cuya retirada no mueve el resultado. Lo que si queda localizado es el unico lastre consistente —el bloque `RISK`—, y resulta ser intencionado. La aplicacion sigue siendo honesta sobre lo que sabe: el ranking no tiene ventaja demostrable sobre la media del universo a 20 dias, y ahora se sabe tambien que no la tiene a 120.
+
+---
+
+## v2.79 - Desbloquear lo que estaba bloqueado por datos, y abaratar el historico largo
+
+Estado: implementado.
+
+Objetivo:
+
+Seguir cerrando lo pendiente tras `v2.78`. Al revisar que quedaba, la comprobacion de datos cambio el orden de la lista: las dos ideas de mayor valor para el analisis (**fundamentales point-in-time** y **tendencia del score / re-rating**) no estan bloqueadas por codigo sino por historial acumulado, y el historial no se estaba acumulando.
+
+```
+fundamentals_history :  2 filas,  2 tickers, 1 fecha
+score_history        : 10 filas,  9 tickers, 3 fechas
+```
+
+Ninguna de las dos series se puede reconstruir hacia atras (Yahoo no sirve fundamentales fechados, y el score depende de los pesos vigentes ese dia), asi que cada dia sin sembrar es un hueco permanente. Con esos numeros, ambas ideas seguirian bloqueadas indefinidamente.
+
+### 1. `bin/analyze.php` tambien siembra `score_history`
+
+Causa raiz encontrada: el CLI —que existe justamente para recorrer un universo entero por ejecucion— sembraba `fundamentals_history` (`v2.74`) pero **no** `score_history` (`v2.63`). La captura del score dependia solo de `Application::renderDetail()`, es decir, de que alguien abriera a mano la ficha de cada valor. De ahi las 10 filas.
+
+Es una omision, no una decision: las dos series se escriben juntas en `renderDetail()` desde `v2.74`, y ahi el CLI se quedo a medias.
+
+- Una sola llamada `$scoreHistory->recordSnapshot($ticker, $analysis->getScore())` junto a la de fundamentales, dentro del mismo `try` "best effort" que ya existia (que falle la captura no debe tumbar el ranking, que es lo que el comando viene a producir).
+- Reutiliza el `StockAnalysis` ya calculado: **ninguna peticion nueva a mercado**.
+- Idempotente el mismo dia por el UPSERT sobre `(ticker, snapshot_date)` que `ScoreHistoryRepository` ya tenia.
+
+### 2. El TTL del historico deja de ser `P1D` para todos los rangos
+
+Pendiente listado en el roadmap: un backtest de 10 años volvia a descargar ~22 MB de cierres cada dia que se ejecutase, y los cierres de hace nueve años no se mueven. Con Yahoo devolviendo 429 por exceso de peticiones, no es solo coste.
+
+`CachedMarketDataProvider` deriva ahora el TTL del rango cuando no se le pasa uno explicito:
+
+| Rango | TTL | Quien lo pide |
+|---|---|---|
+| `6mo`, `1y`, `2y` | `P1D` (igual que antes) | la web |
+| `5y`, `10y`, `max` | `P7D` | solo `bin/backtest.php` |
+
+La razon por la que el rango largo admite una semana no es que importe menos, sino que **el backtest deja de muestrear un horizonte antes del final de la serie**: unos cierres de cola de menos no cambian ni una muestra. Un rango desconocido cae en `P1D` a proposito (ante la duda, frescura). Pasar `historyTtl` explicito sigue mandando sobre la tabla.
+
+### 3. Tests: de 168 a 191
+
+Cubriendo la "prioridad media" del roadmap (cobertura de `Application.php` y del resto), y concentrando el esfuerzo en codigo que ya ha fallado en produccion:
+
+- **`TickerNormalizerTest`** (9 casos): decide que se le pide a Yahoo, asi que un fallo aqui no da un analisis peor sino el de otra accion. Fija la regresion real de `v2.5.2` —el alias "Aena" coincidiendo dentro del propio ticker `AENA.MC` y dejando un `.MC` suelto—, que se corrigio a mano y sin test.
+- **`ApplicationTickerRequestTest`** (9 casos): primera cobertura de `Application::resolveTickerRequest()`, la puerta de entrada del motor (Home, detalle, API y backtesting pasan por ahi) y que acumulaba dos incidencias ya corregidas a mano (`v2.5.2` universo por defecto no configurable, `v2.35` tickers precargados en backtesting). Cubre tambien los dos caminos de respaldo del universo dinamico: screener que falla y screener que responde vacio.
+- **`CachedMarketDataProviderTtlTest`** (5 casos): fija la regla del TTL por rango, no el numero concreto.
+
+Verificado en ddev:
+
+- `php -l` sin errores en los tres ficheros tocados.
+- `vendor/bin/phpunit`: **191 tests, 585 assertions** (desde 168/541), sin regresiones.
+- **Sembrado comprobado en vivo**, no solo por lectura de codigo: `php bin/analyze.php --universe=magnificent7` deja `score_history` en 16 filas / 15 tickers (desde 10/9) y `fundamentals_history` en 8 filas / 8 tickers (desde 2/2). El incremento de 6 filas con 7 tickers analizados confirma de paso que el UPSERT no duplica (AAPL ya tenia fila de hoy). El ranking de prueba se borro al terminar.
+- Home, ficha de detalle, backtesting y API JSON en HTTP 200 tras el cambio de proveedor.
+
+Limitaciones conocidas:
+
+- **Esto no desbloquea las dos ideas, solo hace posible que se desbloqueen.** `fundamentals_history` y `score_history` siguen sin profundidad suficiente; lo que cambia es que ahora una ejecucion programada las llena de verdad. **Sigue faltando el cron**: sin `bin/analyze.php` corriendo a diario en la Raspberry, este arreglo no produce ninguna serie, y es la unica pieza que no se puede hacer desde el repositorio.
+- El TTL de 7 dias es una eleccion conservadora sin medir: se podria alargar mas para `10y`/`max`, pero una semana ya elimina 6 de cada 7 descargas.
+- `ScoreHistoryRepository::recordSnapshot()` sigue sin test propio: el `NOW()` del UPSERT descarta SQLite y la suite no habla con MySQL (misma limitacion documentada en `FundamentalsHistorySnapshotTest`, `v2.74`).
+
+Resultado:
+
+Las dos ideas pendientes con mas valor para el analisis dejan de estar bloqueadas por una omision del propio codigo y pasan a estarlo solo por el tiempo que tarde en acumularse la serie. El historico largo del backtesting deja de costar ~22 MB diarios. Y las tres piezas con historial de fallos reales —normalizacion de tickers, resolucion de universo y TTL de cache— pasan a tener test de regresion.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

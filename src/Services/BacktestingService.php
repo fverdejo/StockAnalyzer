@@ -574,7 +574,7 @@ class BacktestingService
             $exitReason = null;
             $exitDay = null;
 
-            if (in_array($recommendation, ['STRONG BUY', 'BUY'], true)) {
+            if ($recommendation === 'BUY') {
                 $riskLevels = $this->riskLevelsCalculator->compute($technical, $current->getClose());
 
                 if ($riskLevels !== null) {
@@ -622,9 +622,9 @@ class BacktestingService
         $samples = $this->sampleHistory($stock, $history, $horizonDays, $step, $mode);
         $count = count($history);
 
-        $buyReturns = $this->returnsFor($samples, ['STRONG BUY', 'BUY']);
+        $buyReturns = $this->returnsFor($samples, ['BUY']);
         $sellReturns = $this->returnsFor($samples, ['SELL', 'STRONG SELL']);
-        $managedSamples = $this->managedSamplesFor($samples, ['STRONG BUY', 'BUY']);
+        $managedSamples = $this->managedSamplesFor($samples, ['BUY']);
         $benchmark = $count > $horizonDays
             ? (($history[$count - 1]->getClose() / $history[0]->getClose()) - 1) * 100
             : 0.0;
@@ -665,7 +665,7 @@ class BacktestingService
                 : null,
             'benchmark_return' => round($benchmark, 2),
             'recent_samples' => array_slice($samples, -10),
-            'buy_samples' => $this->datedReturnsFor($samples, ['STRONG BUY', 'BUY']),
+            'buy_samples' => $this->datedReturnsFor($samples, ['BUY']),
             'buy_managed_samples' => count($managedSamples),
             'avg_buy_managed_return' => $this->average(array_map(
                 static fn (array $sample): float => (float) $sample['managed_return'],

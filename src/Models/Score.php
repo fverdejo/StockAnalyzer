@@ -91,21 +91,23 @@ class Score
      * porcentajes alternativos (p.ej. el modo 'technical' de
      * BacktestingService, que puntua solo TECHNICAL+MOMENTUM+RISK) sin
      * duplicar los umbrales en dos sitios.
+     *
+     * No existe un tramo 'STRONG BUY' (retirado en v2.77). Exigia >=90% y no
+     * se alcanzo ni una vez en 10.972 muestras de 11 años (maximo real
+     * 84,58%), asi que era una etiqueta que la aplicacion nunca emitia; y
+     * bajar el corte para que apareciera esta descartado con datos desde
+     * v2.76, porque el tramo alto del score es justo el que peor se ha
+     * comportado historicamente. El lado vendedor SI conserva su tramo
+     * extremo ('STRONG SELL', <40%), que ocurre de verdad y con frecuencia.
      */
     public static function recommendationFor(float $percentage): string
     {
         return match (true) {
-            $percentage >= 90 => 'STRONG BUY',
             $percentage >= 75 => 'BUY',
             $percentage >= 60 => 'HOLD',
             $percentage >= 40 => 'SELL',
             default => 'STRONG SELL',
         };
-    }
-
-    public function isStrongBuy(): bool
-    {
-        return $this->getPercentage() >= 90;
     }
 
     public function isBuy(): bool

@@ -12,6 +12,27 @@ use StockAnalyzer\Repository\MarketDataCacheRepository;
 class CachedMarketDataProvider implements MarketDataProviderInterface
 {
     /**
+     * TTL del historico por rango, usado cuando no se pasa uno explicito.
+     * Un rango largo solo se pide desde bin/backtest.php, donde la cola de
+     * la serie es irrelevante: el backtest deja de muestrear $horizon dias
+     * antes del final, asi que unos cierres de menos no cambian ni una
+     * muestra. Lo que si cambia es el coste: con P1D, un backtest de 10y
+     * vuelve a descargar ~22 MB cada dia que se ejecuta, y los cierres de
+     * hace nueve años no se han movido. La web (2y) se queda en P1D, que
+     * es donde la frescura si importa.
+     */
+    private const HISTORY_TTL_BY_RANGE = [
+        '6mo' => 'P1D',
+        '1y' => 'P1D',
+        '2y' => 'P1D',
+        '5y' => 'P7D',
+        '10y' => 'P7D',
+        'max' => 'P7D',
+    ];
+
+    private readonly DateInterval $historyTtl;
+
+    /**
      * $historyRange NO cambia lo que se pide al proveedor (eso lo decide el
      * propio proveedor envuelto, p.ej. YahooFinanceProvider): es la etiqueta
      * con la que se guarda el historico en cache, y debe coincidir con el
@@ -19,15 +40,31 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
      * 2 años y uno de 10 no son el mismo dato: si se guardasen bajo la misma
      * clave, una ejecucion de bin/backtest.php con rango largo envenenaria
      * el historico que sirve la web (y la web, el del backtest).
+     *
+     * $historyTtl a null (por defecto) deriva el TTL del rango segun
+     * HISTORY_TTL_BY_RANGE. Pasarlo explicito sigue mandando sobre esa
+     * tabla, para no quitarle a nadie el control de su propia cache.
      */
     public function __construct(
         private readonly MarketDataProviderInterface $inner,
         private readonly MarketDataCacheRepository $cache,
         private readonly string $historyRange = '2y',
         private readonly DateInterval $stockTtl = new DateInterval('PT15M'),
-        private readonly DateInterval $historyTtl = new DateInterval('P1D'),
+        ?DateInterval $historyTtl = null,
         private readonly DateInterval $dividendHistoryTtl = new DateInterval('P30D')
     ) {
+        $this->historyTtl = $historyTtl ?? new DateInterval(
+            self::HISTORY_TTL_BY_RANGE[$this->historyRange] ?? 'P1D'
+        );
+    }
+
+    /**
+     * Expuesto para poder verificar en un test que el TTL derivado del rango
+     * es el esperado, sin tener que espiar la peticion al proveedor.
+     */
+    public function getHistoryTtl(): DateInterval
+    {
+        return $this->historyTtl;
     }
 
     public function getStock(string $ticker): Stock

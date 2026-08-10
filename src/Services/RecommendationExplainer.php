@@ -59,7 +59,6 @@ class RecommendationExplainer
         $recommendation = $score->getRecommendation();
 
         $intro = match ($recommendation) {
-            'STRONG BUY' => sprintf('%s reune una combinacion muy favorable de señales tecnicas y fundamentales', $name),
             'BUY' => sprintf('%s reune mas señales a favor que en contra', $name),
             'HOLD' => sprintf('%s no muestra un sesgo claro entre señales favorables y desfavorables', $name),
             'SELL' => sprintf('%s acumula mas señales en contra que a favor', $name),
@@ -74,7 +73,7 @@ class RecommendationExplainer
         )];
 
         $highlighted = match (true) {
-            in_array($recommendation, ['STRONG BUY', 'BUY'], true) => $positives,
+            $recommendation === 'BUY' => $positives,
             in_array($recommendation, ['SELL', 'STRONG SELL'], true) => $negatives,
             default => [],
         };
@@ -107,7 +106,7 @@ class RecommendationExplainer
             $sentences[] = 'Con señales mixtas, no hay ahora mismo una razon de peso ni para comprar ni para vender.';
         }
 
-        if ($negatives !== [] && in_array($recommendation, ['STRONG BUY', 'BUY'], true)) {
+        if ($negatives !== [] && $recommendation === 'BUY') {
             $sentences[] = 'Aun asi, conviene tener en cuenta: ' . $this->pickRandom($negatives, 1)[0]->getMessage();
         }
 

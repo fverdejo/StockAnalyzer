@@ -22,7 +22,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.76';
+    private const APP_VERSION = 'v2.79';
 
     /**
      * @param list<StockAnalysis> $results
@@ -55,7 +55,7 @@ class DashboardPage
         $generalUniverseNote = self::renderGeneralUniverseNote($selectedUniverse, $generalUniverseIsLive);
         $errorsHtml = self::renderErrors($errors);
         $cards = self::renderCards($results, $rawTickers);
-        $topBuys = self::renderRecommendationList($results, ['STRONG BUY', 'BUY'], $rawTickers);
+        $topBuys = self::renderRecommendationList($results, ['BUY'], $rawTickers);
         $holds = self::renderRecommendationList($results, ['HOLD'], $rawTickers);
         $topSells = self::renderRecommendationList($results, ['SELL', 'STRONG SELL'], $rawTickers);
         $watched = array_fill_keys($watchedTickers, true);
@@ -245,7 +245,7 @@ HTML;
         $best = $results[0] ?? null;
         $buyCount = count(array_filter(
             $results,
-            static fn (StockAnalysis $analysis): bool => in_array($analysis->getScore()->getRecommendation(), ['STRONG BUY', 'BUY'], true)
+            static fn (StockAnalysis $analysis): bool => $analysis->getScore()->getRecommendation() === 'BUY'
         ));
         $bestTicker = $best instanceof StockAnalysis
             ? sprintf(
@@ -329,7 +329,6 @@ HTML;
     {
         $options = [
             '' => 'Todas',
-            'STRONG BUY' => 'STRONG BUY',
             'BUY' => 'BUY',
             'HOLD' => 'HOLD',
             'SELL' => 'SELL',

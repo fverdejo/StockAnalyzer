@@ -457,7 +457,7 @@ class StockDetailPage
         return <<<HTML
         <section class="panel signal-history" id="{$containerId}" data-ticker="{$rawTicker}">
             <h2>Historial de la señal de compra en {$escapedTicker}</h2>
-            <p class="muted panel-note">De las veces que el modelo emitio una senal de compra (BUY/STRONG BUY) en este valor con stop-loss/objetivo calculables (mismo metodo que las lineas del grafico de arriba), esto es lo que habria pasado siguiendo esa gestion de riesgo. Datos historicos, no una garantia de resultado futuro.</p>
+            <p class="muted panel-note">De las veces que el modelo emitio una senal de compra (BUY) en este valor con stop-loss/objetivo calculables (mismo metodo que las lineas del grafico de arriba), esto es lo que habria pasado siguiendo esa gestion de riesgo. Datos historicos, no una garantia de resultado futuro.</p>
             <button type="button" class="secondary-button signal-history-toggle">Ver historial de esta senal</button>
             <div class="signal-history-body" hidden></div>
         </section>

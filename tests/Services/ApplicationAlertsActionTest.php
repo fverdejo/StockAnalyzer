@@ -57,7 +57,7 @@ final class ApplicationAlertsActionTest extends TestCase
 
     private function createAlert(User $user, string $ticker = 'AAPL'): int
     {
-        $this->alerts->create($user, $ticker, sprintf('%s cambia a STRONG BUY.', $ticker));
+        $this->alerts->create($user, $ticker, sprintf('%s cambia a BUY.', $ticker));
 
         return $this->alerts->lastId();
     }

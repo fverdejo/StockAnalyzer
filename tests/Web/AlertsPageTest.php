@@ -30,7 +30,7 @@ final class AlertsPageTest extends TestCase
     private function alerts(): array
     {
         return [
-            new Alert(7, 'AAPL', 'AAPL pasa de BUY a STRONG BUY.', new DateTimeImmutable('2026-08-09 10:05:00', new DateTimeZone('UTC')), null),
+            new Alert(7, 'AAPL', 'AAPL pasa de HOLD a BUY.', new DateTimeImmutable('2026-08-09 10:05:00', new DateTimeZone('UTC')), null),
             new Alert(6, 'TEF.MC', 'TEF.MC paga dividendo.', new DateTimeImmutable('2026-08-08 09:00:00', new DateTimeZone('UTC')), new DateTimeImmutable('2026-08-08 10:00:00', new DateTimeZone('UTC'))),
         ];
     }
@@ -63,7 +63,7 @@ final class AlertsPageTest extends TestCase
     {
         $html = $this->render();
 
-        self::assertStringContainsString('AAPL pasa de BUY a STRONG BUY.', $html);
+        self::assertStringContainsString('AAPL pasa de HOLD a BUY.', $html);
         self::assertStringContainsString('<time class="alert-date" datetime="2026-08-09T10:05:00+00:00">09/08/2026 10:05</time>', $html);
     }
 

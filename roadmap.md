@@ -13,7 +13,7 @@ Esta seccion llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el
 
 **Se volvio a desincronizar igualmente.** El `2026-08-09` este documento seguia diciendo `v2.45`/`v2.47` con el proyecto ya en `v2.68`, o sea 23 versiones de retraso: la enumeracion version a version que habia aqui era exactamente la duplicacion que la regla de arriba prohibe, y se ha retirado. Si hace falta saber que hay implementado, la respuesta esta en `versions.md` y solo ahi.
 
-Resumen a fecha de la ultima revision (`2026-08-10`, `v2.76`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
+Resumen a fecha de la ultima revision (`2026-08-10`, `v2.79`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
 
 ---
 
@@ -33,24 +33,26 @@ La prioridad anterior era recalibrar los cortes de `Score::recommendationFor()`.
 
 Medido sobre 7.260 muestras y 11 años, el decil de mayor puntuacion rinde +0,92 a 20 dias y el de menor +2,29, con descenso casi monotono; el decil alto tiene alpha negativa en 10 de los 11 años y la inversion se repite en `largecap60`, `ibex35` y `healthcare`. No es el sesgo de anticipacion de los fundamentales: sin ellos la inversion es mayor.
 
-Recalibrar los cortes ahora solo conseguiria que la app dijera "STRONG BUY" con mas frecuencia sobre el tramo que peor se ha comportado. **La escala no se toca hasta que el score discrimine en el sentido correcto.**
+Recalibrar los cortes ahora solo conseguiria que la app dijera "compra" con mas frecuencia sobre el tramo que peor se ha comportado. **La escala no se toca hasta que el score discrimine en el sentido correcto.** (El tramo `STRONG BUY`, que exigia >=90% y no ocurrio nunca, se retiro en `v2.77`.)
 
-Orden recomendado:
+**Los puntos 1, 2 y 3 de la lista de abajo se midieron y se cerraron en `v2.78`. Ninguno endereza el score.** Resumen, con el detalle completo en `versions.md`:
 
-1. **Fuerza relativa contra el universo.** Es el unico predictor medido que sale positivo en los dos universos probados (+0,74 en largecap60 y +1,42 en ibex35, frente al -1,94/-1,59 del momentum de 30 dias que `v2.76` ya retiro). Necesita plomeria nueva: hoy el analizador puntua un ticker cada vez sin conocer a los demas, y la fuerza relativa exige la mediana del universo en cada fecha.
-2. **Revisar el bloque `TECHNICAL` entero con el mismo metodo.** `v2.76` demostro que cambiar solo el momentum no endereza el compuesto: precio contra SMA, MACD y Bollinger son señales igualmente absolutas ("por encima de su media, luego bien") y a 20 dias son igual de mean-reverting. Conviene medir cada una por separado, como se hizo con el momentum, antes de tocarlas.
-3. **Revisar el horizonte.** Todo esto se mide a 20 dias porque es lo que hace el backtest. Puede que el score sea razonable a 6-12 meses y solo este mal alineado con el horizonte con el que se valida; medirlo a 120 y 250 sesiones es barato con los 10 años de `v2.70` y responderia si el problema es el score o la vara de medir.
-4. **Recalibrar la escala**, ya con sentido, cuando 1-3 hayan dado un score que ordene bien. Ojo al alcance: los cortes afectan al ranking, al backtesting y a las alertas de cambio de recomendacion (`v2.15`).
-5. **Fundamentales point-in-time**: la tabla existe y se siembra desde `v2.74`, pero `BacktestingService::stockAt()` seguira usando los de hoy hasta que haya historial suficiente. Ese cambio es el que hara backtesteable el 56% del peso del score.
+1. ~~**Fuerza relativa contra el universo.**~~ **Descartada.** Ampliada de 2 a 6 universos, gana +0,10 pp de media (negativa en 2 de 6, y -1,68 en `healthcare`), menos que el momentum 12-1 ya implementado. Ademas la unica variante sin defecto de diseño —contra un indice, no contra la mediana, para que el score de una accion no dependa de la pantalla desde la que se mire— es la peor de las tres (-0,34). No justifica la plomeria que exige.
+2. ~~**Revisar el bloque `TECHNICAL` entero.**~~ **Medido, sin cambio de codigo.** Señal por señal sobre 22.727 muestras: el cruce `SMA20>SMA50` (4 puntos) ordena **invertido en 6 de 6 universos y significativo en 6 de 6** (t entre -2,06 y -4,93), y `precio > SMA50` (6 puntos) igual en 6 de 6. Pero neutralizarlos mejora dos universos y empeora el tercero, sin mover la media: mismo desenlace que el momentum en `v2.76`.
+3. ~~**Revisar el horizonte.**~~ **Descartada.** A 120 dias es peor, no mejor: en `largecap60` el top-10 se queda 4,76 pp por debajo del universo (t=-3,94), el unico resultado significativo de la ronda.
+4. **Recalibrar la escala**, ya con sentido, cuando el score ordene bien. Sigue bloqueado, y ahora con mas motivo. Ojo al alcance: los cortes afectan al ranking, al backtesting y a las alertas de cambio de recomendacion (`v2.15`).
+5. **Fundamentales point-in-time**: la tabla existe y se siembra desde `v2.74`, pero `BacktestingService::stockAt()` seguira usando los de hoy hasta que haya historial suficiente. Ese cambio es el que hara backtesteable el 56% del peso del score — y, tras `v2.78`, es el unico frente grande que queda sin medir.
 6. Proveedor oficial de noticias o datos fundamentales; universos mantenidos automaticamente.
 
-Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **168 tests / 541 assertions**, cubriendo cartera en euros, concentracion, cantidad sugerida, alertas, posicion por ticker, backtest transversal, costes y huecos de la simulacion, snapshots de fundamentales y concentracion sectorial del ranking. Falta cobertura de buena parte de `Repository/` y de las rutas de `Application.php`, y no hay ningun test que hable con MySQL.
+**Decision pendiente del usuario, salida de `v2.78`:** neutralizar o rebajar el peso del bloque `RISK` es el unico cambio probado que mejora los tres universos a la vez (alpha media de -0,18 a -0,06). No se ha hecho porque no es un arreglo tecnico sino una eleccion de producto: `RISK` penaliza volatilidad y ATR **a proposito**, y las mismas cifras que lo señalan como lastre del ranking son la prima de riesgo de una decada alcista. Invertirlo haria que la app recomendase lo mas volatil del universo y chocaria con el stop-loss de `v2.19` y la cantidad sugerida de `v2.50`.
+
+Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **191 tests / 585 assertions**. `v2.79` añade las tres piezas con historial de fallos reales en produccion: normalizacion de tickers (`TickerNormalizer`, regresion de `v2.5.2`), resolucion de universo (`Application::resolveTickerRequest()`, incidencias de `v2.5.2` y `v2.35`) y TTL de cache por rango. Sigue faltando cobertura de buena parte de `Repository/` y del resto de rutas de `Application.php`, y no hay ningun test que hable con MySQL.
 
 Pendiente aparte, no bloqueante:
 
 - Configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/` (y en Mailpit en local, ver `v2.11.1`).
-- `historyTtl` sigue siendo `P1D` para todos los rangos, asi que un backtest de 10y refetchea ~22 MB cada dia que se ejecute; los cierres de hace 9 años no cambian y admiten un TTL mucho mayor.
-- Programar `bin/analyze.php` en el cron de la Raspberry: desde `v2.74` cada ejecucion siembra los snapshots de fundamentales, y sin ejecuciones regulares esa serie —que no se puede recuperar despues— tendra huecos.
+- ~~`historyTtl` `P1D` para todos los rangos~~ **Hecho en `v2.79`**: los rangos largos (`5y`/`10y`/`max`, que solo pide `bin/backtest.php`) cachean 7 dias; la web (`2y`) sigue en `P1D`.
+- **Programar `bin/analyze.php` en el cron de la Raspberry. Es ahora el mayor bloqueo del proyecto, y el unico que no se puede resolver desde el repositorio.** Desde `v2.79` cada ejecucion siembra las DOS series irrecuperables (fundamentales, `v2.74`, y score, `v2.63`), y de ellas dependen las dos ideas de mas valor que quedan: fundamentales point-in-time (el 56% del peso del score, hoy no backtesteable) y la tendencia del score / re-rating. Sin cron, ese arreglo no produce ninguna serie: a 2026-08-10 hay 3 fechas en `score_history` y 1 en `fundamentals_history`.
 - Sesgo de supervivencia de `config/universes.php`: son listas de hoy, y con ventana de 10 años el problema se agrava (un universo de 2016 no contenia estos 60 tickers).
 - Un test de integracion contra MySQL para el `AND user_id` de las alertas (`v2.69`): la comprobacion manual con dos usuarios ya se hizo y pasa, pero nada impide una regresion futura. Hoy la suite no habla con MySQL en ningun test.
 - Decision del usuario: si traducir la descripcion de empresa al español via un servicio externo de pago (DeepL u otro), investigado y documentado en `v2.44` pero no implementado.
@@ -61,16 +63,14 @@ Pendiente aparte, no bloqueante:
 
 ## Prioridad alta
 
-- Fuerza relativa contra el universo: el unico predictor medido con signo correcto en los dos universos probados (`v2.76`)
-- Medir una por una las señales del bloque `TECHNICAL`, que es donde vive la inversion del score entre tickers
+- Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`) cuando el historial sea suficiente. Tras `v2.78` es el unico frente grande sin medir: el 56% del peso del score sigue entrando en todo backtest con sesgo de anticipacion, asi que ninguna conclusion de calibracion cubre esa mitad del motor. **Bloqueado solo por profundidad de la serie**, no por codigo — ver el cron en "Pendiente aparte".
+- Decidir que hacer con el bloque `RISK` (ver "Proxima tarea"): unico cambio medido que mejora los tres universos a la vez, pero es una eleccion de producto, no un arreglo.
 
 ---
 
 ## Prioridad media
 
-- Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`) cuando el historial sea suficiente
-- Medir el score a horizontes de 120 y 250 sesiones, no solo a 20
-- Ampliar la cobertura de tests a `Repository/` y a las rutas de `Application.php` (la suite ya esta en 168 tests desde `v2.76`)
+- Ampliar la cobertura de tests a `Repository/` y al resto de rutas de `Application.php` (la suite esta en 191 tests desde `v2.79`, que ya cubrio `resolveTickerRequest()`)
 - Proveedor oficial de noticias/datos
 - Universo completo mantenido automaticamente, tipo S&P 500 (`v1.2` avanzado)
 
@@ -669,3 +669,36 @@ Resultado: **no se implementa ninguna de las dos piezas**. `CurrentRatio` en `fu
 No se toco ningun fichero de `src/`/`config/`.
 
 Detalle tecnico completo en `versions.md` (`v2.51`).
+
+---
+
+## 2026-08-10 (retirada de `STRONG BUY` y cierre medido de los tres frentes del score)
+
+El usuario fija la prioridad de la sesion: "lo prioritario siempre es que el analisis y la recomendacion de la accion es lo mas importante", pide terminar las ideas pendientes sin añadir ninguna nueva salvo bugs o mejoras del analisis, y pide prescindir de la etiqueta `STRONG BUY` "ya que no la vamos a usar casi nunca".
+
+Se implementa como `v2.77` y se investiga como `v2.78`:
+
+- **`v2.77`**: la escala pasa de cinco tramos a cuatro (`BUY`/`HOLD`/`SELL`/`STRONG SELL`). La peticion coincide con lo que ya decian los datos: `STRONG BUY` exigia >=90% y no ocurrio ni una vez en 10.972 muestras de 11 años, y bajar el corte estaba descartado desde `v2.76`. `STRONG SELL` se mantiene a proposito, porque ese tramo si ocurre. Comprobado antes de tocar nada que no hay ningun `STRONG BUY` persistido en `ticker_alert_state`, que es lo que descarta alertas falsas de "cambio de recomendacion" tras el despliegue.
+- **`v2.78`**: se miden los puntos 1, 2 y 3 de "Proxima tarea" con 10 años de historico y las clases de produccion. **Los tres se cierran sin cambio de codigo.** La fuerza relativa no supera al momentum 12-1 al pasar de 2 a 6 universos; el horizonte largo empeora las cosas (-4,76 pp con t=-3,94 en `largecap60` a 120 dias); y la revision señal por señal encuentra que el cruce de medias puntua invertido en 6 de 6 universos con significancia en 6 de 6 — pero neutralizarlo mejora dos universos y empeora el tercero, igual que paso con el momentum en `v2.76`. El unico lastre consistente del ranking es el bloque `RISK`, y resulta ser intencionado (penaliza volatilidad a proposito), asi que se deja como esta y se eleva como decision de producto al usuario.
+
+Verificado en ddev: `php -l` sin errores; `vendor/bin/phpunit` en 168 tests/541 assertions sin regresiones tras cada paso; Home, ficha de detalle, backtesting y API JSON en HTTP 200 con cero apariciones de `STRONG BUY`; todos los parches de experimentacion revertidos con `git checkout` y confirmado con `git status` que no queda rastro en `src/`.
+
+Detalle tecnico completo, tablas de medicion universo por universo y limitaciones en `versions.md` (`v2.77`, `v2.78`).
+
+---
+
+## 2026-08-10 (segunda sesion: desbloquear lo bloqueado por datos y abaratar el historico largo)
+
+El usuario pide seguir con las ideas que quedan. Al comprobar el estado real de los datos antes de elegir por donde seguir, el orden de la lista cambia: las dos ideas de mas valor para el analisis —fundamentales point-in-time (`v2.74`) y tendencia del score / re-rating (`v2.63`)— no estaban bloqueadas por codigo sino por historial acumulado, y el historial no se estaba acumulando (`fundamentals_history`: 2 filas; `score_history`: 10 filas, 3 fechas).
+
+Se implementa como `v2.79`:
+
+- **Causa raiz encontrada**: `bin/analyze.php`, que existe para recorrer un universo entero por ejecucion, sembraba `fundamentals_history` pero **no** `score_history`. La captura del score dependia solo de que alguien abriera a mano la ficha de detalle de cada valor. Corregido con una llamada junto a la que ya habia, reutilizando el analisis ya calculado y sin ninguna peticion nueva a mercado.
+- **`historyTtl` deja de ser `P1D` para todos los rangos**: `5y`/`10y`/`max` (que solo pide `bin/backtest.php`) cachean 7 dias, la web sigue en `P1D`. Cierra un pendiente listado del roadmap; el backtest de 10 años dejaba de descargar ~22 MB cada dia que se ejecutase.
+- **Tests de 168 a 191**, concentrados en las tres piezas con fallos reales ya ocurridos: `TickerNormalizer` (regresion de `v2.5.2`), `Application::resolveTickerRequest()` (incidencias de `v2.5.2` y `v2.35`) y el TTL por rango.
+
+Verificado en ddev: `php -l` sin errores; `vendor/bin/phpunit` en 191 tests/585 assertions; sembrado comprobado **en vivo** ejecutando `bin/analyze.php --universe=magnificent7` (`score_history` 10→16 filas, `fundamentals_history` 2→8, y el UPSERT confirmado no duplicando), con el ranking de prueba borrado al terminar; Home, detalle, backtesting y API en HTTP 200.
+
+**Lo que esta version NO hace**: no desbloquea las dos ideas, solo hace posible que se desbloqueen. Falta el cron de `bin/analyze.php` en la Raspberry, que es hoy el mayor bloqueo del proyecto y el unico que no se puede resolver desde el repositorio.
+
+Detalle tecnico completo en `versions.md` (`v2.79`).

@@ -18,7 +18,7 @@ use StockAnalyzer\Models\User;
  * mientras la leida va sobre --surface-alt. El rojo (--bad) queda
  * reservado para el veredicto de la recomendacion, no para "sin leer":
  * hay alertas sin leer que son buenas noticias (un dividendo, un cambio a
- * STRONG BUY).
+ * BUY).
  */
 class AlertsPage
 {
