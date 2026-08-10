@@ -211,17 +211,30 @@ class TechnicalScoreAnalyzer
     {
         $signals = [];
 
-        $momentum = $technical->getMomentum30();
+        // Momentum 12-1 y no el de 30 dias (v2.76). Medido sobre 10 años y
+        // dos universos, el de 30 dias ordenaba AL REVES el retorno a 20
+        // dias (spread decil alto - decil bajo: -1,94 pp en largecap60,
+        // -1,59 en ibex35) porque a ese plazo domina la reversion a corto.
+        // El 12-1 —un año excluyendo el ultimo mes— endereza el signo
+        // (+1,15 y +0,11). El momentum de 30 dias se sigue calculando y
+        // mostrando en la ficha como indicador, pero ya no puntua.
+        //
+        // Coeficiente 0,05 y no 0,28: el 12-1 se mueve en un rango mucho
+        // mayor que el mensual (mediana +10,5%, p10 -20%, p90 +51,9%
+        // medidos sobre 10.631 muestras). Con 0,05 la escala solo satura
+        // pasado el +-70%, asi que casi todas las muestras caen en el
+        // tramo lineal en vez de amontonarse en el tope.
+        $momentum = $technical->getMomentum12m1();
         $momentumPoints = $momentum !== null
-            ? max(0.0, min(3.5 + ($momentum * 0.28), 7.0))
+            ? max(0.0, min(3.5 + ($momentum * 0.05), 7.0))
             : 3.5;
 
         if ($momentum !== null) {
             $signals[] = new Signal(
-                'Momentum 30 dias',
+                'Momentum 12-1',
                 $momentum > 0 ? SignalVerdict::POSITIVE : SignalVerdict::NEGATIVE,
                 sprintf(
-                    'El precio se ha movido un %s%% en los ultimos 30 dias.',
+                    'El precio se ha movido un %s%% en el ultimo año sin contar el ultimo mes.',
                     $this->fmt($momentum)
                 ),
                 ScoreCategory::MOMENTUM

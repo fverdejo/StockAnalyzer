@@ -13,7 +13,7 @@ Esta seccion llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el
 
 **Se volvio a desincronizar igualmente.** El `2026-08-09` este documento seguia diciendo `v2.45`/`v2.47` con el proyecto ya en `v2.68`, o sea 23 versiones de retraso: la enumeracion version a version que habia aqui era exactamente la duplicacion que la regla de arriba prohibe, y se ha retirado. Si hace falta saber que hay implementado, la respuesta esta en `versions.md` y solo ahi.
 
-Resumen a fecha de la ultima revision (`2026-08-09`, `v2.70`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
+Resumen a fecha de la ultima revision (`2026-08-10`, `v2.76`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
 
 ---
 
@@ -25,32 +25,32 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 # Proxima tarea
 
-## Recalibrar la escala de recomendacion, ahora que por fin se puede medir
+## Conseguir que el score ordene en el sentido correcto
 
 Objetivo
 
-`v2.70` cambio la situacion de fondo: hasta esa version todo el backtesting vivia sobre `range=2y`, o sea ~21 fechas independientes por universo de un unico regimen alcista, y ademas no existia ninguna metrica transversal (top-N del ranking contra su universo), que es justo la pregunta que responde el producto. Ahora hay **121 fechas independientes** (2016-11 → 2026-06, con el desplome de 2020 dentro) y `runCrossSectional()`.
+La prioridad anterior era recalibrar los cortes de `Score::recommendationFor()`. **Se investigo en `v2.76` y se descarto**, porque al medir la distribucion para elegir los cortes aparecio algo mas grave: el score no esta descalibrado, esta **invertido**.
 
-Eso deja al descubierto un problema de calibracion que ya no es una hipotesis:
+Medido sobre 7.260 muestras y 11 años, el decil de mayor puntuacion rinde +0,92 a 20 dias y el de menor +2,29, con descenso casi monotono; el decil alto tiene alpha negativa en 10 de los 11 años y la inversion se repite en `largecap60`, `ibex35` y `healthcare`. No es el sesgo de anticipacion de los fundamentales: sin ellos la inversion es mayor.
 
-- **`Score::recommendationFor()` pide >= 90% para STRONG BUY, y eso no ha ocurrido ni una sola vez en 10.972 muestras** (maximo real 84,58%, p99 79,1%). La etiqueta existe en el codigo y es inalcanzable en la practica. La causa es que cada categoria llega a su techo por separado pero nunca a la vez: VALUATION promedia el 45% de su maximo porque exige simultaneamente PER<12, PEG<1, EV/EBITDA<8 y P/B<1,5, y RISK solo daria 10/10 con volatilidad y ATR exactamente cero.
-- Simetricamente, **el motor etiqueta entre el 43% y el 61% de los dias como SELL/STRONG SELL** en mercados que subieron. El tramo SELL hoy no significa "vende", significa "score medio-bajo".
-- Medido con `--cross-sectional`, el top-10 no bate a su universo: **-0,27 pp con t=-1,33 e IC95 de -0,66 a +0,13** sobre 121 fechas. No hay evidencia de que destruya valor (el -1,30 pp / t=-2,60 de 2 años era en buena parte muestra pequeña), pero tampoco de que lo cree.
+Recalibrar los cortes ahora solo conseguiria que la app dijera "STRONG BUY" con mas frecuencia sobre el tramo que peor se ha comportado. **La escala no se toca hasta que el score discrimine en el sentido correcto.**
 
-Orden recomendado (detalle tecnico completo en `versions.md`):
+Orden recomendado:
 
-1. **Recalibrar los cortes de `Score::recommendationFor()`** contra la distribucion empirica de 121 fechas, o pasar la etiqueta a percentil dentro del universo del dia **conservando un suelo absoluto**, para que la app siga pudiendo decir "hoy no hay nada bueno que comprar". Ojo al alcance: tocar esos cortes afecta al ranking, a `BacktestingService` y a las alertas de cambio de recomendacion (`v2.15`).
-2. **Fuerza relativa / momentum 12-1.** Todas las señales de `TechnicalScoreAnalyzer::technical()` son absolutas (precio contra su propia media), asi que en mercado alcista casi todo puntua igual: el top-10 solo por TECHNICAL da alpha +0,29 pp (t=0,44), o sea que no discrimina. `TechnicalAnalyzer::momentum()` mide ademas 30 sesiones, justo el horizonte donde domina la reversion a corto plazo.
-3. **Fundamentales point-in-time.** `BacktestingService::stockAt()` reutiliza los fundamentales de HOY para cada fecha pasada, asi que 65 de 115 puntos (**56% del peso**) entran en todo backtest como constante por ticker y con sesgo de anticipacion; los veredictos "neutro en backtest" de `v2.51` y `v2.64` en realidad solo midieron el bloque tecnico. Una tabla `fundamentals_history` que se siembre desde ya no da valor hasta dentro de unos meses, y por eso conviene empezarla pronto aunque no luzca.
-4. **Costes y huecos de apertura en `simulateManagedExit()`**, que hoy asume ejecucion exacta en stop/objetivo, sin comisiones ni deslizamiento, y cobra el stop aunque la sesion abra por debajo.
-5. Proveedor oficial de noticias o datos fundamentales; universos mantenidos automaticamente.
+1. **Fuerza relativa contra el universo.** Es el unico predictor medido que sale positivo en los dos universos probados (+0,74 en largecap60 y +1,42 en ibex35, frente al -1,94/-1,59 del momentum de 30 dias que `v2.76` ya retiro). Necesita plomeria nueva: hoy el analizador puntua un ticker cada vez sin conocer a los demas, y la fuerza relativa exige la mediana del universo en cada fecha.
+2. **Revisar el bloque `TECHNICAL` entero con el mismo metodo.** `v2.76` demostro que cambiar solo el momentum no endereza el compuesto: precio contra SMA, MACD y Bollinger son señales igualmente absolutas ("por encima de su media, luego bien") y a 20 dias son igual de mean-reverting. Conviene medir cada una por separado, como se hizo con el momentum, antes de tocarlas.
+3. **Revisar el horizonte.** Todo esto se mide a 20 dias porque es lo que hace el backtest. Puede que el score sea razonable a 6-12 meses y solo este mal alineado con el horizonte con el que se valida; medirlo a 120 y 250 sesiones es barato con los 10 años de `v2.70` y responderia si el problema es el score o la vara de medir.
+4. **Recalibrar la escala**, ya con sentido, cuando 1-3 hayan dado un score que ordene bien. Ojo al alcance: los cortes afectan al ranking, al backtesting y a las alertas de cambio de recomendacion (`v2.15`).
+5. **Fundamentales point-in-time**: la tabla existe y se siembra desde `v2.74`, pero `BacktestingService::stockAt()` seguira usando los de hoy hasta que haya historial suficiente. Ese cambio es el que hara backtesteable el 56% del peso del score.
+6. Proveedor oficial de noticias o datos fundamentales; universos mantenidos automaticamente.
 
-Tests: el punto que llevaba tiempo como prioridad 1 ya no lo es. La suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **139 tests / 457 assertions**, cubriendo tambien cartera en euros, concentracion, cantidad sugerida, alertas (acciones, aislamiento entre usuarios y render) y el backtest transversal. Falta todavia cobertura de buena parte de `Repository/` y de las rutas de `Application.php`, pero ya no es el cuello de botella.
+Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **168 tests / 541 assertions**, cubriendo cartera en euros, concentracion, cantidad sugerida, alertas, posicion por ticker, backtest transversal, costes y huecos de la simulacion, snapshots de fundamentales y concentracion sectorial del ranking. Falta cobertura de buena parte de `Repository/` y de las rutas de `Application.php`, y no hay ningun test que hable con MySQL.
 
 Pendiente aparte, no bloqueante:
 
 - Configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/` (y en Mailpit en local, ver `v2.11.1`).
 - `historyTtl` sigue siendo `P1D` para todos los rangos, asi que un backtest de 10y refetchea ~22 MB cada dia que se ejecute; los cierres de hace 9 años no cambian y admiten un TTL mucho mayor.
+- Programar `bin/analyze.php` en el cron de la Raspberry: desde `v2.74` cada ejecucion siembra los snapshots de fundamentales, y sin ejecuciones regulares esa serie —que no se puede recuperar despues— tendra huecos.
 - Sesgo de supervivencia de `config/universes.php`: son listas de hoy, y con ventana de 10 años el problema se agrava (un universo de 2016 no contenia estos 60 tickers).
 - Un test de integracion contra MySQL para el `AND user_id` de las alertas (`v2.69`): la comprobacion manual con dos usuarios ya se hizo y pasa, pero nada impide una regresion futura. Hoy la suite no habla con MySQL en ningun test.
 - Decision del usuario: si traducir la descripcion de empresa al español via un servicio externo de pago (DeepL u otro), investigado y documentado en `v2.44` pero no implementado.
@@ -61,19 +61,18 @@ Pendiente aparte, no bloqueante:
 
 ## Prioridad alta
 
-- Recalibrar los cortes de `Score::recommendationFor()` (STRONG BUY inalcanzable, SELL sobrerrepresentado) con las 121 fechas que habilito `v2.70`
-- Fuerza relativa / momentum 12-1 en el bloque tecnico, que hoy no discrimina entre tickers
+- Fuerza relativa contra el universo: el unico predictor medido con signo correcto en los dos universos probados (`v2.76`)
+- Medir una por una las señales del bloque `TECHNICAL`, que es donde vive la inversion del score entre tickers
 
 ---
 
 ## Prioridad media
 
-- Fundamentales point-in-time (`fundamentals_history`): sin ellos, el 56% del peso del score no es backtesteable
-- Costes, deslizamiento y huecos de apertura en `simulateManagedExit()`
-- Ampliar la cobertura de tests a `Repository/` y a las rutas de `Application.php` (la suite ya esta en 139 tests desde `v2.70`)
+- Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`) cuando el historial sea suficiente
+- Medir el score a horizontes de 120 y 250 sesiones, no solo a 20
+- Ampliar la cobertura de tests a `Repository/` y a las rutas de `Application.php` (la suite ya esta en 168 tests desde `v2.76`)
 - Proveedor oficial de noticias/datos
 - Universo completo mantenido automaticamente, tipo S&P 500 (`v1.2` avanzado)
-- Aviso de concentracion sectorial en el propio ranking (el sector dominante ocupa de media 3,6 de las 10 primeras posiciones en `largecap60`, y hasta 6)
 
 ---
 

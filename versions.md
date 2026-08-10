@@ -3345,6 +3345,258 @@ Comprar o vender es una accion de la ficha del valor y solo de ahi: sin campo de
 
 ---
 
+## v2.72 - "Tu posicion" en la ficha del valor: cuanto tienes y como llegaste ahi
+
+Estado: implementado, con tests.
+
+Objetivo:
+
+`v2.71` dejo la compra y la venta como algo que solo se hace desde la ficha del valor, y con ello dejo tambien un hueco evidente: la ficha no decia **cuantas acciones tienes ya de ese valor** ni a que precio las compraste. Para decidir si comprar mas o vender habia que ir a "Mi cartera", buscar la fila y volver. Era la limitacion que `v2.71` anoto y que el usuario pidio cerrar a continuacion.
+
+Decisiones de arquitectura:
+
+- **Ni una peticion nueva al proveedor.** `getPortfolio()` recorre toda la cartera pidiendo el precio de mercado de cada ticker, asi que usarla en la ficha habria hecho pagar una ronda completa de red a cada visita. `getPositionFor()` solo lee las transacciones de ese ticker (`findByUserAndTicker()`, que ya existia) y recibe el precio actual **que la ficha ya tiene analizado**. Un test con un proveedor que lanza ante cualquier consulta garantiza que siga siendo asi.
+- **La regla de coste medio queda en un solo sitio.** El bucle que acumula compras y ventas se extrae de `getPortfolio()` a `accumulatePositions()`, y lo comparten las dos. Duplicarlo era la via rapida a que "Mi cartera" y la ficha del mismo valor mostrasen cantidades distintas; el test que lo cubre es precisamente el de la venta parcial, donde una venta retira coste **al precio medio** y no al precio de venta.
+- **`getTransactionsFor()` vive en `PortfolioService`, no en `Application`.** El repositorio de transacciones es una dependencia de ese servicio y se construye dentro de el; exponerlo desde fuera obligaba a instanciar un segundo repositorio identico.
+- **Si nunca operaste el valor, no hay panel.** Un bloque de ceros no aporta nada a quien solo esta mirando la ficha. En cambio, **si tuviste posicion y ya la cerraste, el historial si se muestra**: saber que vendiste esto en su dia es justo lo que quieres recordar antes de volver a comprarlo.
+- **Aqui la cantidad va con precision completa**, al reves que la tabla de posiciones abiertas de `v2.71` (4 decimales). Aquella es un resumen de un vistazo entre 9 columnas; esta es el registro de lo que se ejecuto.
+- **El panel de operacion sube.** Con "Tu posicion" delante, ambos pasan a ir justo detras de la ficha de empresa, antes de los graficos y del historial de señal. Estando la compra/venta solo aqui desde `v2.71`, dejar el formulario al final obligaba a recorrer media pagina para hacer lo que se venia a hacer. Era la tercera limitacion anotada en `v2.71`.
+
+Incluye:
+
+- `Services/PortfolioService.php`: `getPositionFor()`, `getTransactionsFor()` y `accumulatePositions()` (extraida de `getPortfolio()`, que ahora la usa).
+- `Web/StockDetailPage.php`: `render()` acepta `?Holding $position` y `list<Transaction> $positionTransactions`; `renderPositionPanel()`, `renderPositionTransactions()` y `shares()` nuevos; el panel de posicion y el de operacion suben en el orden del cuerpo.
+- `Services/Application.php`: `renderDetail()` resuelve posicion e historial cuando hay sesion.
+- `Web/Layout.php`: `.panel-subtitle` nueva (no habia estilo para `h3`: ningun panel tenia hasta ahora dos niveles de contenido).
+- `tests/Services/PortfolioServicePositionTest.php` (nuevo, 7 tests) y `tests/Services/InMemoryTransactionRepository.php` (nuevo, mismo patron que `InMemoryAlertRepository`).
+
+Verificado en ddev con...:
+
+`php -l` limpio en los ficheros tocados. `vendor/bin/phpunit`: **152 tests, 490 assertions** en verde (baseline `v2.71`: 145/473). Los 7 nuevos cubren precio medio con varias compras, venta parcial que no altera el precio medio, posicion cerrada que devuelve `null` pero conserva historial, ticker nunca operado, aislamiento entre tickers y entre usuarios, ticker insensible a mayusculas, y el proveedor que lanza si alguien intenta pedir precios.
+
+Ficha de detalle y home responden 200.
+
+Limitaciones conocidas:
+
+- **El panel no se ha visto con una posicion real en el navegador**: los tests cubren el calculo y la pagina renderiza sin sesion (donde el panel se omite a proposito), pero la maquetacion con datos dentro esta sin mirar en pantalla.
+- Los importes van **solo en divisa nativa**, sin equivalencia en euros. Es coherente con `v2.68` (la equivalencia se exige en los totales que mezclan divisas, y aqui hay un unico valor), pero quien tenga la cartera en euros y mire un valor en dolares no vera aqui cuanto le costo en euros; eso sigue estando en "Mi cartera".
+- El historial de este panel no marca el **beneficio por operacion** que si calcula "Mi cartera" (`getTransactionProfit()`): habria que pasar la cartera completa a la ficha, que es justo la peticion de red que esta version evita.
+
+Resultado esperado:
+
+La ficha de un valor responde ya sin salir de ella a las tres preguntas que preceden a operar: que dice el analisis, cuanto tengo y a que precio lo compre. Y el formulario esta arriba, donde se usa, en vez de al final de la pagina.
+
+---
+
+## v2.73 - El backtest deja de suponer que operar es gratis y que el stop siempre se ejecuta al stop
+
+Estado: implementado, con tests y medido sobre 10 años de datos reales.
+
+Objetivo:
+
+`simulateManagedExit()` tenia dos suposiciones optimistas que nadie habia cuantificado:
+
+1. **Si una sesion abria por debajo del stop, la simulacion cobraba el stop igualmente.** A ese precio no hubo mercado: la orden se habria ejecutado a la apertura, mas abajo. El sesgo caia justo sobre los peores dias, que son los que definen el drawdown.
+2. **Comprar y vender era gratis.** Sin comision ni deslizamiento, una estrategia que entra y sale mucho parece rentable aunque su ventaja sea menor que el coste de operar.
+
+Decisiones de arquitectura:
+
+- **Los dos huecos se modelan, no solo el malo.** Si abre por debajo del stop se sale a la apertura (peor); si abre por encima del objetivo, tambien a la apertura (mejor). Modelar unicamente el hueco desfavorable sesgaria el resultado en la direccion contraria, que es igual de deshonesto.
+- **El coste se cobra por lado**, al entrar y al salir, asi que el viaje completo paga el doble. Configurable en `config/backtesting.php` (`cost_bps`), con el mismo patron de carga que `weights.php` y `risk_levels.php`. Por defecto **10 pb por lado (0,20% ida y vuelta)**, un orden de magnitud razonable para un broker minorista en valores liquidos.
+- **`BacktestingConfig` acepta 0 como valor valido**, al reves que `RiskLevelsConfig` (que filtra `> 0`). Un coste de cero es una eleccion legitima —medir el retorno bruto de mercado, sin friccion— y no un valor ausente.
+- **El coste solo se aplica al retorno GESTIONADO.** `forward_return` mide el movimiento del mercado, no una operacion, y es la referencia contra la que se calcula la alpha: descontar el coste en los dos lados de una resta no cambia la resta, pero haria creer que el numero incluye algo que no incluye.
+
+Incluye:
+
+- `config/backtesting.php` (nuevo) y `Config/BacktestingConfig.php` (nuevo).
+- `Services/BacktestingService.php`: huecos de apertura en `simulateManagedExit()`, `netManagedReturn()` nuevo, y `BacktestingConfig` como ultimo parametro de constructor con valor por defecto (ningun punto de montaje existente cambia).
+- `tests/Services/BacktestingServiceTest.php`: 3 casos nuevos (hueco bajista, hueco alcista, coste cero) y 4 existentes actualizados.
+
+Verificado en ddev con...:
+
+`vendor/bin/phpunit`: **155 tests, 508 assertions** en verde (baseline `v2.72`: 152/490).
+
+Los 4 tests que cambiaron lo hicieron por motivos que conviene dejar escritos, porque **dos de ellos revelaron que sus fixtures no probaban lo que decian**: sus velas sinteticas se construian con `open = close`, asi que los dias que pretendian ser "toque intradia del stop" en realidad **abrian ya por debajo del stop**. Con el modelado de huecos pasaron a medir un hueco sin querer. Se les ha fijado una apertura explicita dentro de la banda para que sigan probando el toque intradia, y los huecos tienen ahora sus propios casos. El helper de fixtures acepta un cuarto elemento opcional (`open`) que por defecto sigue siendo el cierre.
+
+El tercero (`testSinDisparoNingunoElRetornoGestionadoCoincideConElForwardReturn`) afirmaba una igualdad que ya no se cumple, y no por un fallo: se renombra a `...EsElForwardMenosElCosteDeIdaYVuelta` y comprueba exactamente esa diferencia.
+
+Medido sobre `largecap60`, `--horizon=20 --step=20 --history=10y` (7.260 muestras, 402 señales BUY), aislando cada efecto:
+
+| | Retorno gestionado medio | Drawdown medio | Peor drawdown |
+|---|---|---|---|
+| Pre-`v2.73` (sin huecos, sin coste) | -0,532 | -5,182 | -10,92 |
+| Solo huecos de apertura | -0,582 | -5,992 | -11,87 |
+| Huecos + coste de 10 pb | **-0,780** | **-6,181** | **-12,05** |
+
+Dos lecturas:
+
+- **El hueco de apertura era el sesgo grande, y estaba en el drawdown**: 0,81 pp de perdida que la simulacion no enseñaba, un **15,6% del drawdown medio**. Tiene sentido que se concentre ahi y no en el retorno medio: un hueco bajista solo aparece cuando la cosa va mal.
+- **El coste resta 0,198 pp al retorno gestionado**, que es exactamente el 0,20% de la ida y vuelta. Que cuadre con el valor teorico es la comprobacion de que la formula esta bien aplicada sobre datos reales.
+
+En conjunto, el retorno gestionado medio estaba sobreestimado en 0,248 pp y el drawdown infravalorado en casi 1 pp. Ninguna conclusion previa se invierte —el retorno gestionado ya era negativo antes—, pero era menos malo de lo que la realidad permite.
+
+Limitaciones conocidas:
+
+- **El coste es un unico numero para todo**: no distingue mercado, divisa, tamaño de la orden ni valores poco liquidos, donde el deslizamiento real es mayor. Es una mejora sobre cero, no un modelo de microestructura.
+- **Los huecos se modelan con la apertura, que es lo mejor que permite un dato diario.** Un stop real puede ejecutarse peor aun si el precio sigue cayendo desde la apertura antes de que la orden llegue al mercado.
+- **`forward_return` sigue sin coste** a proposito (ver arriba), asi que comparar `avg_buy_managed_return` con `avg_buy_forward_return` compara una operacion con un movimiento de mercado. No es un error, pero hay que leerlo sabiendolo.
+
+Resultado esperado:
+
+La pagina de backtesting y el CLI dejan de prometer un resultado que dependia de dos supuestos imposibles. El drawdown, que es la cifra que mira quien quiere saber cuanto puede doler, sube casi un punto porque antes se estaba escondiendo justo en los peores dias.
+
+---
+
+## v2.74 - `fundamentals_history`: empezar a guardar hoy lo que hara backtesteable el 56% del score
+
+Estado: implementado y sembrando con datos reales.
+
+Objetivo:
+
+`BacktestingService::stockAt()` reutiliza los fundamentales de HOY para cada fecha pasada, asi que FUNDAMENTAL + VALUATION + QUALITY + DIVIDEND —**65 de 115 puntos, el 56% del peso del score**— entran en todo backtest como una constante por ticker y con sesgo de anticipacion. Los veredictos "neutro en backtest" de `v2.51` (CurrentRatio) y `v2.64` (crecimiento de dividendo) en realidad solo midieron el bloque tecnico.
+
+Yahoo no sirve fundamentales fechados. La unica via es acumularlos desde hoy, y por eso esto se siembra ahora aunque **no de valor hasta dentro de meses**: cada dia que pasa sin la tabla es un dia de historia que no se puede recuperar.
+
+Decisiones de arquitectura:
+
+- **Se siembra tambien desde `bin/analyze.php`, no solo desde la ficha de detalle.** El snapshot de score (`v2.63`) solo se captura cuando alguien abre una ficha, lo que da una cobertura caprichosa. El CLI recorre un universo entero por ejecucion, que es la unica forma de acumular una serie utilizable. Un fallo al guardar imprime `WARN` y no tumba el ranking, que es lo que ese comando viene a producir.
+- **Un JSON por fila, no una columna por ratio.** El conjunto de fundamentales ya cambio una vez (`dividendGrowth5y` llego en `v2.64`), y un payload absorbe el siguiente cambio sin migracion. Mismo criterio que `category_breakdown` en `score_history`.
+- **La lista de campos es explicita, no reflexion sobre los getters.** Añadir un getter a `Fundamentals` no debe cambiar en silencio el formato de todo el historico ya acumulado: `FIELDS` es el sitio donde se decide conscientemente.
+- **`freeCashFlowYield` no se guarda** por ser derivado de dos campos que si estan. Duplicar un dato calculable es la via a que un dia no cuadren.
+- **Los `null` se guardan como `null`, no se omiten.** Un null significa "el proveedor no dio este dato ese dia"; omitir la clave lo haria indistinguible de un campo que aun no existia.
+- **`JSON_PRESERVE_ZERO_FRACTION`.** Lo detecto un test: sin ese flag un PER de `20.0` se escribe `20` y vuelve como `int`. En un registro historico que no se podra rehacer, el tipo tambien es parte del dato.
+- **`findAsOf()` devuelve el snapshot de esa fecha o el anterior mas cercano, y null si no hay ninguno.** Para un backtest es preferible saltar la muestra que usar datos del futuro, que es justo el sesgo que esta tabla existe para eliminar.
+
+Incluye:
+
+- `database/migrations/018_create_fundamentals_history.sql` (nueva) y `Repository/FundamentalsHistoryRepository.php` (nuevo, con `recordSnapshot()`, `findAsOf()`, `countSnapshots()` y `toArray()`).
+- `Services/Application.php`: captura junto al snapshot de score ya existente, con el mismo criterio "best effort" silencioso.
+- `bin/analyze.php`: captura por ticker analizado.
+- `tests/Repository/FundamentalsHistorySnapshotTest.php` (nuevo, 5 tests).
+
+Verificado en ddev con...:
+
+`vendor/bin/phpunit`: **160 tests, 522 assertions** en verde. Migracion aplicada y comprobada contra Yahoo real: `bin/analyze.php --tickers="AAPL MSFT REP.MC"` deja las tres filas con sus 18 ratios (`AAPL` per 35,97 / roe 148,75; `REP.MC` per 8,21 / peg 0,49).
+
+Limitaciones conocidas:
+
+- **No hay ningun consumidor todavia, y es deliberado.** `BacktestingService` sigue usando los fundamentales de hoy: cambiarlo ahora, con un unico dia capturado, haria que todo backtest devolviese cero muestras. El cambio en `stockAt()` corresponde al dia en que la serie sea suficientemente larga.
+- **La cobertura depende de que el CLI se ejecute.** Sin una tarea programada que lo lance a diario sobre los universos que interesan, la serie tendra huecos. Conviene añadirlo al cron de la Raspberry.
+- **Un solo snapshot al dia por ticker**: si un fundamental cambia intradia, se guarda el ultimo visto.
+
+Resultado esperado:
+
+A partir de hoy el proyecto acumula la unica pieza que no se puede comprar ni recuperar despues: su propia serie historica de fundamentales. Dentro de unos meses habra suficiente para medir de verdad la mitad del score que hoy no se puede validar.
+
+---
+
+## v2.75 - El ranking avisa cuando "las 10 mejores" son en realidad una apuesta sectorial
+
+Estado: implementado y verificado en vivo con `largecap60`.
+
+Objetivo:
+
+`PortfolioConcentrationCalculator` (`v2.61`) vigila la concentracion de la cartera ya comprada, pero nadie vigilaba el ranking que la alimenta. Medido sobre `largecap60`, el sector dominante ocupa de media **3,6 de las 10 primeras posiciones y llega a 6 de 10**: quien compra el top tal cual puede estar apostando por un sector sin que ninguna pantalla se lo diga.
+
+Decisiones de arquitectura:
+
+- **Avisa, no filtra ni reordena.** Sustituir un valor mejor puntuado por otro peor para repartir sectores seria decidir por el usuario, y ademas cambiaria el producto que `runCrossSectional()` (`v2.70`) mide. El ranking sigue ordenado por puntuacion.
+- **Se mira el top-10, el mismo top-N con el que se mide la alpha del ranking** en el backtest transversal: conviene que la pantalla avise sobre exactamente el conjunto que se ha medido.
+- **El umbral referencia `PortfolioConcentration::SECTOR_WARNING_PERCENT`** (40%) en vez de repetir el numero, para que los dos avisos de concentracion de la app no puedan divergir.
+- **El porcentaje se calcula sobre los valores CON sector conocido, no sobre el top entero.** Si de 10 solo 4 traen sector y 3 son del mismo, ese sector es el 75% de lo clasificado y no el 30% del top: quedarse corto justo en el aviso seria el peor sitio para hacerlo.
+- **Sin concentracion destacable tambien se dice algo**: una linea con el reparto por sector. Que no haya aviso no debe leerse como que nadie lo ha mirado.
+- **`computeFromSectors()` esta separada de `compute()`** porque lo unico que el calculo necesita de cada resultado es su sector. Asi se prueba sin construir un `StockAnalysis` completo —que arrastra snapshot tecnico, series de grafico y score— para algo que solo cuenta cadenas.
+- **Sin coste**: el sector ya viene en el `Company` que `YahooParser` sirve para cada ticker del ranking, asi que no hay ninguna llamada nueva.
+
+Incluye:
+
+- `Services/RankingSectorConcentrationCalculator.php` (nuevo).
+- `Web/DashboardPage.php`: parametro `?array $sectorWeights`, `renderSectorNote()` y `describeSectors()`; el aviso va dentro del panel "Ranking completo", encima de la tabla.
+- `Services/Application.php`: calcula la concentracion de los resultados ya analizados.
+- `tests/Services/RankingSectorConcentrationCalculatorTest.php` (nuevo, 8 tests).
+
+Verificado en ddev con...:
+
+`vendor/bin/phpunit`: **168 tests, 541 assertions** en verde. Con datos reales de Yahoo, el Home de `largecap60` renderiza hoy "Reparto por sector de las 10 primeras: Technology 4, Financial Services 3, Energy 2, Communication Services 1" — Technology esta justo en el 40%, el limite, asi que se muestra el reparto neutro y no la alerta, que es el comportamiento acordado (`> 40%`).
+
+Limitaciones conocidas:
+
+- **La rama de alerta no se ha visto en pantalla con datos reales**, solo en tests: hoy ningun sector supera el 40% en `largecap60`. Con `technology` u otro universo sectorial saltara siempre, lo cual es correcto pero conviene comprobar que no resulta ruidoso.
+- **Un universo sectorial hara saltar el aviso por definicion** (todos sus valores son del mismo sector). No se ha añadido ninguna excepcion: el aviso sigue siendo cierto, pero podria molestar. Si molesta, lo natural es omitirlo cuando el universo entero es de un solo sector.
+- El aviso mira **sectores**, no industrias ni correlacion real: dos valores de sectores distintos pueden moverse igual.
+
+Resultado esperado:
+
+Antes de comprar el top del ranking, la pantalla dice de que sectores es ese top. El aviso no cambia ni una posicion del ranking; solo impide que la concentracion pase desapercibida por leer la tabla de arriba abajo.
+
+---
+
+## v2.76 - El momentum de 30 dias ordenaba al reves: se sustituye por 12-1, y la recalibracion de la escala se descarta
+
+Estado: implementado el cambio de momentum. **La recalibracion de `Score::recommendationFor()` se investigo y se decidio NO hacerla**; el motivo esta abajo y es lo mas importante de esta version.
+
+Objetivo:
+
+La prioridad 1 del roadmap era recalibrar los cortes de la escala de recomendacion (STRONG BUY exige >=90% y no ocurre nunca; el 44% de los dias salen SELL). Al medir la distribucion real sobre 10 años para elegir los cortes con datos, aparecio algo que cambia la tarea entera.
+
+Hallazgo: **el score no esta descalibrado, esta invertido.**
+
+Deciles de puntuacion contra retorno a 20 dias, `largecap60`, 7.260 muestras, 2016-2026:
+
+| Decil | Score | Retorno a 20d |
+|---|---|---|
+| D1 (peor score) | 24,4-46,8 | **+2,29** |
+| D5 | 58,6-61,8 | +1,47 |
+| D10 (mejor score) | 72,9-85,4 | **+0,92** |
+
+El descenso es practicamente monotono. **El decil mas alto tiene alpha negativa en 10 de los 11 años** medidos (solo 2023 positivo), en años alcistas y bajistas, y se repite en los tres universos probados: largecap60 -1,36, ibex35 -1,91, healthcare -1,51.
+
+Se descarto la explicacion mas obvia: **no es el sesgo de anticipacion de los fundamentales**. En modo `technical`, sin fundamentales, la inversion es MAS fuerte (-1,97 frente a -1,36), asi que el motor de la inversion es el bloque tecnico.
+
+Aislando predictores sobre las series de precios (10.631 muestras, largecap60 + ibex35), el culpable esta identificado:
+
+| Predictor | largecap60 (D10-D1) | ibex35 (D10-D1) |
+|---|---|---|
+| `momentum30` (el que puntuaba) | **-1,94** | **-1,59** |
+| 250 sesiones completas | -0,45 | -0,19 |
+| **Momentum 12-1** (250 sesiones sin el ultimo mes) | **+1,15** | +0,11 |
+| Fuerza relativa 12-1 (contra la mediana del dia) | +0,74 | **+1,42** |
+
+Lo que endereza el signo es **excluir el ultimo mes**: el mismo periodo de 250 sesiones sin excluirlo sigue invertido. A 20 dias vista domina la reversion a corto plazo, y puntuar "lo que mas ha subido este mes" es apostar en contra de ella.
+
+Decisiones:
+
+- **`MOMENTUM` pasa a puntuar el 12-1 en vez del de 30 dias.** Es sustituir un input demostradamente invertido por uno con el signo correcto. El momentum de 30 dias se sigue calculando y mostrando en la ficha como indicador; simplemente ya no puntua.
+- **Coeficiente 0,05 y no 0,28**, porque el 12-1 se mueve en un rango mucho mayor que el mensual (mediana +10,5%, p10 -20%, p90 +51,9%). Con 0,05 la escala solo satura pasado el ±70% y casi todas las muestras caen en el tramo lineal en vez de amontonarse en el tope. El techo de la categoria no cambia.
+- **NO se recalibran los umbrales de `Score::recommendationFor()`.** Ajustarlos a la distribucion empirica (maximo real 84,5; p99 81) haria que el top 5% pasara a etiquetarse STRONG BUY, y ese tramo es exactamente el que peor se ha comportado durante 11 años. Cambiaria un defecto visible —una etiqueta que nunca aparece— por uno peligroso: la aplicacion diria "compra fuerte" mas a menudo y con mas seguridad justo sobre el cubo historicamente peor. Con dinero real de por medio, la escala se queda como esta hasta que el score ordene en el sentido correcto.
+
+Verificado en ddev con...:
+
+`vendor/bin/phpunit`: **168 tests, 541 assertions** en verde, sin cambios necesarios en ningun test existente.
+
+**El cambio de momentum NO arregla el compuesto, y conviene decirlo claro:**
+
+| Universo | Antes (D10-D1) | Con momentum 12-1 |
+|---|---|---|
+| largecap60 | -1,36 | -1,22 |
+| ibex35 | -1,91 | -1,44 |
+| healthcare | -1,51 | **-1,82** |
+
+Mejora en dos universos, empeora en el tercero, y el signo sigue siendo negativo en los tres. La conclusion es que **la inversion no vive solo en el momentum**: el resto del bloque `TECHNICAL` (precio contra su SMA, MACD, Bollinger) esta construido con señales igualmente absolutas —"el precio esta por encima de su media, luego bien"— que a 20 dias vista son igual de mean-reverting. Cambiar un input de una categoria no podia arreglar eso, y no lo ha hecho.
+
+Limitaciones conocidas:
+
+- **El score sigue ordenando al reves.** Esta version quita una causa identificada, no el efecto. Cualquier lectura del ranking como "las mejores para comprar" sigue sin respaldo empirico a 20 dias.
+- **La fuerza relativa, que es el predictor mas consistente de los medidos** (+0,74 y +1,42, el unico positivo en los dos universos), no se ha implementado: necesita la mediana del universo en cada fecha, y hoy el analizador puntua un ticker cada vez sin conocer a los demas. Es el siguiente paso natural y exige plomeria nueva.
+- Todo lo medido es **retorno bruto a 20 dias**: con los costes de `v2.73`, un spread de 1-1,4 pp se reduce, aunque no cambia de signo.
+- Los predictores se han medido **de uno en uno**, no como el compuesto que la app usa de verdad.
+
+Resultado:
+
+Se retira del motor una señal que empujaba en la direccion contraria y se deja documentado, con datos de 11 años y tres universos, que el problema de la escala de recomendacion no son sus cortes sino el orden de lo que ordena. La prioridad del roadmap cambia en consecuencia: antes de tocar etiquetas, hay que conseguir que el score discrimine en el sentido correcto.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
@@ -3360,10 +3612,10 @@ Ideas nuevas anotadas por `analista-mercado` el 2026-08-09, tras revisar el moto
 
 - **Backtest transversal (top-N del ranking contra el universo), que es lo que la app promete de verdad — implementado en `v2.70`.** `BacktestingService::backtestTicker()` solo mide umbrales absolutos ticker a ticker y nunca compara tickers en la misma fecha, pero el producto es un ranking ("que acciones son las mejores para comprar hoy"). Un metodo `runCrossSectional()` que agrupe por fecha las muestras que ya se calculan, tome el top-N por score y lo compare con la media del universo ese dia (reutilizando `stdDev()`/`welchStdErr()` para el t-stat) mediria eso directamente: medido a mano da alpha del top-10 de -1,32 pp (t=-2,75) en `largecap60`, +0,20 pp (t=0,38) en `ibex35` y -0,21 pp (t=-0,57) en `healthcare` a 20 dias, es decir, ninguna ventaja demostrable en la unica metrica que le importa al usuario.
 
-- **Fuerza relativa y momentum 12-1, el eje que hoy no existe.** Todas las señales de `TechnicalScoreAnalyzer::technical()` son absolutas (precio contra SU propia media), asi que en un mercado alcista casi todo puntua igual y el bloque tecnico pierde capacidad de discriminar justo cuando el ranking tiene que elegir (top-10 solo por TECHNICAL: alpha +0,29 pp, t=0,44). Cabria un componente de fuerza relativa dentro de `momentum()` (retorno a 125 sesiones del ticker menos la mediana del universo/indice, por tramos de percentil) y sustituir o acompañar `TechnicalAnalyzer::momentum()` a 30 sesiones — que es justo el horizonte donde domina la reversion a corto plazo — por el 12-1 clasico (250 sesiones excluyendo el ultimo mes); no subiria el techo de MOMENTUM, solo repartiria sus 10 puntos.
+- **Fuerza relativa y momentum 12-1, el eje que hoy no existe — momentum 12-1 implementado en `v2.76`; la fuerza relativa sigue abierta.** Todas las señales de `TechnicalScoreAnalyzer::technical()` son absolutas (precio contra SU propia media), asi que en un mercado alcista casi todo puntua igual y el bloque tecnico pierde capacidad de discriminar justo cuando el ranking tiene que elegir (top-10 solo por TECHNICAL: alpha +0,29 pp, t=0,44). Cabria un componente de fuerza relativa dentro de `momentum()` (retorno a 125 sesiones del ticker menos la mediana del universo/indice, por tramos de percentil) y sustituir o acompañar `TechnicalAnalyzer::momentum()` a 30 sesiones — que es justo el horizonte donde domina la reversion a corto plazo — por el 12-1 clasico (250 sesiones excluyendo el ultimo mes); no subiria el techo de MOMENTUM, solo repartiria sus 10 puntos.
 
-- **Fundamentales point-in-time: hoy el 56% del peso del score es invalidable.** `BacktestingService::stockAt()` (linea 470) reutiliza los fundamentales de HOY para cada fecha pasada, asi que FUNDAMENTAL+VALUATION+QUALITY+DIVIDEND (65 de 115 puntos) entran en todo backtest como una constante por ticker y con sesgo de anticipacion; los veredictos "neutro en backtest" de `v2.51` y `v2.64` en realidad solo midieron el bloque tecnico. Extender la infraestructura de snapshots de `v2.63` a una tabla `fundamentals_history` (ticker/fecha + los ~11 ratios, escrita donde ya se piden los fundamentales) permitiria dentro de unos meses un backtest fundamental real, sin datos externos nuevos.
+- **Fundamentales point-in-time: hoy el 56% del peso del score es invalidable — tabla creada y sembrando desde `v2.74`; falta que `stockAt()` la use cuando haya historial.** `BacktestingService::stockAt()` (linea 470) reutiliza los fundamentales de HOY para cada fecha pasada, asi que FUNDAMENTAL+VALUATION+QUALITY+DIVIDEND (65 de 115 puntos) entran en todo backtest como una constante por ticker y con sesgo de anticipacion; los veredictos "neutro en backtest" de `v2.51` y `v2.64` en realidad solo midieron el bloque tecnico. Extender la infraestructura de snapshots de `v2.63` a una tabla `fundamentals_history` (ticker/fecha + los ~11 ratios, escrita donde ya se piden los fundamentales) permitiria dentro de unos meses un backtest fundamental real, sin datos externos nuevos.
 
-- **Costes y huecos de precio en la simulacion gestionada.** `BacktestingService::simulateManagedExit()` (linea 424) asume ejecucion exacta en el stop/objetivo, sin comisiones ni deslizamiento y sin tratar el hueco de apertura: si una sesion abre por debajo del stop, la simulacion cobra el stop y no la apertura, lo que sobreestima sistematicamente `avg_buy_managed_return` y `max_drawdown_managed`. Salida a `min(open, stopLoss)` cuando el hueco ya abre por debajo, mas un coste configurable en puntos basicos a la entrada y a la salida, es un cambio contenido en una sola clase y mejora la honestidad de toda la pagina de backtesting.
+- **Costes y huecos de precio en la simulacion gestionada — implementado en `v2.73`.** `BacktestingService::simulateManagedExit()` (linea 424) asume ejecucion exacta en el stop/objetivo, sin comisiones ni deslizamiento y sin tratar el hueco de apertura: si una sesion abre por debajo del stop, la simulacion cobra el stop y no la apertura, lo que sobreestima sistematicamente `avg_buy_managed_return` y `max_drawdown_managed`. Salida a `min(open, stopLoss)` cuando el hueco ya abre por debajo, mas un coste configurable en puntos basicos a la entrada y a la salida, es un cambio contenido en una sola clase y mejora la honestidad de toda la pagina de backtesting.
 
-- **Diversificacion sectorial del propio ranking.** `PortfolioConcentrationCalculator` (`v2.61`) vigila la concentracion de la cartera ya comprada, pero el ranking que la alimenta no: medido sobre `largecap60`, el sector dominante ocupa de media 3,6 de las 10 primeras posiciones y llega a 6 de 10. Ahora que `Company::getSector()` trae sector real (`v2.47`), bastaria con un aviso (o un tope opcional de N por sector) en la tabla de resultados para que "las 10 mejores de hoy" no sean en la practica una apuesta sectorial sin avisar.
+- **Diversificacion sectorial del propio ranking — implementado en `v2.75`.** `PortfolioConcentrationCalculator` (`v2.61`) vigila la concentracion de la cartera ya comprada, pero el ranking que la alimenta no: medido sobre `largecap60`, el sector dominante ocupa de media 3,6 de las 10 primeras posiciones y llega a 6 de 10. Ahora que `Company::getSector()` trae sector real (`v2.47`), bastaria con un aviso (o un tope opcional de N por sector) en la tabla de resultados para que "las 10 mejores de hoy" no sean en la practica una apuesta sectorial sin avisar.

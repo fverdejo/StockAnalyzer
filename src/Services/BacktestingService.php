@@ -6,6 +6,7 @@ namespace StockAnalyzer\Services;
 
 use DateInterval;
 use StockAnalyzer\Analyzer\ScoreCalculator;
+use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Enums\ScoreCategory;
@@ -24,7 +25,8 @@ class BacktestingService
         private readonly TechnicalAnalyzer $technicalAnalyzer,
         private readonly ScoreCalculator $scoreCalculator,
         private readonly RiskLevelsCalculator $riskLevelsCalculator,
-        private readonly DividendGrowthCalculator $dividendGrowthCalculator = new DividendGrowthCalculator()
+        private readonly DividendGrowthCalculator $dividendGrowthCalculator = new DividendGrowthCalculator(),
+        private readonly BacktestingConfig $backtestingConfig = new BacktestingConfig()
     ) {
     }
 
@@ -583,7 +585,7 @@ class BacktestingService
                         $riskLevels,
                         $future
                     );
-                    $managedReturn = round((($exitPrice / $current->getClose()) - 1) * 100, 2);
+                    $managedReturn = $this->netManagedReturn($current->getClose(), $exitPrice);
                 }
             }
 
@@ -700,15 +702,52 @@ class BacktestingService
             $hitTarget = $day->getHigh() >= $riskLevels->getTarget();
 
             if ($hitStop) {
-                return ['stop_loss', $riskLevels->getStopLoss(), $offset];
+                // Hueco de apertura (v2.73): si la sesion ABRE ya por debajo
+                // del stop, la orden no se ejecuta al stop — se ejecuta a la
+                // apertura, que es peor. Cobrar el stop en ese caso es la
+                // forma mas silenciosa de inflar el resultado, y afecta
+                // justo a los peores dias, que son los que definen el
+                // drawdown.
+                $exitPrice = min($day->getOpen(), $riskLevels->getStopLoss());
+
+                return ['stop_loss', $exitPrice, $offset];
             }
 
             if ($hitTarget) {
-                return ['target', $riskLevels->getTarget(), $offset];
+                // Simetrico y por el mismo motivo: si abre por encima del
+                // objetivo, la venta se ejecuta a la apertura, que aqui
+                // juega a favor. Modelar solo el hueco malo seria sesgar el
+                // resultado en la direccion contraria.
+                $exitPrice = max($day->getOpen(), $riskLevels->getTarget());
+
+                return ['target', $exitPrice, $offset];
             }
         }
 
         return ['horizon', $future->getClose(), $horizonDays];
+    }
+
+    /**
+     * Retorno de una operacion completa descontando el coste de operar
+     * (v2.73): se paga al comprar y al vender, asi que el viaje completo
+     * cuesta dos veces `getCostRate()`. Con el 0 implicito de antes, una
+     * estrategia que entra y sale mucho parecia rentable aunque su ventaja
+     * fuese menor que la comision.
+     *
+     * Solo se aplica al retorno GESTIONADO, que es el que afirma "esto es
+     * lo que habria pasado operando asi". `forward_return` se queda bruto a
+     * proposito: mide el movimiento del mercado, no una operacion, y es la
+     * referencia contra la que se calcula la alpha (descontar el coste en
+     * los dos lados de una resta no cambia la resta, pero si haria pensar
+     * que el numero incluye algo que no incluye).
+     */
+    private function netManagedReturn(float $entryPrice, float $exitPrice): float
+    {
+        $cost = $this->backtestingConfig->getCostRate();
+        $netEntry = $entryPrice * (1 + $cost);
+        $netExit = $exitPrice * (1 - $cost);
+
+        return round((($netExit / $netEntry) - 1) * 100, 2);
     }
 
     /**

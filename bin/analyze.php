@@ -15,6 +15,7 @@ use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Repository\DailyRankingRepository;
+use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
 use StockAnalyzer\Services\AnalysisJsonPresenter;
@@ -54,9 +55,26 @@ $presenter = new AnalysisJsonPresenter();
 $results = [];
 $errors = [];
 
+// Snapshot diario de fundamentales (ver versions.md v2.74). Se siembra
+// tambien desde aqui, y no solo desde la ficha de detalle, porque este CLI
+// recorre un universo entero por ejecucion: es la unica via de acumular
+// cobertura real en vez de depender de que alguien abra cada ficha.
+$fundamentalsHistory = new FundamentalsHistoryRepository($connection);
+
 foreach ($tickers as $ticker) {
     try {
-        $results[] = $service->analyze($ticker);
+        $analysis = $service->analyze($ticker);
+        $results[] = $analysis;
+
+        try {
+            $fundamentalsHistory->recordSnapshot($ticker, $analysis->getStock()->getFundamentals());
+        } catch (Throwable $snapshotError) {
+            // Captura de historial "best effort", mismo criterio que en
+            // Application::renderDetail(): que falle no debe tumbar el
+            // ranking, que es lo que este comando viene a producir.
+            echo "WARN snapshot {$ticker}: {$snapshotError->getMessage()}\n";
+        }
+
         echo "OK {$ticker}\n";
     } catch (Throwable $exception) {
         $errors[$ticker] = $exception->getMessage();

@@ -8,11 +8,13 @@ use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
+use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Models\HistoricalQuote;
 use StockAnalyzer\Models\Stock;
 use StockAnalyzer\Services\BacktestingService;
+use StockAnalyzer\Services\DividendGrowthCalculator;
 use StockAnalyzer\Services\RiskLevelsCalculator;
 
 /**
@@ -57,6 +59,7 @@ final class BacktestingServiceTest extends TestCase
     private const ATR_MULTIPLIER = 2.5;
     private const REWARD_RATIO = 2.0;
     private const HORIZON_DAYS = 10;
+    private const COST_BPS = 10.0;
 
     private function service(FixedHistoryProvider $provider): BacktestingService
     {
@@ -64,8 +67,24 @@ final class BacktestingServiceTest extends TestCase
             $provider,
             new TechnicalAnalyzer(),
             new ScoreCalculator(),
-            new RiskLevelsCalculator(new RiskLevelsConfig(self::ATR_MULTIPLIER, self::REWARD_RATIO))
+            new RiskLevelsCalculator(new RiskLevelsConfig(self::ATR_MULTIPLIER, self::REWARD_RATIO)),
+            new DividendGrowthCalculator(),
+            // Coste explicito y no el de config/backtesting.php: estos tests
+            // fijan la formula, no la configuracion que tenga el proyecto.
+            new BacktestingConfig(self::COST_BPS)
         );
+    }
+
+    /**
+     * Retorno neto esperado de una operacion, con el coste cobrado al
+     * entrar y al salir (v2.73). Se escribe aqui a mano, sin llamar al
+     * servicio, para que el test compruebe la formula en vez de repetirla.
+     */
+    private function netReturn(float $exitPrice): float
+    {
+        $cost = self::COST_BPS / 10000.0;
+
+        return round(((($exitPrice * (1 - $cost)) / (self::ENTRY_PRICE * (1 + $cost))) - 1) * 100, 2);
     }
 
     /**
@@ -114,8 +133,13 @@ final class BacktestingServiceTest extends TestCase
         $quotes = $this->baselineQuotes();
         $date = $quotes[count($quotes) - 1]->getDate()->modify('+1 day');
 
-        foreach ($postEntryDays as [$high, $low, $close]) {
-            $quotes[] = new HistoricalQuote($date, $close, $high, $low, $close, 1_000_000);
+        foreach ($postEntryDays as $day) {
+            [$high, $low, $close] = $day;
+            // Cuarto elemento opcional: la apertura. Por defecto abre en su
+            // propio cierre (fixture sin hueco); las pruebas de hueco de
+            // apertura de v2.73 la fijan a proposito.
+            $open = $day[3] ?? $close;
+            $quotes[] = new HistoricalQuote($date, $open, $high, $low, $close, 1_000_000);
             $date = $date->modify('+1 day');
         }
 
@@ -161,7 +185,7 @@ final class BacktestingServiceTest extends TestCase
         $history = $this->historyWithPostEntryPath([
             [104.5, 103.5, 104.0], // dia 1: sin disparo
             [104.5, 103.5, 104.0], // dia 2: sin disparo
-            [104.0, 100.0, 100.5], // dia 3: low=100.0 <= stop=101.5
+            [104.0, 100.0, 100.5, 103.0], // dia 3: abre en 103 (dentro de la banda) y el low perfora el stop=101.5
             [100.5, 100.0, 100.2], // dias 4-10: relleno, no se llegan a mirar
             [100.5, 100.0, 100.2],
             [100.5, 100.0, 100.2],
@@ -178,8 +202,9 @@ final class BacktestingServiceTest extends TestCase
         self::assertSame('stop_loss', $sample['exit_reason']);
         self::assertSame(3, $sample['exit_day']);
 
-        $expectedReturn = round((($riskLevels->getStopLoss() / self::ENTRY_PRICE) - 1) * 100, 2);
-        self::assertSame($expectedReturn, $sample['managed_return']);
+        // Sin hueco: la orden se ejecuta en el stop, y el retorno solo
+        // pierde ademas el coste de entrar y salir.
+        self::assertSame($this->netReturn($riskLevels->getStopLoss()), $sample['managed_return']);
     }
 
     /**
@@ -190,7 +215,7 @@ final class BacktestingServiceTest extends TestCase
     public function testSubidaClaraPerforaElObjetivoEnElDiaEsperado(): void
     {
         $days = array_fill(0, 9, [104.5, 103.5, 104.0]);
-        $days[] = [110.0, 104.0, 109.5]; // dia 10: high=110.0 >= objetivo=109.0
+        $days[] = [110.0, 104.0, 109.5, 104.5]; // dia 10: abre en 104,5 y el high=110 supera el objetivo=109
 
         $history = $this->historyWithPostEntryPath($days);
         $sample = $this->runSingleSample($history);
@@ -200,18 +225,21 @@ final class BacktestingServiceTest extends TestCase
         self::assertSame('target', $sample['exit_reason']);
         self::assertSame(10, $sample['exit_day']);
 
-        $expectedReturn = round((($riskLevels->getTarget() / self::ENTRY_PRICE) - 1) * 100, 2);
-        self::assertSame($expectedReturn, $sample['managed_return']);
+        self::assertSame($this->netReturn($riskLevels->getTarget()), $sample['managed_return']);
     }
 
     /**
      * Caso 3: ningun dia del horizonte dispara stop ni objetivo. El precio
      * sube muy suavemente (104.0 -> 105.0 en 10 dias) sin que high/low
-     * salgan de la banda [101.5, 109.0]. managed_return debe coincidir
-     * exactamente con forward_return (misma vela de salida: la del
-     * horizonte).
+     * salgan de la banda [101.5, 109.0], asi que la vela de salida es la
+     * misma que la de forward_return: la del horizonte.
+     *
+     * Hasta v2.73 los dos numeros eran identicos. Ya no, y no es un fallo:
+     * forward_return es el movimiento bruto del mercado y managed_return es
+     * una operacion de verdad, que paga comision al entrar y al salir. La
+     * diferencia entre ambos debe ser exactamente ese coste de ida y vuelta.
      */
-    public function testSinDisparoNingunoElRetornoGestionadoCoincideConElForwardReturn(): void
+    public function testSinDisparoElRetornoGestionadoEsElForwardMenosElCosteDeIdaYVuelta(): void
     {
         $days = [];
         $close = self::ENTRY_PRICE;
@@ -228,7 +256,114 @@ final class BacktestingServiceTest extends TestCase
         self::assertSame('horizon', $sample['exit_reason']);
         self::assertSame(self::HORIZON_DAYS, $sample['exit_day']);
         self::assertNotNull($sample['managed_return']);
-        self::assertSame($sample['forward_return'], $sample['managed_return']);
+        self::assertLessThan(
+            $sample['forward_return'],
+            $sample['managed_return'],
+            'Operar cuesta dinero: el retorno gestionado nunca puede superar al bruto con la misma vela de salida.'
+        );
+
+        // La vela de salida es la del horizonte, asi que el precio de salida
+        // es su cierre y el neto debe salir de la misma formula.
+        $exitClose = self::ENTRY_PRICE * (1 + ((float) $sample['forward_return'] / 100));
+        self::assertSame($this->netReturn($exitClose), $sample['managed_return']);
+    }
+
+    /**
+     * Hueco de apertura BAJISTA (v2.73). El dia 3 abre en 100,0, ya por
+     * debajo del stop (101,5): la orden no se puede ejecutar en el stop
+     * porque a ese precio no hubo mercado, se ejecuta en la apertura. Antes
+     * de v2.73 la simulacion cobraba el stop igualmente, lo que maquillaba
+     * justo los peores dias, que son los que definen el drawdown.
+     */
+    public function testUnHuecoBajistaEjecutaElStopEnLaAperturaYNoEnElStop(): void
+    {
+        $history = $this->historyWithPostEntryPath([
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [100.2, 99.0, 99.5, 100.0], // abre en 100,0 < stop=101,5
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+        ]);
+
+        $sample = $this->runSingleSample($history);
+        $riskLevels = $this->expectedRiskLevels();
+
+        self::assertSame('stop_loss', $sample['exit_reason']);
+        self::assertSame(3, $sample['exit_day']);
+        self::assertSame($this->netReturn(100.0), $sample['managed_return']);
+        self::assertLessThan(
+            $this->netReturn($riskLevels->getStopLoss()),
+            $sample['managed_return'],
+            'Con hueco bajista la salida tiene que ser PEOR que ejecutar en el stop.'
+        );
+    }
+
+    /**
+     * Hueco de apertura ALCISTA, el simetrico del anterior: el dia 10 abre
+     * en 110,0, por encima del objetivo (109,0), asi que la venta se
+     * ejecuta en la apertura y sale mejor. Modelar solo el hueco malo
+     * sesgaria el resultado en la direccion contraria, que es igual de
+     * deshonesto.
+     */
+    public function testUnHuecoAlcistaEjecutaElObjetivoEnLaAperturaYNoEnElObjetivo(): void
+    {
+        $days = array_fill(0, 9, [104.5, 103.5, 104.0]);
+        $days[] = [110.5, 109.8, 110.2, 110.0]; // abre en 110,0 > objetivo=109,0
+
+        $sample = $this->runSingleSample($this->historyWithPostEntryPath($days));
+        $riskLevels = $this->expectedRiskLevels();
+
+        self::assertSame('target', $sample['exit_reason']);
+        self::assertSame($this->netReturn(110.0), $sample['managed_return']);
+        self::assertGreaterThan(
+            $this->netReturn($riskLevels->getTarget()),
+            $sample['managed_return'],
+            'Con hueco alcista la salida tiene que ser MEJOR que ejecutar en el objetivo.'
+        );
+    }
+
+    /**
+     * El coste es configurable y a 0 pb la simulacion vuelve a ser la de
+     * antes de v2.73: util para medir el retorno bruto de mercado sin
+     * friccion, y prueba de que el coste no esta cableado en el servicio.
+     */
+    public function testConCosteCeroElRetornoGestionadoEsElBruto(): void
+    {
+        $history = $this->historyWithPostEntryPath([
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.0, 100.0, 100.5, 103.0],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+            [100.5, 100.0, 100.2],
+        ]);
+
+        $service = new BacktestingService(
+            new FixedHistoryProvider($this->stock(), $history),
+            new TechnicalAnalyzer(),
+            new ScoreCalculator(),
+            new RiskLevelsCalculator(new RiskLevelsConfig(self::ATR_MULTIPLIER, self::REWARD_RATIO)),
+            new DividendGrowthCalculator(),
+            new BacktestingConfig(0.0)
+        );
+
+        $result = $service->run(['TST'], self::HORIZON_DAYS);
+        $sample = $result['results'][0]['recent_samples'][0];
+        $stopLoss = $this->expectedRiskLevels()->getStopLoss();
+
+        self::assertSame(
+            round((($stopLoss / self::ENTRY_PRICE) - 1) * 100, 2),
+            $sample['managed_return']
+        );
     }
 
     /**
@@ -363,7 +498,7 @@ final class BacktestingServiceTest extends TestCase
         $history = $this->historyWithPostEntryPath([
             [104.5, 103.5, 104.0], // dia 1: sin disparo
             [104.5, 103.5, 104.0], // dia 2: sin disparo
-            [104.0, 100.0, 100.5], // dia 3: low=100.0 <= stop=101.5
+            [104.0, 100.0, 100.5, 103.0], // dia 3: abre dentro de la banda y el low perfora el stop=101.5
             [100.5, 100.0, 100.2], // dias 4-10: relleno, no se llegan a mirar
             [100.5, 100.0, 100.2],
             [100.5, 100.0, 100.2],
@@ -377,7 +512,7 @@ final class BacktestingServiceTest extends TestCase
         $result = $this->service($provider)->run(['TST'], self::HORIZON_DAYS);
         $ticker = $result['results'][0];
         $riskLevels = $this->expectedRiskLevels();
-        $expectedManagedReturn = round((($riskLevels->getStopLoss() / self::ENTRY_PRICE) - 1) * 100, 2);
+        $expectedManagedReturn = $this->netReturn($riskLevels->getStopLoss());
 
         self::assertSame(1, $ticker['buy_signals']);
         self::assertSame(0, $ticker['sell_signals']);

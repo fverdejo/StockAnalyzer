@@ -779,6 +779,15 @@ class Layout
             font-size: 13px;
         }
 
+        /* Subtitulo dentro de un panel (v2.72): por debajo del h2 del panel
+           y por encima del texto normal. No habia ningun estilo para h3
+           porque hasta ahora ningun panel tenia dos niveles de contenido. */
+        .panel-subtitle {
+            margin: 18px 0 8px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
         /* Acciones en cartera (v2.71). La columna heredo el espacio que
            ocupaba el formulario de venta por fila, asi que la cantidad se
            destaca y la unidad queda en gris: el numero es el dato, "acc."

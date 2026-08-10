@@ -32,6 +32,7 @@ use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\MarketMoversCacheRepository;
 use StockAnalyzer\Repository\CorporateProfileCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
+use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\ScoreHistoryRepository;
 use StockAnalyzer\Repository\TickerAlertStateRepository;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
@@ -96,6 +97,7 @@ class Application
     private YahooCorporateProfileProvider $corporateProfileProvider;
     private CorporateProfileCacheRepository $corporateProfileCache;
     private ScoreHistoryRepository $scoreHistoryRepository;
+    private FundamentalsHistoryRepository $fundamentalsHistoryRepository;
 
     public function __construct()
     {
@@ -141,6 +143,7 @@ class Application
         );
         $this->corporateProfileCache = new CorporateProfileCacheRepository($this->connection);
         $this->scoreHistoryRepository = new ScoreHistoryRepository($this->connection);
+        $this->fundamentalsHistoryRepository = new FundamentalsHistoryRepository($this->connection);
         $this->historicalExchangeRates = new HistoricalExchangeRateService($this->marketDataProvider);
         $this->portfolioService = new PortfolioService(
             new TransactionRepository($this->connection),
@@ -287,7 +290,12 @@ class Application
             $recommendation,
             $this->generalUniverseIsLive,
             CsrfToken::get(),
-            $this->watchedTickers($currentUser)
+            $this->watchedTickers($currentUser),
+            // Concentracion sectorial del top del ranking (v2.75): se
+            // calcula de los resultados ya analizados, sin ninguna llamada
+            // nueva, porque el sector viene en el Company que ya sirve
+            // YahooParser para cada ticker del ranking.
+            (new RankingSectorConcentrationCalculator())->compute($results)
         );
     }
 
@@ -350,6 +358,15 @@ class Application
         // historial, no un dato que la pagina necesite mostrar.
         try {
             $this->scoreHistoryRepository->recordSnapshot($ticker, $analysis->getScore());
+            // Y los fundamentales del mismo momento (v2.74): sin serie
+            // historica propia, el 56% del peso del score no se puede
+            // backtestear, porque stockAt() aplica los de hoy a cada fecha
+            // pasada. Yahoo no los sirve fechados, asi que la unica via es
+            // acumularlos desde hoy.
+            $this->fundamentalsHistoryRepository->recordSnapshot(
+                $ticker,
+                $analysis->getStock()->getFundamentals()
+            );
         } catch (Throwable) {
             // Silencioso a proposito, mismo criterio que el resto de
             // captura "best effort" de esta clase (ver
@@ -379,7 +396,16 @@ class Application
             $companyProfile,
             $corporateEvents,
             $this->queryString('message'),
-            $this->queryString('error')
+            $this->queryString('error'),
+            // Posicion e historial del usuario en ESTE valor. No cuesta
+            // ninguna peticion al proveedor: el precio actual es el que la
+            // ficha ya tiene analizado.
+            $currentUser !== null
+                ? $this->portfolioService->getPositionFor($currentUser, $ticker, $analysis->getStock()->getQuote()->getPrice())
+                : null,
+            $currentUser !== null
+                ? $this->portfolioService->getTransactionsFor($currentUser, $ticker)
+                : []
         );
     }
 

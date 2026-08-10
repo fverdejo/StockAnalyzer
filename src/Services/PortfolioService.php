@@ -53,9 +53,67 @@ class PortfolioService
         return $this->transactions->add($user, $ticker, TransactionType::SELL, $quantity, $price);
     }
 
-    public function getPortfolio(User $user): Portfolio
+    /**
+     * Posicion abierta del usuario en UN solo ticker, para la ficha de
+     * detalle (ver versions.md v2.72). No usa `getPortfolio()` a proposito:
+     * aquella recorre toda la cartera pidiendo el precio de mercado de cada
+     * ticker, y la ficha ya conoce el precio del valor que esta mostrando,
+     * asi que aqui no hay ni una sola peticion nueva al proveedor. La regla
+     * de coste medio es exactamente la misma porque ambas comparten
+     * `accumulatePositions()`.
+     *
+     * Devuelve null si el usuario no tiene posicion abierta en ese ticker
+     * (nunca compro, o ya lo vendio todo). Los importes en euros del
+     * `Holding` van a null: esta vista habla de un unico valor en su propia
+     * divisa y no necesita convertir nada (v2.68 solo obliga a euros en los
+     * totales que mezclan divisas).
+     */
+    public function getPositionFor(User $user, string $ticker, ?float $currentPrice): ?Holding
     {
-        $transactions = $this->transactions->findByUser($user);
+        $ticker = strtoupper($ticker);
+        [$positions] = self::accumulatePositions($this->transactions->findByUserAndTicker($user, $ticker));
+        $quantity = (float) ($positions[$ticker]['quantity'] ?? 0.0);
+
+        if ($quantity <= 0.000001) {
+            return null;
+        }
+
+        return new Holding(
+            $ticker,
+            $quantity,
+            ((float) $positions[$ticker]['cost']) / $quantity,
+            $currentPrice,
+            $currentPrice === null ? 'Precio no disponible' : null
+        );
+    }
+
+    /**
+     * Compras y ventas del usuario en un ticker, en orden cronologico, para
+     * el panel "Tu posicion" de la ficha (ver versions.md v2.72). Vive aqui
+     * y no en `Application` porque el repositorio de transacciones es una
+     * dependencia de este servicio: sacarlo fuera obligaria a construir una
+     * segunda instancia del mismo repositorio.
+     *
+     * @return list<Transaction>
+     */
+    public function getTransactionsFor(User $user, string $ticker): array
+    {
+        return $this->transactions->findByUserAndTicker($user, strtoupper($ticker));
+    }
+
+    /**
+     * Regla de coste medio de la cartera, en un solo sitio: una compra suma
+     * cantidad y coste; una venta resta cantidad y **coste medio** (no
+     * precio de venta) y lo que separa ambos es el beneficio realizado. La
+     * usan tanto `getPortfolio()` como `getPositionFor()`; tenerla
+     * duplicada seria la via rapida a que la cartera y la ficha de un valor
+     * dijeran cantidades distintas del mismo ticker.
+     *
+     * @param list<Transaction> $transactions en orden cronologico
+     * @return array{0: array<string,array{quantity: float, cost: float}>, 1: float}
+     */
+    private static function accumulatePositions(array $transactions): array
+    {
         $positions = [];
         $realizedProfit = 0.0;
 
@@ -84,6 +142,14 @@ class PortfolioService
                 $positions[$ticker]['cost'] = 0.0;
             }
         }
+
+        return [$positions, $realizedProfit];
+    }
+
+    public function getPortfolio(User $user): Portfolio
+    {
+        $transactions = $this->transactions->findByUser($user);
+        [$positions, $realizedProfit] = self::accumulatePositions($transactions);
 
         $currentPrices = [];
         $currencies = [];

@@ -30,8 +30,31 @@ class TechnicalSnapshot
         private readonly ?int $lastVolume,
         private readonly ?float $high52w,
         private readonly ?float $low52w,
-        private readonly int $historyCount
+        private readonly int $historyCount,
+        /**
+         * Momentum 12-1 (v2.76): retorno de 250 sesiones EXCLUYENDO el
+         * ultimo mes. Va al final y con default para no romper las
+         * construcciones posicionales ya existentes.
+         */
+        private readonly ?float $momentum12m1 = null
     ) {
+    }
+
+    /**
+     * Momentum "12 menos 1": lo que el valor se ha revalorizado en el
+     * ultimo año sin contar el ultimo mes.
+     *
+     * Medido sobre 10 años (ver versions.md v2.76), el momentum de 30
+     * sesiones ordena AL REVES el retorno a 20 dias (spread decil alto -
+     * decil bajo de -1,94 pp en largecap60 y -1,59 en ibex35), porque a ese
+     * plazo domina la reversion a corto. Excluir el ultimo mes es
+     * justamente lo que quita esa contaminacion: el mismo periodo de 250
+     * sesiones SIN excluirlo sigue invertido (-0,45), y excluyendolo pasa a
+     * +1,15.
+     */
+    public function getMomentum12m1(): ?float
+    {
+        return $this->momentum12m1;
     }
 
     public function getSma20(): ?float

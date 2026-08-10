@@ -7,6 +7,7 @@ namespace StockAnalyzer\Web;
 use DateTimeImmutable;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Models\User;
+use StockAnalyzer\Services\RankingSectorConcentrationCalculator;
 
 /**
  * Pantalla principal: formulario de universo, tarjetas resumen, top
@@ -21,7 +22,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.71';
+    private const APP_VERSION = 'v2.76';
 
     /**
      * @param list<StockAnalysis> $results
@@ -39,7 +40,8 @@ class DashboardPage
         string $selectedRecommendation = '',
         bool $generalUniverseIsLive = false,
         string $csrfToken = '',
-        array $watchedTickers = []
+        array $watchedTickers = [],
+        ?array $sectorWeights = null
     ): string
     {
         // El campo de busqueda se muestra siempre vacio (ver versions.md v2.5.1):
@@ -59,6 +61,7 @@ class DashboardPage
         $watched = array_fill_keys($watchedTickers, true);
         $starHeader = $currentUser instanceof User ? '<th>&#9733;</th>' : '';
         $rows = self::renderRows($results, $rawTickers, $currentUser, $csrfToken, $watched, $redirectTo);
+        $sectorNote = self::renderSectorNote($sectorWeights, count($results));
         $updatedAt = Layout::escape((new DateTimeImmutable())->format('Y-m-d H:i'));
 
         $body = <<<HTML
@@ -102,6 +105,7 @@ class DashboardPage
 
         <section class="panel">
             <h2>Ranking completo</h2>
+            {$sectorNote}
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -123,6 +127,56 @@ class DashboardPage
 HTML;
 
         return Layout::render('Stock Analyzer', '<div class="version">' . self::APP_VERSION . " - {$updatedAt}</div>", $body, $currentUser, 'dashboard');
+    }
+
+    /**
+     * Aviso de concentracion sectorial del top del ranking (v2.75). No
+     * bloquea ni reordena nada: el ranking sigue ordenado por puntuacion, y
+     * repartir sectores a mano seria decidir por el usuario. Solo pone
+     * delante un dato que la tabla, leida de arriba abajo, no deja ver.
+     *
+     * @param list<array{sector: string, count: int, percent: float}>|null $sectorWeights
+     */
+    private static function renderSectorNote(?array $sectorWeights, int $totalResults): string
+    {
+        if ($sectorWeights === null || $sectorWeights === []) {
+            return '';
+        }
+
+        $top = $sectorWeights[0];
+        $shown = min(RankingSectorConcentrationCalculator::DEFAULT_TOP_N, $totalResults);
+
+        if ($top['percent'] <= RankingSectorConcentrationCalculator::SECTOR_WARNING_PERCENT) {
+            // Sin concentracion destacable no hay aviso, pero el reparto si
+            // se resume: saber que el top esta repartido tambien es
+            // informacion, y evita que la ausencia del aviso se lea como
+            // que nadie lo ha mirado.
+            return sprintf(
+                '<p class="muted panel-note">Reparto por sector de las %d primeras: %s.</p>',
+                $shown,
+                Layout::escape(self::describeSectors($sectorWeights))
+            );
+        }
+
+        return sprintf(
+            '<section class="panel panel-notice"><strong>%s concentra %s de las %d primeras posiciones (%s%%).</strong> El ranking ordena por puntuacion, no reparte por sector: comprar el top tal cual seria apostar en buena parte por un solo sector. Reparto completo: %s.</section>',
+            Layout::escape($top['sector']),
+            Layout::escape((string) $top['count']),
+            $shown,
+            Layout::escape(Layout::formatNumber($top['percent'])),
+            Layout::escape(self::describeSectors($sectorWeights))
+        );
+    }
+
+    /**
+     * @param list<array{sector: string, count: int, percent: float}> $sectorWeights
+     */
+    private static function describeSectors(array $sectorWeights): string
+    {
+        return implode(', ', array_map(
+            static fn (array $weight): string => sprintf('%s %d', $weight['sector'], $weight['count']),
+            $sectorWeights
+        ));
     }
 
     /**

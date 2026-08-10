@@ -57,7 +57,8 @@ class TechnicalAnalyzer
             lastVolume: $volumes === [] ? null : $volumes[array_key_last($volumes)],
             high52w: $highs === [] ? null : max($highs),
             low52w: $lows === [] ? null : min($lows),
-            historyCount: count($quotes)
+            historyCount: count($quotes),
+            momentum12m1: $this->momentumSkippingRecent($closes, 250, 21)
         );
     }
 
@@ -269,6 +270,33 @@ class TechnicalAnalyzer
         }
 
         return array_sum(array_slice($volumes, -$period)) / $period;
+    }
+
+    /**
+     * Momentum 12-1: retorno del periodo largo EXCLUYENDO las ultimas
+     * $skip sesiones. Con 250/21 es el "12 menos 1" clasico — un año de
+     * revalorizacion sin contar el ultimo mes.
+     *
+     * El salto no es un detalle: medido sobre 10 años (ver versions.md
+     * v2.76) el mismo periodo de 250 sesiones SIN excluir el ultimo mes
+     * sigue ordenando al reves el retorno futuro, y excluyendolo endereza
+     * el signo. Lo que contamina es el ultimo mes, donde domina la
+     * reversion a corto plazo.
+     *
+     * @param list<float> $closes
+     */
+    private function momentumSkippingRecent(array $closes, int $period, int $skip): ?float
+    {
+        $count = count($closes);
+
+        if ($count <= $period) {
+            return null;
+        }
+
+        $end = $closes[$count - 1 - $skip];
+        $start = $closes[$count - 1 - $period];
+
+        return $start > 0 ? (($end - $start) / $start) * 100 : null;
     }
 
     /**

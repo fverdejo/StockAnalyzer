@@ -9,7 +9,10 @@ use StockAnalyzer\DTO\CorporateEvents;
 use StockAnalyzer\DTO\Explanation;
 use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\StockAnalysis;
+use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Company;
+use StockAnalyzer\Models\Holding;
+use StockAnalyzer\Models\Transaction;
 use StockAnalyzer\Models\User;
 
 /**
@@ -29,6 +32,13 @@ class StockDetailPage
      *        proxima fecha ex-dividendo; null si no se pudo obtener. Se
      *        renderiza en renderCompanyOverview() (la logica de alerta de
      *        watchlist vive en Services\AlertService, no aqui).
+     * @param ?Holding $position Posicion abierta del usuario en ESTE valor
+     *        (ver versions.md v2.72), o null si no tiene ninguna. La calcula
+     *        PortfolioService::getPositionFor() sin pedir nada al proveedor:
+     *        el precio actual es el que ya muestra esta misma ficha.
+     * @param list<Transaction> $positionTransactions Compras y ventas del
+     *        usuario en este valor, en orden cronologico. Se muestran
+     *        completas aunque la posicion ya este cerrada.
      */
     public static function render(
         StockAnalysis $analysis,
@@ -40,7 +50,9 @@ class StockDetailPage
         ?Company $companyProfile = null,
         ?CorporateEvents $corporateEvents = null,
         ?string $message = null,
-        ?string $error = null
+        ?string $error = null,
+        ?Holding $position = null,
+        array $positionTransactions = []
     ): string
     {
         $stock = $analysis->getStock();
@@ -173,15 +185,23 @@ class StockDetailPage
             ? sprintf('<div class="form-error">%s</div>', Layout::escape($error))
             : '';
 
+        // Tu posicion y el formulario suben justo detras de la ficha de
+        // empresa: desde v2.71 esta es la unica pantalla desde la que se
+        // puede operar, asi que dejar el formulario al final, despues de
+        // los graficos y del historial de señal, obligaba a recorrer media
+        // pagina para hacer lo que se venia a hacer.
+        $positionPanel = self::renderPositionPanel($position, $positionTransactions, $company->getCurrency());
+
         $body = sprintf(
-            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             $messageHtml,
             $errorHtml,
             $companyOverview,
+            $positionPanel,
+            $tradePanel,
             $charts,
             $signalHistory,
-            $tradePanel,
             Layout::formatNumber($score->getPercentage()),
             Layout::formatNumber(100.0),
             $scoreBreakdown,
@@ -297,6 +317,106 @@ class StockDetailPage
             Layout::escape($label),
             Layout::escape($value)
         );
+    }
+
+    /**
+     * "Tu posicion" en este valor (ver versions.md v2.72): cuantas acciones
+     * se tienen y el detalle de las compras y ventas que han llevado hasta
+     * ahi. Ahora que solo se opera desde esta pantalla, era la informacion
+     * que faltaba para decidir: antes habia que ir a "Mi cartera", buscar la
+     * fila y volver.
+     *
+     * Se omite entero si el usuario no ha operado nunca en este valor; un
+     * panel vacio con ceros no aporta nada a quien solo esta mirando la
+     * ficha. Si tuvo posicion y ya la cerro, el historial si se muestra:
+     * saber que vendiste esto en su dia es justo lo que quieres recordar
+     * antes de volver a comprarlo.
+     *
+     * @param list<Transaction> $transactions
+     */
+    private static function renderPositionPanel(?Holding $position, array $transactions, string $currency): string
+    {
+        if ($position === null && $transactions === []) {
+            return '';
+        }
+
+        $summary = '<p class="muted">Ya no tienes posicion abierta en este valor. Este es el historial de lo que operaste.</p>';
+
+        if ($position !== null) {
+            $boxes = [
+                self::valueBox('Acciones', self::shares($position->getQuantity())),
+                self::valueBox('Precio medio', Layout::formatMoney($position->getAveragePrice(), $currency)),
+                self::valueBox('Invertido', Layout::formatMoney($position->getInvestedAmount(), $currency)),
+                self::valueBox('Valor actual', Layout::formatNullableMoney($position->getMarketValue(), $currency)),
+            ];
+
+            $profit = $position->getUnrealizedProfit();
+            $percent = $position->getUnrealizedProfitPercent();
+
+            if ($profit !== null) {
+                // valueBox() escapa su valor, asi que el color no puede ir en
+                // un <span> dentro: viaja como clase de la propia caja, que
+                // es ademas como PortfolioPage marca ganancias y perdidas.
+                $boxes[] = self::valueBox(
+                    'Beneficio latente',
+                    Layout::formatMoney($profit, $currency)
+                        . ($percent !== null ? sprintf(' (%s%%)', Layout::formatNumber($percent)) : ''),
+                    abs($profit) < 0.000001 ? '' : ($profit > 0 ? 'profit-positive' : 'profit-negative')
+                );
+            }
+
+            $summary = sprintf('<div class="values-grid">%s</div>', implode('', $boxes));
+        }
+
+        return sprintf(
+            '<section class="panel"><h2>Tu posicion en %s</h2>%s%s</section>',
+            Layout::escape($position !== null ? $position->getTicker() : $transactions[0]->getTicker()),
+            $summary,
+            self::renderPositionTransactions($transactions, $currency)
+        );
+    }
+
+    /**
+     * Compras y ventas del usuario en este valor, de la mas reciente a la
+     * mas antigua. A diferencia de la tabla de posiciones abiertas de "Mi
+     * cartera" (v2.71, 4 decimales), aqui la cantidad va con su precision
+     * completa: esto es el registro de lo que se ejecuto, no un resumen.
+     *
+     * @param list<Transaction> $transactions
+     */
+    private static function renderPositionTransactions(array $transactions, string $currency): string
+    {
+        if ($transactions === []) {
+            return '';
+        }
+
+        $rows = [];
+
+        foreach (array_reverse($transactions) as $transaction) {
+            $isBuy = $transaction->getType() === TransactionType::BUY;
+            $rows[] = sprintf(
+                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                Layout::escape($transaction->getExecutedAt()->format('d/m/Y H:i')),
+                $isBuy ? 'buy' : 'sell',
+                Layout::escape($transaction->getType()->label()),
+                Layout::escape(self::shares($transaction->getQuantity())),
+                Layout::escape(Layout::formatMoney($transaction->getPrice(), $currency)),
+                Layout::escape(Layout::formatMoney($transaction->getQuantity() * $transaction->getPrice(), $currency))
+            );
+        }
+
+        return '<h3 class="panel-subtitle">Tus operaciones en este valor</h3><div class="table-wrap"><table class="table-compact"><thead><tr><th>Fecha</th><th>Tipo</th><th>Acciones</th><th>Precio</th><th>Importe</th></tr></thead><tbody>'
+            . implode('', $rows)
+            . '</tbody></table></div>';
+    }
+
+    /**
+     * Cantidad de acciones con hasta 6 decimales pero sin ceros de relleno:
+     * "2" en vez de "2,000000" y "0,923448" cuando de verdad hace falta.
+     */
+    private static function shares(float $quantity): string
+    {
+        return rtrim(rtrim(number_format($quantity, 6, ',', '.'), '0'), ',');
     }
 
     private static function renderTradePanel(StockAnalysis $analysis, ?User $currentUser, string $csrfToken): string
