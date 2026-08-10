@@ -132,8 +132,19 @@ final class AlertsPageTest extends TestCase
             '<i>error</i>'
         );
 
-        self::assertStringNotContainsString('<script>', $html);
+        // Se comprueban los payloads concretos, no la ausencia de la cadena
+        // "<script>" a secas: desde v2.82 Layout emite un <script> propio y
+        // legitimo (el tooltip de los iconos de ayuda en tablas), asi que ese
+        // atajo daria un falso positivo. Ademas de que el payload no aparezca
+        // en crudo se exige que SI aparezca escapado, que es lo que de verdad
+        // demuestra que paso por Layout::escape() y no que se perdio por el
+        // camino.
+        self::assertStringNotContainsString('<script>alert(1)</script>', $html);
+        self::assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $html);
+        self::assertStringNotContainsString('"><script>', $html);
         self::assertStringNotContainsString('<b>hola</b>', $html);
+        self::assertStringContainsString('&lt;b&gt;hola&lt;/b&gt;', $html);
         self::assertStringNotContainsString('<i>error</i>', $html);
+        self::assertStringContainsString('&lt;i&gt;error&lt;/i&gt;', $html);
     }
 }

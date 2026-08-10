@@ -1,0 +1,38 @@
+# Navegador headless dentro del contenedor web (ver versions.md v2.80).
+#
+# Por que: hasta ahora un cambio de CSS/plantilla solo se podia verificar
+# leyendo el HTML con curl, que no dice nada de lo que de verdad importa en
+# una pagina densa como el backtesting o la ficha de detalle: si un tooltip se
+# recorta contra el overflow de .table-wrap, si tapa el icono de al lado, si
+# una tabla desborda en movil. Playwright si puede: hace hover, mueve el foco
+# con teclado, mide geometria real y saca capturas.
+#
+# Solo herramienta de desarrollo: la aplicacion no depende de Node ni de
+# Playwright en ningun momento, y esto no entra en la Raspberry.
+#
+# Uso:
+#   ddev exec node <script>.js     # dentro: require('playwright')
+#
+# Tras editar este fichero hay que reconstruir la imagen: ddev restart
+
+# La imagen de ddev trae la clave de firma de packages.sury.org CADUCADA
+# (EXPKEYSIG B188E2B695BD4743), y eso rompe cualquier `apt-get update` dentro
+# del contenedor web, no solo esta instalacion: sin refrescarla, el
+# `--with-deps` de Playwright aborta con "repository is not signed" (code 100)
+# y la construccion de la imagen falla entera. Refrescar la clave arregla apt
+# por completo, asi que va primero.
+RUN curl -fsSL https://packages.sury.org/php/apt.gpg \
+        -o /usr/share/keyrings/deb.sury.org-php.gpg
+
+# Los navegadores van a una ruta compartida y legible por cualquier usuario,
+# no al ~/.cache del root que hace la instalacion: el contenedor web ejecuta
+# los comandos con el uid del host, y no encontraria el binario en /root.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# NODE_PATH para que require('playwright') funcione desde cualquier
+# directorio, sin necesidad de un node_modules local en el proyecto.
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+RUN npm install -g playwright \
+    && npx playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright

@@ -1,0 +1,17 @@
+# Analisis estatico (ver versions.md v2.80). Ejecutar SIEMPRE dentro de ddev:
+#   ddev exec vendor/bin/phpstan analyse
+# El php del host no tiene las extensiones necesarias para la suite ni driver
+# PDO alguno, asi que ddev es el unico entorno donde el proyecto se verifica.
+includes:
+    # Los 7 errores que existian el 2026-08-10 (todos guardas defensivas
+    # redundantes, ningun bug) quedan congelados aqui para que phpstan avise
+    # solo de lo NUEVO. Para atacar esa deuda, borrar entradas de este fichero.
+    - phpstan-baseline.neon
+
+parameters:
+    level: 5
+    paths:
+        - src
+        - bin
+        - public
+        - tests

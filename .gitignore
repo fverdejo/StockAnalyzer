@@ -4,6 +4,13 @@
 # Cache de PHPUnit
 /.phpunit.cache/
 
+# Artefactos de la verificacion visual con Playwright (ver versions.md v2.81):
+# capturas de pantalla y scripts de comprobacion de un solo uso. Acaban en el
+# directorio del proyecto porque es la unica via para sacar ficheros del
+# contenedor web al host, pero no son codigo de la aplicacion. Convencion:
+# nombrarlos siempre con el prefijo .tmp-
+/.tmp-*
+
 # Entorno
 /.env
 /config/provider.local.php

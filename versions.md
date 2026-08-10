@@ -3798,6 +3798,351 @@ Las dos ideas pendientes con mas valor para el analisis dejan de estar bloqueada
 
 ---
 
+## v2.80 - Las columnas del backtesting explican que miden, y una deja de mentir en el titulo
+
+Estado: implementado.
+
+Objetivo:
+
+La tabla de "Backtesting basico" tiene 12 columnas y solo una de ellas (`t de la alpha`) estaba explicada, en una nota al pie del panel. El resto —`Muestras`, `Peor gestionado`, `Alpha vs media del universo`— exige saber de antemano como muestrea `BacktestingService`. La ficha de detalle ya resolvio esto en `v2.10` con el icono de ayuda de `IndicatorGlossary`, asi que se reutiliza ese patron en vez de inventar uno nuevo.
+
+Escribir los textos leyendo `backtestTicker()` en vez de la cabecera saco a la luz que una columna estaba mal nombrada desde `v2.55`, asi que se corrige aqui.
+
+### 1. Icono de ayuda en las 11 columnas de metricas
+
+`BacktestPage::columnHeader()` genera cada `<th>` con el mismo `<span class="info-icon" tabindex="0" data-tooltip="...">i</span>` que usa `StockDetailPage`: accesible por teclado (`tabindex="0"` + `:focus-visible`), sin JavaScript y sin depender del atributo `title`. Los textos se escribieron leyendo `backtestTicker()`, no la cabecera, asi que dicen lo que el codigo calcula de verdad:
+
+- `Benchmark` avisa de que cubre **todo el historico disponible**, no el horizonte, y por tanto no se compara dato a dato con las columnas de retorno.
+- `Peor gestionado` aclara que es el peor resultado de **una sola operacion** entre las compras con niveles de riesgo calculables, no una media.
+- `Win rate ventas` aclara que aqui un valor alto es mala noticia (la señal recomendo salir de subidas), al contrario que en compras.
+- `t de la alpha` repite la nota al pie, que se mantiene por ser la lectura estadistica del panel completo.
+
+### 2. Dos variantes de posicion para el tooltip dentro de una tabla
+
+El `.info-icon` original abre el tooltip hacia arriba (`bottom: 130%`), que en una cabecera de tabla es justo donde no se puede pintar: `.table-wrap` tiene `overflow-x: auto` y eso hace que el eje vertical tambien recorte, asi que el tooltip quedaria invisible por encima de la primera fila. Dos modificadores en `Layout.php`, sin tocar la clase base ni la ficha de detalle:
+
+| Clase | Efecto | Donde |
+|---|---|---|
+| `.info-icon-below` | abre hacia abajo (`top: 150%`) | las 11 cabeceras |
+| `.info-icon-end` | alinea por su borde derecho | `Benchmark`, `Peor gestionado`, `Alpha vs todos los dias`, `t de la alpha` |
+
+`.info-icon-end` existe porque el tooltip mide 280px centrados sobre el icono: en las ultimas columnas eso se sale del ancho de la tabla y aparece scroll horizontal solo por pasar el raton. **A que columnas aplicarlo se midio, no se estimo**: la primera version lo puso en las tres ultimas "a ojo" y la medicion columna a columna (seccion 4) demostro que `Benchmark` tambien desbordaba.
+
+Se probo tambien resolver el recorte inferior con `position: fixed` y los cuatro offsets en `auto` —que si escapa del `overflow` del contenedor— y se **descarto con datos**: un tooltip `fixed` se desancla del icono en cuanto la tabla se desplaza en horizontal, que es el estado normal de una tabla de 12 columnas, y desaparece de la vista por completo. Se prefiere verlo cortado a no verlo. (De paso quedo documentado en el CSS que el `::after` es un flex item de `.info-icon`, asi que su posicion estatica ya viene centrada sobre el icono: restarle otro `translateX(-50%)` lo saca por la izquierda de la pantalla.)
+
+### 3. Dos bugs que solo aparecieron al mirar la pagina de verdad
+
+Ninguno de los dos es visible leyendo el HTML ni el CSS; los dos salieron al medir con Playwright (seccion 4):
+
+- **El tooltip tapaba el icono de la columna siguiente y lo hacia inalcanzable.** El `::after` se pinta encima de los vecinos y capturaba eventos de raton: al mover el cursor de un icono al de al lado, el puntero entraba en el tooltip —que cuenta como hover del icono que lo abrio—, el tooltip no se cerraba y el icono vecino nunca recibia el hover. Con la tabla desplazada, el icono de `t de la alpha` era literalmente imposible de abrir con el raton. Arreglado con `pointer-events: none` en la regla base `.info-icon:hover::after`, asi que **tambien corrige el mismo fallo latente en la ficha de detalle**, donde los `value-box` estan igual de juntos.
+- **`Benchmark` desbordaba el ancho de la tabla** (ver seccion 2).
+
+### 4. `Alpha vs media del universo` pasa a `Alpha vs todos los dias`
+
+La columna muestra `buy_alpha_vs_all_days` **del ticker** (`backtestTicker()`, linea 653): retorno medio de sus compras menos el de todas sus muestras. Nunca compara ese ticker con los demas. El titulo de `v2.55` decia "vs media del universo", que es otra cifra —la que si existe, en la tarjeta "Alpha del universo" del resumen agregado— y llevaba a leer la columna como un ranking relativo cuando es una medida interna de cada valor.
+
+Solo cambia el literal de la cabecera y su tooltip (que ademas apunta explicitamente a la tarjeta del resumen para que no se confundan): `buy_alpha_vs_all_days` y su calculo no se tocan, asi que ningun numero de la pagina cambia.
+
+### 5. El atributo `title` del `<th>` como respaldo — REVERTIDO en `v2.82`
+
+Cada `<th>` llevaba el mismo texto tambien en `title`, imitando a `StockDetailPage::valueBox()`, para que el recorte inferior en tablas de pocas filas no dejase el texto ilegible.
+
+**Fue un error y se quito en `v2.82`**: el navegador pinta su propio tooltip nativo a partir del `title` ademas del nuestro, asi que se veian **los dos a la vez**, superpuestos. `valueBox()` puede permitirselo porque ahi el `title` lleva la descripcion corta de `IndicatorGlossary::describe()` y el `data-tooltip` la larga; aqui era el mismo texto duplicado. `v2.82` resuelve el recorte de raiz en vez de taparlo.
+
+Verificado:
+
+- `php -l` sin errores en los dos ficheros tocados.
+- `ddev exec vendor/bin/phpunit`: **191 tests, 585 assertions, OK**, sin regresiones. (El `php` del host no puede correr la suite: le faltan las extensiones `dom` y `xmlwriter`, y no tiene ningun driver PDO. Dentro de ddev si, asi que **la verificacion de este proyecto se hace siempre con `ddev exec`**.)
+- `ddev exec vendor/bin/phpstan analyse`: **No errors** (nivel 5, ver `v2.81`).
+- **Medido en un navegador real, columna a columna** (Chromium via Playwright, ver `v2.81`), con 1 y con 4 filas: los 11 tooltips se abren hacia abajo, los 11 estan pintados, ninguno se sale del ancho de la tabla y con 4 filas ninguno se recorta. El recorte inferior con 1 fila queda medido por columna (0-87px).
+- Capturas revisadas a ojo en los tres estados que importan: hover en una columna interior (tooltip centrado), hover en la ultima columna (alineado por la derecha, dentro de la tabla) y **foco por teclado** (anillo de foco visible y tooltip abierto sin raton).
+- `?page=backtest&tickers=AAPL&horizon=20` en HTTP 200 con el `data-tooltip` escapado (las comillas de "Alpha del universo" salen como `&quot;`).
+
+Limitaciones conocidas:
+
+- ~~**Con 1 a 3 filas el tooltip se corta por abajo** contra el `overflow` de `.table-wrap` (hasta 87px medidos con una fila), y el `title` del `<th>` lo compensa.~~ **Resuelto en `v2.82`**, que saca el tooltip del contenedor con scroll. El diagnostico era correcto (no tiene arreglo *en CSS*) pero la conclusion —convivir con el recorte— no aguanto el primer uso real: se veia cortado a media linea y con dos tooltips encima.
+- Las tarjetas del resumen del universo siguen sin icono de ayuda; solo se pidio la tabla.
+- Ningun test cubre los literales de la cabecera, asi que un cambio de nombre como el de la seccion 4 seguira dependiendo de leer el codigo para detectarse. El script de Playwright usado aqui no se ha dejado en el repositorio (era de un solo uso).
+
+Resultado:
+
+Las 12 columnas del backtesting se pueden leer sin conocer la implementacion, con el mismo gesto (raton o teclado) que la ficha de detalle; una de ellas deja de prometer una comparacion con el universo que nunca hacia, y los tooltips dejan por escrito tres advertencias que antes solo estaban en el codigo: que el benchmark no es comparable con los retornos del horizonte, que "peor gestionado" es un caso individual y que en ventas ganar es que el precio baje. De paso, el icono de ayuda de toda la aplicacion deja de bloquear a su vecino.
+
+---
+
+## v2.81 - Dos herramientas de verificacion: analisis estatico y un navegador de verdad
+
+Estado: implementado.
+
+Objetivo:
+
+Dos huecos de verificacion que se notaron haciendo `v2.80`: los docblocks densos del proyecto (`array<string,mixed>`, `list<array{...}>`) no los comprobaba nadie, y **ningun cambio visual se podia verificar**, solo leer el HTML con curl y razonar sobre el CSS. El segundo hueco no era teorico: los dos bugs de la seccion 3 de `v2.80` (el tooltip que bloqueaba al icono vecino, `Benchmark` desbordando) estaban en codigo ya "verificado" por lectura.
+
+### 1. PHPStan nivel 5 con baseline
+
+`composer require --dev phpstan/phpstan` (2.2.8) + `phpstan.neon` sobre `src`, `bin`, `public` y `tests`.
+
+Nivel 5 sobre el codigo existente da **7 errores, ninguno un bug**: son guardas defensivas redundantes que PHPStan puede demostrar imposibles (por ejemplo `BacktestingService::worstMonth()` comprueba `$worstAverage === null` cuando el `$worstMonth === null` de al lado ya lo implica, o `YahooParser` comprueba el `array_key_last()` de un array que acaba de verificar no vacio). **No se han tocado**: quitar una guarda que no molesta, en codigo que habla con un endpoint no oficial, es perder red de seguridad a cambio de nada.
+
+Van al `phpstan-baseline.neon` para que la herramienta avise solo de lo nuevo. Se ejecuta con `ddev exec vendor/bin/phpstan analyse`.
+
+### 2. Playwright + Chromium en el contenedor web
+
+`.ddev/web-build/Dockerfile.playwright` instala Playwright y Chromium en la imagen web. Permite hover, foco por teclado, medir geometria real (`getBoundingClientRect`, `getComputedStyle` de pseudo-elementos, `scrollHeight` de los contenedores con overflow) y sacar capturas. Herramienta de desarrollo exclusivamente: la aplicacion no depende de Node, y esto no entra en la Raspberry.
+
+Dos cosas encontradas al montarlo:
+
+- **La imagen de ddev trae la clave de firma de `packages.sury.org` caducada** (`EXPKEYSIG B188E2B695BD4743`). Eso rompe cualquier `apt-get update` dentro del contenedor web —no solo esta instalacion, tambien `webimage_extra_packages`—, y el `--with-deps` de Playwright aborta con "repository is not signed" (code 100) tumbando la construccion entera de la imagen. El Dockerfile refresca la clave antes de instalar, lo que **deja apt sano** para cualquier otra cosa.
+- `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright` en vez del `~/.cache` por defecto: la instalacion la hace root, pero el contenedor ejecuta los comandos con el uid del host, que no encontraria el binario en `/root`.
+
+### 3. `guzzlehttp/guzzle` de 7.14.0 a 7.15.3
+
+Encontrado de rebote al instalar PHPStan: `composer audit` reportaba **6 avisos sobre guzzle, uno de severidad alta** (`CVE-2026-69246`, un host no canonico puede saltarse comprobaciones basadas en host; los otros cinco, de severidad media, sobre alcance de cookies y fuga de fragmentos de URI en cabeceras `Referer` al redirigir). Guzzle no es una dependencia cualquiera aqui: es el cliente HTTP con el que `YahooFinanceProvider` habla con el endpoint no oficial de Yahoo, o sea todo lo que entra en la aplicacion.
+
+Los seis se corrigen en 7.15.2, que ya entraba en el constraint `^7.14` existente, asi que fue una actualizacion sin cambio de constraint. `composer audit` queda en **"No security vulnerability advisories found"**.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpstan analyse`: **No errors** con el baseline puesto; sin el, los 7 errores conocidos.
+- Tras subir guzzle: `composer audit` limpio, 191 tests OK, PHPStan sin errores y —lo que de verdad importa— una **peticion real a Yahoo a traves del cliente nuevo**: la ficha de `ORCL` (ticker sin cachear) responde 200 con precios reales y recomendacion calculada, sin `MarketDataException` ni "may be delisted".
+- `ddev exec vendor/bin/phpunit`: **191 tests, 585 assertions, OK** tras reconstruir la imagen.
+- Home, backtesting y la suite responden despues del `ddev restart`, y Playwright funciona desde la imagen reconstruida (no solo instalado a mano en el contenedor en marcha).
+- El primer intento de construccion **fallo y dejo el proyecto parado** (web y db `stopped`) por la clave de apt; se restauro retirando el Dockerfile y con un `ddev restart` antes de seguir. Queda anotado porque es el riesgo real de tocar la imagen: un `Dockerfile.*` que no construye impide arrancar el proyecto.
+
+Limitaciones conocidas:
+
+- La imagen web crece ~500MB (Chromium + dependencias). Solo afecta al entorno local.
+- No hay ningun test automatizado que use Playwright: por ahora es una herramienta de inspeccion manual, no una suite de regresion visual.
+- Playwright se instala sin fijar version (`npm install -g playwright`), asi que dos reconstrucciones separadas en el tiempo pueden traer versiones distintas.
+- El baseline de PHPStan congela 7 errores; el nivel 5 deja fuera comprobaciones mas estrictas (nivel 6+ exige tipos en todos los sitios y sacaria bastante mas ruido en las paginas Web).
+
+Resultado:
+
+El proyecto pasa de verificarse con `php -l` + curl a tener analisis estatico sobre los tipos que ya estaban documentados en docblocks, y un navegador real capaz de demostrar si la interfaz se comporta como se cree. La primera vez que se uso encontro dos bugs en un cambio que ya se habia dado por bueno.
+
+---
+
+## v2.82 - El tooltip de las cabeceras sale del contenedor con scroll (y deja de salir dos veces)
+
+Estado: implementado.
+
+Objetivo:
+
+Dos fallos reportados al usar la pagina de backtesting recien terminada en `v2.80`, ambos visibles en una captura de pantalla:
+
+1. **Salian dos tooltips a la vez**: el nuestro (negro, CSS) y el nativo del navegador (blanco) por encima, porque `v2.80` habia puesto el mismo texto en el atributo `title` del `<th>` "como respaldo".
+2. **El negro no cabia**: se cortaba a media linea contra el borde de `.table-wrap` y ademas provocaba una barra de scroll vertical en la tabla.
+
+`v2.80` documento el segundo como limitacion conocida y siguio adelante. Era un error de criterio: la limitacion se acepto sin haber visto nunca el resultado, y al verlo no es aceptable.
+
+### 1. Fuera el `title`
+
+`BacktestPage::columnHeader()` ya no emite `title`. Un solo tooltip, el propio.
+
+### 2. Un tooltip "portado" al final del `<body>`
+
+El problema es estructural: el tooltip es un `::after` del icono, el icono vive dentro de `.table-wrap`, y ese contenedor tiene `overflow-x: auto` —lo que hace que **tambien recorte en vertical**—, asi que el tooltip se corta contra su borde por dentro. Ninguna variante de `absolute` lo arregla, porque un elemento posicionado lo recorta cualquier ancestro con scroll que se interponga hasta su bloque contenedor.
+
+`position: fixed` sobre el pseudo-elemento si escapa del recorte, pero **se descarto con datos** (medido, no razonado): su posicion estatica no descuenta el `scrollLeft` del contenedor, asi que en una tabla desplazada —el estado normal de 12 columnas— el tooltip se dibuja donde estaria el icono en el espacio sin desplazar, es decir fuera de la pantalla. Desaparecia por completo, que es peor que verlo cortado.
+
+La solucion es un **unico nodo `div.info-tip` al final del `<body>`**, fuera de todo contenedor con scroll, con un script compartido en `Layout` que lo coloca a partir del `getBoundingClientRect()` del icono:
+
+- Actua **solo** sobre `.table-wrap .info-icon[data-tooltip]`. Los 39 iconos de la ficha de detalle siguen siendo CSS puro (verificado): ahi nada los recorta y no hacia falta tocarlos.
+- **Respaldo sin JavaScript**: si el script no corre, el `::after` sigue siendo el tooltip (recortado en tablas cortas, pero legible). La clase `js-tips` que el script pone en el `<body>` es la que desactiva el pseudo-elemento, asi que sin JS no se desactiva nada. Verificado con JavaScript deshabilitado.
+- Se **recoloca** en el scroll en vez de ocultarse, y solo se oculta si el icono queda fuera de la parte visible de la tabla. La primera version ocultaba en cualquier scroll y eso cerraba tooltips recien abiertos: los eventos de scroll llegan en el frame siguiente, asi que al desplazar la tabla para alcanzar un icono el `hide()` llegaba despues del `show()`. Lo detecto la medicion (2 de 11 columnas sin tooltip), no la lectura del codigo.
+- Se ajusta a la ventana por los cuatro lados: si no cabe por abajo, se abre hacia arriba. Eso hace innecesario `info-icon-end` cuando hay JS, aunque se mantiene como parte del respaldo.
+
+### 3. Un test que medía lo que no queria medir
+
+`AlertsPageTest::testTodoDatoDinamicoVaEscapado()` fallo al añadir el script, y con razon: comprobaba que el HTML **no contuviese la cadena `<script>`** como atajo para "los datos dinamicos van escapados". Ahora `Layout` emite un `<script>` legitimo.
+
+Se ha hecho preciso en vez de laxo: comprueba que **cada payload concreto** no aparece en crudo y que **si aparece su forma escapada** (`&lt;script&gt;alert(1)&lt;/script&gt;`). Es una comprobacion mas fuerte que la anterior, que no distinguia entre "el dato se escapo" y "el dato se perdio".
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **191 tests, 589 assertions, OK** (de 585: cuatro aserciones nuevas en el test de escapado).
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Medido en Chromium con la tabla desplazada al maximo a la derecha y una sola fila** —el caso exacto de la captura del usuario—, columna a columna: 11/11 con **un solo** tooltip visible, el texto completo (comparado caracter a caracter con el `data-tooltip`), dentro de la ventana, fuera de `.table-wrap` y **sin hacer crecer el contenedor** (`scrollHeight` 88 = `clientHeight` 88, o sea ni recorte ni barra de scroll nueva).
+- `<th>` con atributo `title`: **0**.
+- Ficha de detalle: 39 iconos con su `::after` intacto, sin nodo portado y sin la clase `js-tips`.
+- Con JavaScript deshabilitado: el `::after` se sigue pintando y abriendo hacia abajo.
+
+Limitaciones conocidas:
+
+- El tooltip ya no aparece en dispositivos tactiles al tocar el icono, igual que antes: sigue dependiendo de `hover`/`focus`. Un `<details>` con la leyenda de todas las columnas seria lo que de verdad funcionaria en movil, y no esta hecho.
+- El script no tiene test automatizado; se verifico a mano con Playwright.
+
+Resultado:
+
+El tooltip de cualquier cabecera de tabla se ve entero, una sola vez, sin importar cuantas filas tenga la tabla ni cuanto este desplazada. Y la leccion queda anotada: `v2.80` dio por buena una limitacion visual que nadie habia visto, en un cambio cuyo objetivo era precisamente que la pagina se explicase sola.
+
+---
+
+## v2.83 - La cantidad sugerida deja de ser un objetivo que se mueve al perseguirlo
+
+Estado: implementado.
+
+Objetivo:
+
+Tres cosas reportadas sobre "Posiciones abiertas", la ultima de fondo:
+
+1. Las celdas se alineaban arriba, y con filas de altura desigual (un importe de una linea al lado de un beneficio de tres) el dato corto quedaba flotando lejos del que le correspondia.
+2. El "(max. 20%)" del badge de cantidad sugerida se leia como si formase parte de la cantidad.
+3. **El usuario compro acciones para cuadrar con la cantidad sugerida y la app le pidio otra cantidad distinta, mayor.**
+
+### 1. Celdas centradas verticalmente
+
+Clase nueva `.table-middle` en `Layout` (el global sigue siendo `vertical-align: top`, que es lo que quieren las demas tablas) aplicada a la tabla de posiciones abiertas. Medido: `vertical-align: middle` efectivo en todas las celdas y **0px** de desviacion entre el centro de la fila y el centro de una celda de una sola linea.
+
+### 2. El tope, solo en el tooltip
+
+`RiskLevelsBadge` ya no escribe "(max. 20%)" en el texto visible; la explicacion sigue en el `title` al pasar por encima. De paso el badge vuelve a caber en una linea dentro de la tabla.
+
+### 3. El bug: la base del calculo se incluia a si misma
+
+`SuggestedPositionCalculator` usaba `Portfolio::getMarketValueEur()`, el valor **total** de la cartera, como base del position sizing. Esa base incluye la posicion que se esta dimensionando, asi que comprar hasta la cantidad sugerida aumentaba la base y con ella la siguiente sugerencia. Con los numeros reales del usuario (BBVA.MC, 8,2338 acciones a 24,70 €, cartera ~3.044 €): el 20% son 608 € = 24,65 acciones; comprando hasta ahi la cartera pasa a ~3.449 €, cuyo 20% son 690 € = 27,9 acciones. Y otra vez. Es una persecucion, y el usuario la vivio literalmente.
+
+No era divergente —cada iteracion se acercaba a un limite— pero si un objetivo que se mueve cada vez que el usuario actua sobre el, que a efectos practicos es peor que un numero mal calculado: parece que la app cambia de opinion.
+
+**Arreglo: la base pasa a ser la cartera SIN esa posicion, y se resuelve el punto fijo**, es decir se calcula la cantidad que cumple la condicion *despues* de comprarla, con la cartera ya crecida:
+
+| | antes | ahora |
+|---|---|---|
+| por peso | `cantidad = total * m% / precio` | `cantidad = otras * m / (precio * (100 - m))` |
+| por riesgo | `cantidad = total * r% / (precio - stop)` | `cantidad = otras * r / (100*(precio - stop) - r*precio)` |
+
+Comprada esa cantidad, la posicion pesa **exactamente** el `m%` de la cartera resultante (o arriesga exactamente el `r%`), asi que volver a preguntar devuelve el mismo numero. Verificado aritmeticamente y fijado con un test (`testLaSugerenciaNoSeMueveAlComprarla`).
+
+Consecuencias que conviene tener claras:
+
+- **Las cantidades sugeridas suben** en general, porque `otras * m/(100-m)` es mayor que `total * m/100` cuando la posicion ya existe. Es el precio de la coherencia: la anterior no cumplia su propia condicion despues de ejecutarse.
+- **Salvo cuando una posicion domina la cartera, y entonces bajan mucho.** En el fixture real de `v2.66`, ADBE es el 79% de la cartera y su sugerencia pasa de 1,23 a 0,298 acciones. Es la respuesta honesta: el tamaño "correcto" de una posicion respecto al 21% restante es pequeño. Antes se le sugeria el 1,5% de un total que ella misma dominaba.
+- **Cartera de una sola posicion: no hay sugerencia** (las "otras" valen 0). Ninguna cantidad distinta de cero puede pesar el 20% de una cartera formada solo por ella misma, asi que devuelve null y la interfaz no pinta badge. Antes daba un numero que, comprado, volvia a incumplir la condicion.
+- **`maxPositionPercent` >= 100 pasa a ser null** en vez de "sin tope": la condicion "pesa el 100% de una cartera que la incluye" la cumple cualquier cantidad y el punto fijo se va a infinito. Solo afectaba a la retrocompatibilidad con el tope de antes de `v2.65`, que en la practica no acotaba nada.
+- **Sin cambios** en el caso "stop al mismo nivel o por encima del precio": sigue devolviendo null, sin sugerencia acotada por peso. Se separo esa razon de la nueva ("el riesgo no tiene solucion finita porque la distancia al stop no supera al riesgo permitido", que ahi si deja mandar al tope por peso).
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **192 tests, 603 assertions, OK**. Diez tests fijaban la semantica antigua; **las cifras nuevas se recalcularon a mano** (con una comprobacion aritmetica independiente de las dos formulas, no copiando lo que devuelve el codigo) y se reescribieron los comentarios que explicaban el porque de cada numero.
+- Los invariantes de divisas de `v2.66` siguen en pie tras el cambio: dos posiciones equivalentes en euros reciben la misma sugerencia en euros (176,47 € cada una), y acotadas por peso dan el mismo importe en las dos divisas (250 €).
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- Medido en Chromium sobre la pagina real renderizada con una cartera sintetica de cuatro posiciones (la de cartera pide sesion y no se toca la base de datos del usuario para esto): `vertical-align: middle` en todas las celdas, 0px de desviacion del centro, **0 apariciones** de "(max." y los 4 badges "Sugerido" en su sitio, cada uno en una sola linea.
+
+Limitaciones conocidas:
+
+- El punto fijo se resuelve con el tipo de cambio de HOY, mismo criterio (y misma limitacion declarada) que `v2.66`.
+- La sugerencia sigue sin conocer efectivo disponible: esta app no tiene saldo en el modelo de datos (`v2.50`). Sigue siendo "que tamaño deberia tener esta posicion", no "cuanto puedes comprar".
+- Con una cartera de una sola posicion desaparece el badge sin explicar por que. Un texto del tipo "con una sola posicion no hay peso relativo que calcular" seria mejor, y no esta hecho.
+
+Resultado:
+
+La cantidad sugerida es un objetivo estable: se compra, y la app no cambia de opinion. Y de paso las posiciones abiertas se leen en horizontal sin perder la fila.
+
+---
+
+## v2.84 - La estrella a plomo y la cantidad sugerida deja de fingir precision
+
+Estado: implementado.
+
+Objetivo:
+
+Dos cosas mas sobre "Posiciones abiertas" tras `v2.83`:
+
+1. La estrella de watchlist se veia descuadrada respecto a su propia cabecera.
+2. El usuario puso en la base de datos la cantidad exacta que se le sugeria y **al recargar se le sugeria otra**, aunque `v2.83` habia hecho estable el calculo.
+
+### 1. La estrella: no era el centrado vertical, era el horizontal
+
+Medido antes de tocar nada, y la primera hipotesis era falsa: la caja del boton estaba **perfectamente centrada en vertical** (0px de desviacion respecto al centro de la fila) y el glifo tambien lo estaba dentro de su caja (0,07px, calculado con la tinta real via `actualBoundingBoxAscent`/`Descent`).
+
+El desfase era **horizontal, de 11px**: la cabecera es texto de 12px alineado a la izquierda, y la celda es un `<button>` de 36px con su propio `padding: 8px` dentro del padding de la celda, asi que el centro de uno y otro no coincidian. Arreglado centrando la primera columna de `.table-middle` (cabecera y celdas), sin tocar el boton ni su area de pulsacion de 44px en movil. Verificado: 0px de desviacion en las cuatro filas.
+
+### 2. La sugerencia no se movia por el bug de `v2.83`, sino por dos cosas distintas
+
+Reproducido al nivel del calculador real (no de la formula pura) con precios FIJOS: comprar lo sugerido **no** cambia la sugerencia de esa posicion. El arreglo de `v2.83` funciona. Lo que se movia era otra cosa, y son dos cosas legitimas mal comunicadas:
+
+- **Seis decimales de precision falsa.** El badge mostraba "Sugerido 2,064713 acc." reutilizando el formato de las acciones poseidas (`v2.6`), que ahi si son un dato exacto. Pero una cantidad sugerida se calcula a partir del precio actual, del stop-loss (ATR) y del valor del resto de la cartera: las tres cosas se mueven con el mercado, asi que cualquier movimiento de centimos cambiaba los ultimos decimales. Con seis, la app invitaba a perseguir un numero imposible de alcanzar. Ahora **dos decimales y un "~" delante**: "Sugerido ~2,06 acc.".
+- **Cambiar una posicion cambia la sugerencia de las DEMAS.** Es inherente a dimensionar en relativo: la base de cada posicion es el valor de las otras, asi que tocar una mueve el porcentaje de todas las restantes. No es un fallo y no se puede "arreglar" sin dejar de dimensionar en relativo, pero conviene que este dicho: queda explicito en el test nuevo y en el tooltip.
+
+El `title` del badge ahora dice que es una referencia orientativa y de que depende, en vez de hablar solo del tope del 20%.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **193 tests, 615 assertions, OK**. El test nuevo (`testComprarLaCantidadSugeridaNoCambiaEsaSugerencia`) es la regresion de lo reportado: recorre los cuatro tickers de una cartera en dos divisas, compra en cada vuelta exactamente lo sugerido con los precios intactos y exige que la sugerencia de ese ticker no se mueva (delta 1e-9).
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- Medido en Chromium sobre la pagina renderizada con una cartera sintetica (la de cartera exige sesion; no se toca la base de datos del usuario): estrellas con 0px de desviacion respecto a la cabecera, los 4 badges con "~" y ninguno con mas de dos decimales.
+
+Limitaciones conocidas:
+
+- La sugerencia **sigue moviendose** cuando se mueve el mercado, y eso no tiene arreglo: es un objetivo relativo a precios vivos. Lo que cambia es que ya no finge ser exacta.
+- El "~" es una convencion discreta; si aun asi se sigue leyendo como una cantidad a igualar, lo siguiente seria mostrar un rango ("entre 2 y 2,2 acc.") en vez de un numero.
+- La primera columna centrada solo se aplica a las tablas con `.table-middle` (hoy, posiciones abiertas). Las estrellas de Watchlist y Alertas siguen con el desfase original, que nadie ha reportado; se dejan sin tocar para no cambiar pantallas que no se han verificado.
+
+Resultado:
+
+La columna de la estrella queda a plomo, y la cantidad sugerida se presenta como lo que es: una referencia con dos decimales y un "~", no un objetivo exacto que persigue quien la lee.
+
+---
+
+## v2.85 - Los 6 bugs que saco la auditoria de diseño de "Mi cartera"
+
+Estado: implementado.
+
+Objetivo:
+
+`diseno-usabilidad` audito la pagina "Mi cartera" a peticion del usuario, midiendo en Chromium sobre la pagina renderizada (no estimando). De su informe se implementan aqui **solo los 6 bugs**, que son cosas que estan mal hoy; los tres bloques de rediseño (reordenar paneles, tabla numerica, panel de concentracion con barras) quedan aprobados y anotados en `roadmap.md`, prioridad media, porque son cambios grandes que piden una sesion con tiempo.
+
+Los seis se verificaron uno a uno antes de tocar nada y otra vez despues, en el navegador.
+
+### 1. El badge HOLD no cumplia WCAG AA
+
+`--warn` (#986a10) sobre el fondo crema #fff1d2 da **4,26:1**, y AA pide 4,5 para texto pequeño en negrita. Calculado con la formula WCAG 2.x sobre los tokens reales, y confirmado luego leyendo el color computado del propio badge en el navegador.
+
+No es un detalle menor de una pantalla: HOLD es la recomendacion mas frecuente en una cartera, y el mismo par se usa en `.concentration-warning`. Token nuevo `--warn-text: #7a5309` (**6,11:1** sobre el mismo fondo, medido en el navegador tras el cambio) usado solo para esos dos textos. `--warn` se queda intacto para bordes, puntos de leyenda y `.signal-neutral`, donde el minimo es 3:1 y cumple de sobra. Mejora tambien el badge HOLD de Ranking, Watchlist y ficha de detalle.
+
+### 2. El ticker se partia en dos lineas
+
+"BBVA.MC" salia como "BBVA.M / C" en la columna de 73px, y aparece asi en la captura que envio el usuario. Causa: `th, td { overflow-wrap: anywhere }`, que existe para que los nombres largos de empresa no desborden. Un ticker es un identificador corto, asi que `.ticker { white-space: nowrap }` en vez de relajar el `overflow-wrap` de todas las tablas.
+
+### 3. Parentesis huerfano en la equivalencia en euros
+
+"271,21 $ (234,57" / "€)": el salto de linea caia entre la cifra y el simbolo de divisa.
+
+**Primer intento descartado**: espacio duro en `Layout::formatMoney()`. La suite lo tumbo enseguida —`AlertServiceStopLossTest` compara el texto exacto de una alerta— y el fallo tenia razon de fondo: ese formateador tambien alimenta los textos de alertas y las exportaciones CSV, donde un U+00A0 es un caracter raro colado en los datos. El problema es de maquetacion, asi que se arregla en la maquetacion: clase `.nowrap` en el `<span>` de la equivalencia (`PortfolioPage::eurEquivalent()`).
+
+### 4. El aviso de concentracion sectorial saltaba sobre "Sin sector"
+
+`PortfolioConcentration::getOverweightSectors()` no excluia `UNKNOWN_SECTOR`, asi que una cartera con la mayoria de posiciones sin sector conocido avisaba de estar "concentrada" en un grupo que solo significa *no tengo el dato*. Es engañoso en la direccion peor: suena a un riesgo medido cuando es exactamente lo contrario.
+
+Ahora se excluye del aviso. **Sigue contando** en `getSectorWeights()` (los pesos deben sumar 100%) y por tanto en el HHI: se suprime el veredicto, no el dato.
+
+### 5. "Top 1 posiciones"
+
+Plural fijo. Con una sola posicion la tarjeta pasa a decir "Posicion mas grande".
+
+### 6. Tarjeta duplicada
+
+"Valor total (EUR)" en el panel de concentracion era el mismo numero que "Valor actual" del resumen, en la misma pantalla. Fuera.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **194 tests, 618 assertions, OK**. El test nuevo cubre el bug 4 (cartera con el 80% sin sector conocido: el peso se calcula, el aviso no salta).
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Medido en Chromium** sobre la pagina renderizada con carteras sinteticas (la de cartera exige sesion y no se toca la base de datos del usuario): contraste del badge HOLD **6,11:1**, cero tickers partidos, cero equivalencias partidas, sin "Top 1 posiciones", sin tarjeta duplicada y **cero avisos sectoriales con "Sin sector" al 60,77%**, o sea por encima del umbral del 40% que antes lo disparaba.
+- Las dos ultimas comprobaciones se repitieron con fixtures preparados a proposito (una cartera de una sola posicion, y otra con el 60,77% sin sector) porque sobre la cartera de cuatro posiciones habrian sido vacuas: dar por bueno un "no aparece" cuando el caso no se ejercita no demuestra nada.
+
+Limitaciones conocidas:
+
+- Los tres bloques de rediseño **no** estan hechos: la pagina sigue con las posiciones abiertas a 2.857px de scroll en movil y el panel de concentracion ocupando el 40% de la pagina. Estan en `roadmap.md`, prioridad media, con las medidas y los ficheros exactos.
+- La auditoria señalo dos cosas mas que quedan sin tocar por ser decisiones de producto, no bugs: `SELL` y `STRONG SELL` comparten la misma pildora rosa (la señal mas fuerte del motor se ve igual que la normal), y la watchlist pinta la misma fila que la cartera con otra densidad y otra alineacion vertical.
+- Sin dark mode, descartado explicitamente por la auditoria como decision de producto mayor.
+
+Resultado:
+
+La pagina deja de fallar accesibilidad en su badge mas frecuente, de partir tickers y simbolos de divisa, de duplicar una cifra y de avisar de una concentracion sectorial que no ha medido. Y el rediseño de verdad queda escrito con numeros medidos, para hacerlo de una pieza en vez de a trozos.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
@@ -3820,3 +4165,9 @@ Ideas nuevas anotadas por `analista-mercado` el 2026-08-09, tras revisar el moto
 - **Costes y huecos de precio en la simulacion gestionada — implementado en `v2.73`.** `BacktestingService::simulateManagedExit()` (linea 424) asume ejecucion exacta en el stop/objetivo, sin comisiones ni deslizamiento y sin tratar el hueco de apertura: si una sesion abre por debajo del stop, la simulacion cobra el stop y no la apertura, lo que sobreestima sistematicamente `avg_buy_managed_return` y `max_drawdown_managed`. Salida a `min(open, stopLoss)` cuando el hueco ya abre por debajo, mas un coste configurable en puntos basicos a la entrada y a la salida, es un cambio contenido en una sola clase y mejora la honestidad de toda la pagina de backtesting.
 
 - **Diversificacion sectorial del propio ranking — implementado en `v2.75`.** `PortfolioConcentrationCalculator` (`v2.61`) vigila la concentracion de la cartera ya comprada, pero el ranking que la alimenta no: medido sobre `largecap60`, el sector dominante ocupa de media 3,6 de las 10 primeras posiciones y llega a 6 de 10. Ahora que `Company::getSector()` trae sector real (`v2.47`), bastaria con un aviso (o un tope opcional de N por sector) en la tabla de resultados para que "las 10 mejores de hoy" no sean en la practica una apuesta sectorial sin avisar.
+
+Ideas nuevas anotadas por `analista-mercado` el 2026-08-10, tras revisar el universo por defecto del Home (`config/universes.php` linea 12 + `Services\Application::resolveGeneralUniverseTickers()`, linea 466) y medirlo con las clases de produccion sobre los 40 movers reales de hoy y sobre `largecap60`/`ibex35`/`healthcare`/`industrials`/`consumer_staples`/`energy` (34.765 muestras walk-forward a 10 años + 121 fechas independientes por universo en `--cross-sectional`). Tampoco estan pedidas ni comprometidas.
+
+- **El universo por defecto del Home (`general` = `day_gainers` + `day_losers`) no es la poblacion que este motor sabe puntuar; conviene que el Home arranque en una lista curada estable.** Medido sobre los 40 movers de hoy con `StockAnalysisService`: median de score 43,6 frente a 60,2 en `largecap60`, 35 de 40 en SELL/STRONG SELL en una pantalla titulada "que comprar hoy", 3,25 de 12 ratios fundamentales ausentes por ticker (frente a 0,88) con el 58% sin PER, `RISK` clavado en 0,0 en 16 de los 40 (la formula `max(0, 6 - vol*1,1)` de `TechnicalScoreAnalyzer::risk()` satura) y `QUALITY` en 0,0 en 12 de los 40; ademas 0 de los 40 tickers pertenece a ningun universo curado, asi que el respaldo de grupo de pares de `Application::renderDetailJson()` (linea 1182, `narrowestSectorFor()`) nunca se activa en la pantalla de entrada. El `--cross-sectional` no muestra que el ranking sea peor ahi (alpha del top-10 -0,20, t=-0,65, frente a -0,25/t=-1,29 en `largecap60`), pero si que es **mas disperso con la misma ventaja nula** (desviacion tipica de la alpha 3,43 vs 2,15). Propuesta: `Application::DEFAULT_UNIVERSE` a un universo curado (`largecap60`) y conservar los movers como universo seleccionable con etiqueta que no prometa compra ("Movimientos de hoy"), no como pantalla de entrada.
+- **`undervalued_large_caps` como universo dinamico alternativo, si se quiere conservar un listado en vivo en el Home.** De los screeners predefinidos de Yahoo verificados hoy uno a uno (responden `most_actives`, `day_gainers`, `day_losers`, `undervalued_growth_stocks`, `growth_technology_stocks`, `undervalued_large_caps`, `aggressive_small_caps`, `small_cap_gainers`; los de fondos devuelven participaciones, inservibles aqui), `undervalued_large_caps` es el unico cuya poblacion encaja con lo que el motor mide: 1,10 de 12 ratios ausentes, `RISK` medio 4,27/10, `QUALITY` 8,53/10, median de score 65,6 y 5 BUY de 20 (`most_actives`, la otra alternativa neutral en direccion, se queda en 2,50 ausentes y 0 BUY). Dos matices a documentar si se implementa: filtra por PER y PEG bajos, es decir por parte de lo que ya puntua `FundamentalAnalyzer::valuation()` (el motor re-premia el propio filtro), y hoy sale con 4 de sus 5 primeras posiciones en petroleo y gas, justo el caso que `RankingSectorConcentrationCalculator` (`v2.75`) avisa.
+- **Rotacion diaria del universo por defecto: impide seguimiento y vacia las series historicas que `v2.79` acaba de desbloquear.** Con el umbral real de la lista de hoy (movimientos de +8% a +33% y de -6,4% a -17,3%), el solape medio de la lista con la sesion siguiente es del 5-9% medido sobre `largecap60`/`healthcare`/`energy` a 10 años (18,9-21,5% con el umbral minimo de 3% del screener): el 90-95% de la pantalla de entrada cambia cada dia, asi que el usuario no puede seguir una recomendacion de ayer, `score_history`/`fundamentals_history` acumulan una fila suelta de 40 tickers nuevos cada dia en vez de profundidad temporal (justo lo contrario de lo que buscaba `v2.79`), y `market_data_cache`/`market_history_cache` arrancan en frio a diario sobre tickers que no se volveran a consultar, con el riesgo de 429 de Yahoo ya documentado.

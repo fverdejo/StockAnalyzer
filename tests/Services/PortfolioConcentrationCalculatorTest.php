@@ -214,6 +214,41 @@ final class PortfolioConcentrationCalculatorTest extends TestCase
     }
 
     /**
+     * "Sin sector" no es un sector, es la ausencia del dato: aunque supere el
+     * umbral no debe generar aviso (v2.85). Antes, una cartera con la mayoria
+     * de posiciones sin sector conocido avisaba de estar "concentrada" en un
+     * grupo que solo significa que el proveedor no devolvio el dato, lo que
+     * suena a un riesgo medido cuando es justo lo contrario.
+     *
+     * Sigue contando en getSectorWeights() y por tanto en el HHI: lo que se
+     * suprime es el veredicto, no el dato.
+     */
+    public function testElGrupoSinSectorNoGeneraAvisoDeConcentracionSectorial(): void
+    {
+        $portfolio = $this->portfolio([
+            ['SINSEC1', 1.0, 500.0, 'EUR'],
+            ['SINSEC2', 1.0, 300.0, 'EUR'],
+            ['CONSEC', 1.0, 200.0, 'EUR'],
+        ]);
+
+        $concentration = $this->calculator()->compute($portfolio, [
+            'SINSEC1' => '',
+            'SINSEC2' => '',
+            'CONSEC' => 'Energy',
+        ]);
+
+        self::assertNotNull($concentration);
+        // El 80% del valor esta sin sector conocido...
+        self::assertEqualsWithDelta(
+            80.0,
+            $concentration->getSectorWeights()[PortfolioConcentration::UNKNOWN_SECTOR],
+            0.0001
+        );
+        // ...pero eso no es un aviso de concentracion sectorial.
+        self::assertSame([], $concentration->getOverweightSectors());
+    }
+
+    /**
      * El aviso de divisa solo aplica a la exposicion en divisa distinta del
      * euro: una cartera integramente en euros esta al 100% en EUR y eso no
      * es ningun riesgo de cambio.

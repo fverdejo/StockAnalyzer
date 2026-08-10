@@ -47,54 +47,72 @@ class RiskLevels
     }
 
     /**
-     * Cantidad de acciones sugerida para no arriesgar mas de $riskPercent%
-     * del valor de la cartera si el precio cae hasta el stop-loss ya
-     * calculado (position sizing). Formula pura, mismo criterio que
+     * Cantidad de acciones sugerida para esta posicion (position sizing, ver
+     * versions.md v2.50/v2.65/v2.66/v2.83). Formula pura, mismo criterio que
      * compute(): ninguna comprobacion de "cuando tiene sentido mostrarla"
-     * (eso, igual que con compute(), es responsabilidad de quien la llama,
-     * no de este DTO).
+     * (eso es responsabilidad de quien la llama, no de este DTO).
      *
-     * cantidad = (portfolioValueInTickerCurrency * riskPercent/100) / (price - stopLoss)
+     * $otherPositionsValueInTickerCurrency es el valor de las OTRAS
+     * posiciones de la cartera, sin contar esta, expresado en la MISMA divisa
+     * que $price (quien llama es responsable de convertirlo, ver
+     * Services\SuggestedPositionCalculator; pasarle euros junto a un precio
+     * en dolares da un resultado sin sentido, que es el defecto que corrigio
+     * v2.66).
      *
-     * Acotada por el peso maximo que se admite para una sola posicion
-     * ($maxPositionPercent% del valor de la cartera): con un stop de
-     * 2,5xATR el peso que pide la formula de riesgo es
-     * riesgo% / (2,5 x ATR%), asi que cuanto MENOS volatil es el valor
-     * mayor es la posicion sugerida, hasta pedir varias veces la cartera
-     * entera repartida entre unas pocas posiciones (ver versions.md
-     * v2.65). El tope anterior (lo maximo comprable, portfolioValue/price)
-     * no acotaba nada util en la practica: era el 100% de la cartera.
+     * Que el parametro excluya la propia posicion es lo que hace que la
+     * sugerencia sea ESTABLE, y es el arreglo de v2.83. Con el valor total de
+     * la cartera como base, comprar hasta la cantidad sugerida aumentaba esa
+     * base y por tanto la propia sugerencia: el usuario compraba para cuadrar
+     * y la app le pedia otro numero mayor, indefinidamente. Aqui se resuelve
+     * el punto fijo, es decir se calcula la cantidad que cumple la condicion
+     * DESPUES de comprarla, con la cartera ya crecida:
      *
-     * cantidadPorPeso = (portfolioValueInTickerCurrency * maxPositionPercent/100) / price
+     *   por peso:   cantidad*precio = m% * (otras + cantidad*precio)
+     *               => cantidad = otras * m / (precio * (100 - m))
      *
-     * $portfolioValueInTickerCurrency es el valor total de la cartera
-     * expresado en la MISMA divisa que $price: quien llama es responsable
-     * de convertirlo (ver Services\SuggestedPositionCalculator, que lleva
-     * el valor en euros de la cartera a la divisa del ticker antes de
-     * llamar aqui). Este DTO es formula pura y no sabe nada de divisas,
-     * igual que no sabe "cuando" tiene sentido aplicarla; pasarle un valor
-     * en euros junto a un precio en dolares da un resultado sin sentido,
-     * que es exactamente el defecto que corrigio v2.66.
+     *   por riesgo: cantidad*(precio - stop) = r% * (otras + cantidad*precio)
+     *               => cantidad = otras * r / (100*(precio - stop) - r*precio)
      *
-     * Tampoco es una caja de efectivo: esta app es un simulador sin saldo
-     * real, ese concepto no existe en el modelo de datos (mismo criterio
-     * que en v2.50).
+     * Comprada esa cantidad, volver a calcular devuelve el mismo numero.
      *
-     * Null si cualquier input no tiene sentido
-     * (portfolioValueInTickerCurrency, riskPercent o price <= 0) o si el
-     * stop-loss esta al mismo nivel o por encima del precio (riesgo por
-     * accion <= 0, division por cero o resultado sin sentido): resiliente,
-     * mismo criterio que el resto de la app.
+     * La cantidad final es la menor de las dos. Sin acotar por peso, con un
+     * stop de 2,5xATR el peso que pide la formula de riesgo es
+     * riesgo% / (2,5 x ATR%), asi que cuanto MENOS volatil es el valor mayor
+     * es la posicion sugerida, hasta pedir varias veces la cartera entera
+     * repartida entre unas pocas posiciones (ver v2.65).
+     *
+     * No es una caja de efectivo: esta app es un simulador sin saldo real,
+     * ese concepto no existe en el modelo de datos (mismo criterio que v2.50).
+     *
+     * Null si los inputs no tienen sentido (valor de las otras posiciones,
+     * riskPercent o price <= 0, o un peso maximo fuera de (0, 100)):
+     * resiliente, mismo criterio que el resto de la app. Ojo con el caso
+     * limite legitimo: en una cartera de una sola posicion las "otras" valen
+     * 0 y no hay respuesta que dar —ninguna cantidad distinta de cero puede
+     * pesar el 20% de una cartera formada solo por ella misma—, asi que
+     * tambien devuelve null y la interfaz no pinta sugerencia.
      */
-    public function suggestedQuantity(float $portfolioValueInTickerCurrency, float $riskPercent, float $price, float $maxPositionPercent = 20.0): ?float
+    public function suggestedQuantity(float $otherPositionsValueInTickerCurrency, float $riskPercent, float $price, float $maxPositionPercent = 20.0): ?float
     {
-        $quantityByRisk = $this->quantityByRisk($portfolioValueInTickerCurrency, $riskPercent, $price);
-
-        if ($quantityByRisk === null) {
+        if (!self::areInputsUsable($otherPositionsValueInTickerCurrency, $riskPercent, $price, $maxPositionPercent)) {
             return null;
         }
 
-        return min($quantityByRisk, self::quantityByMaxWeight($portfolioValueInTickerCurrency, $price, $maxPositionPercent));
+        // Stop al mismo nivel o por encima del precio: los niveles de riesgo
+        // no son utilizables y no hay cantidad que dar, ni acotada por peso
+        // (mismo criterio que antes de v2.83; el badge no pinta sugerencia).
+        if ($price - $this->stopLoss <= 0) {
+            return null;
+        }
+
+        $byWeight = self::quantityByMaxWeight($otherPositionsValueInTickerCurrency, $price, $maxPositionPercent);
+        $byRisk = $this->quantityByRisk($otherPositionsValueInTickerCurrency, $riskPercent, $price);
+
+        // byRisk null aqui no es un input invalido ni un stop imposible (los
+        // dos ya estan descartados), sino que el riesgo por operacion no tiene
+        // solucion finita: pasa cuando la distancia al stop en porcentaje no
+        // supera al riesgo permitido, y entonces manda el tope por peso.
+        return $byRisk === null ? $byWeight : min($byRisk, $byWeight);
     }
 
     /**
@@ -110,48 +128,82 @@ class RiskLevels
      * false con los mismos inputs que hacen null a suggestedQuantity(): si
      * no hay cantidad, no hay nada que explicar.
      *
-     * $portfolioValueInTickerCurrency tiene el mismo significado que en
-     * suggestedQuantity(): valor total de la cartera en la MISMA divisa
+     * $otherPositionsValueInTickerCurrency tiene el mismo significado que en
+     * suggestedQuantity(): valor de las otras posiciones en la MISMA divisa
      * que $price.
      */
-    public function isLimitedByMaxPositionWeight(float $portfolioValueInTickerCurrency, float $riskPercent, float $price, float $maxPositionPercent = 20.0): bool
+    public function isLimitedByMaxPositionWeight(float $otherPositionsValueInTickerCurrency, float $riskPercent, float $price, float $maxPositionPercent = 20.0): bool
     {
-        $quantityByRisk = $this->quantityByRisk($portfolioValueInTickerCurrency, $riskPercent, $price);
-
-        if ($quantityByRisk === null) {
+        if (!self::areInputsUsable($otherPositionsValueInTickerCurrency, $riskPercent, $price, $maxPositionPercent)) {
             return false;
         }
 
-        return $quantityByRisk > self::quantityByMaxWeight($portfolioValueInTickerCurrency, $price, $maxPositionPercent);
+        // Sin cantidad que dar no hay nada que explicar, mismo criterio que
+        // suggestedQuantity() con un stop imposible.
+        if ($price - $this->stopLoss <= 0) {
+            return false;
+        }
+
+        $byRisk = $this->quantityByRisk($otherPositionsValueInTickerCurrency, $riskPercent, $price);
+
+        // Sin solucion finita por riesgo, el peso es necesariamente quien
+        // acota: no hay cantidad que el riesgo por operacion no permita.
+        if ($byRisk === null) {
+            return true;
+        }
+
+        return $byRisk > self::quantityByMaxWeight($otherPositionsValueInTickerCurrency, $price, $maxPositionPercent);
     }
 
     /**
-     * Cantidad que sale de arriesgar $riskPercent% del valor de la cartera
-     * hasta el stop-loss, sin acotar por peso. Null con los inputs que no
-     * tienen sentido (ver suggestedQuantity()).
+     * Inputs con los que las dos formulas tienen sentido. Un peso maximo de
+     * 100% o mas no lo tiene: la condicion "esta posicion pesa el 100% de una
+     * cartera que la incluye" la cumple cualquier cantidad, y el punto fijo se
+     * va a infinito (division por cero en quantityByMaxWeight()).
      */
-    private function quantityByRisk(float $portfolioValueInTickerCurrency, float $riskPercent, float $price): ?float
+    private static function areInputsUsable(float $otherPositionsValue, float $riskPercent, float $price, float $maxPositionPercent): bool
     {
-        if ($portfolioValueInTickerCurrency <= 0 || $riskPercent <= 0 || $price <= 0) {
-            return null;
-        }
+        return $otherPositionsValue > 0
+            && $riskPercent > 0
+            && $price > 0
+            && $maxPositionPercent > 0
+            && $maxPositionPercent < 100;
+    }
 
+    /**
+     * Cantidad que deja el riesgo hasta el stop en $riskPercent% de la cartera
+     * resultante de comprarla (punto fijo, ver suggestedQuantity()). Null
+     * cuando no existe una cantidad finita que lo cumpla: si el stop esta al
+     * mismo nivel o por encima del precio (riesgo por accion <= 0), o si la
+     * distancia al stop no supera en porcentaje al riesgo permitido, cada
+     * accion comprada añade a la cartera mas presupuesto de riesgo del que
+     * consume y la ecuacion no cierra.
+     */
+    private function quantityByRisk(float $otherPositionsValueInTickerCurrency, float $riskPercent, float $price): ?float
+    {
         $riskPerShare = $price - $this->stopLoss;
 
         if ($riskPerShare <= 0) {
             return null;
         }
 
-        return ($portfolioValueInTickerCurrency * ($riskPercent / 100)) / $riskPerShare;
+        $denominator = (100 * $riskPerShare) - ($riskPercent * $price);
+
+        if ($denominator <= 0) {
+            return null;
+        }
+
+        return ($otherPositionsValueInTickerCurrency * $riskPercent) / $denominator;
     }
 
     /**
-     * Cantidad que cabe en $maxPositionPercent% del valor de la cartera al
-     * precio actual. Solo se llama cuando quantityByRisk() ya ha validado
-     * el valor de cartera y el precio.
+     * Cantidad que deja esta posicion pesando exactamente
+     * $maxPositionPercent% de la cartera resultante de comprarla (punto fijo,
+     * ver suggestedQuantity()). Solo se llama con inputs ya validados por
+     * areInputsUsable(), que garantiza el denominador distinto de cero.
      */
-    private static function quantityByMaxWeight(float $portfolioValueInTickerCurrency, float $price, float $maxPositionPercent): float
+    private static function quantityByMaxWeight(float $otherPositionsValueInTickerCurrency, float $price, float $maxPositionPercent): float
     {
-        return ($portfolioValueInTickerCurrency * ($maxPositionPercent / 100)) / $price;
+        return ($otherPositionsValueInTickerCurrency * $maxPositionPercent) / ($price * (100 - $maxPositionPercent));
     }
 }

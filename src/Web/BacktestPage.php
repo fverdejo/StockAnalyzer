@@ -120,7 +120,20 @@ HTML;
         $summary = self::renderUniverseSummary(is_array($result['aggregate'] ?? null) ? $result['aggregate'] : []);
 
         return $summary
-            . '<section class="panel"><h2>Backtesting basico</h2><div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Muestras</th><th>Compras</th><th>Retorno compras</th><th>Win rate compras</th><th>Ventas</th><th>Retorno ventas</th><th>Win rate ventas</th><th>Benchmark</th><th>Peor gestionado</th><th>Alpha vs media del universo</th><th>t de la alpha</th></tr></thead><tbody>'
+            . '<section class="panel"><h2>Backtesting basico</h2><div class="table-wrap"><table><thead><tr>'
+            . '<th>Ticker</th>'
+            . self::columnHeader('Muestras', 'Fotos historicas analizadas de este ticker: cada cierto numero de dias se recalcula la puntuacion usando solo los datos disponibles hasta esa fecha y se mide que hizo el precio durante el horizonte elegido. Cuantas mas muestras, mas fiable es el resto de la fila.')
+            . self::columnHeader('Compras', 'Cuantas de esas muestras dieron recomendacion BUY. Es el tamaño real de la prueba: con muy pocas señales, el retorno y el win rate de compras son anecdota, no evidencia.')
+            . self::columnHeader('Retorno compras', 'Retorno medio del precio durante el horizonte, contando solo las muestras con señal BUY. Es comprar y mantener hasta el final del horizonte, sin stop loss ni objetivo.')
+            . self::columnHeader('Win rate compras', 'Porcentaje de señales BUY que terminaron el horizonte en positivo. Un 0% exacto no cuenta como acierto: sin movimiento no hay ganancia que respalde la señal.')
+            . self::columnHeader('Ventas', 'Cuantas muestras dieron recomendacion SELL o STRONG SELL.')
+            . self::columnHeader('Retorno ventas', 'Retorno medio del precio durante el horizonte tras las señales SELL/STRONG SELL. Aqui lo deseable es que sea negativo: significa que la señal aviso de una caida.')
+            . self::columnHeader('Win rate ventas', 'Porcentaje de señales SELL/STRONG SELL tras las que el precio subio. Al contrario que en compras, un valor alto es mala noticia: la señal recomendo salir de subidas.')
+            . self::columnHeader('Benchmark', 'Retorno de comprar y mantener el ticker desde el primer hasta el ultimo dia del historico disponible, sin usar ninguna señal. Es la referencia pasiva; cubre todo el historico, no el horizonte, asi que no se compara dato a dato con las columnas de retorno.', true)
+            . self::columnHeader('Peor gestionado', 'Peor resultado de una sola operacion entre las compras simuladas con gestion de riesgo (stop loss y objetivo activos): el golpe maximo que habria encajado la estrategia. Solo entran las señales BUY con niveles de riesgo calculables.', true)
+            . self::columnHeader('Alpha vs todos los dias', 'Retorno medio de las compras de este ticker menos el retorno medio de todas sus muestras, con señal o sin ella. Positivo = filtrar por señal aporta algo frente a estar comprado cualquier dia; cerca de cero = la señal no añade nada. Es alpha contra el propio ticker, no contra el universo: esa es la tarjeta "Alpha del universo" de arriba.', true)
+            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estandar (Welch). |t| mayor o igual que 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.', true)
+            . '</tr></thead><tbody>'
             . implode('', $rows)
             . '</tbody></table></div><p class="muted panel-note">t de la alpha: alpha dividida entre su error estandar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los dias no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p></section>';
     }
@@ -170,6 +183,29 @@ HTML;
             (int) ($aggregate['buy_signals'] ?? 0),
             (int) ($aggregate['distinct_buy_tickers'] ?? 0),
             (int) ($aggregate['distinct_buy_months'] ?? 0)
+        );
+    }
+
+    /**
+     * Cabecera de tabla con el icono de ayuda ya usado en la ficha del valor
+     * (ver versions.md v2.10): al pasar por encima o enfocarlo con teclado
+     * explica que mide la columna. El tooltip se abre hacia abajo porque
+     * .table-wrap recorta lo que sobresale por arriba; $alignEnd lo alinea
+     * por la derecha en las ultimas columnas para que no se salga del ancho
+     * de la tabla. Con JavaScript activo el tooltip lo pinta ademas el script
+     * compartido de Layout, que lo saca del contenedor con scroll para que no
+     * se recorte; las clases de aqui son el respaldo sin JS.
+     *
+     * Deliberadamente SIN atributo title: el navegador pintaria su propio
+     * tooltip encima del nuestro y se verian los dos a la vez.
+     */
+    private static function columnHeader(string $label, string $description, bool $alignEnd = false): string
+    {
+        return sprintf(
+            '<th>%s <span class="info-icon info-icon-below%s" tabindex="0" data-tooltip="%s">i</span></th>',
+            Layout::escape($label),
+            $alignEnd ? ' info-icon-end' : '',
+            Layout::escape($description)
         );
     }
 

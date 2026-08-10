@@ -71,18 +71,67 @@ final class RiskLevelsTest extends TestCase
     }
 
     /**
-     * portfolioValue=10000, riskPercent=1.5%, precio=100, stopLoss=90
-     * (riesgo por accion = 10). riesgo total = 10000 * 1.5% = 150.
-     * cantidad = 150 / 10 = 15 acciones = 1.500 = 15% de la cartera, por
-     * debajo del peso maximo por posicion (20% = 20 acciones), asi que
-     * manda el riesgo por operacion y no se acota.
+     * otrasPosiciones=10000, riskPercent=1.5%, precio=100, stopLoss=90
+     * (riesgo por accion = 10).
+     *
+     * Desde v2.83 el primer argumento es el valor de las OTRAS posiciones y
+     * la cantidad es la que deja el riesgo en 1,5% de la cartera RESULTANTE:
+     *   cantidad*10 = 1,5% * (10000 + cantidad*100)
+     *   => cantidad = 10000*1,5 / (100*10 - 1,5*100) = 15000/850 = 17,647...
+     * Son 1.764,71 de posicion sobre una cartera de 11.764,71, es decir un
+     * 15% de peso: por debajo del tope del 20%, asi que manda el riesgo.
      */
     public function testSuggestedQuantityCalculaSegunElRiesgoPorOperacion(): void
     {
         $riskLevels = RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
 
-        self::assertEqualsWithDelta(15.0, $riskLevels->suggestedQuantity(10000.0, 1.5, 100.0), 0.0001);
+        $expected = (10000.0 * 1.5) / ((100 * 10.0) - (1.5 * 100.0));
+
+        self::assertEqualsWithDelta(17.647058, $expected, 0.0001);
+        self::assertEqualsWithDelta($expected, $riskLevels->suggestedQuantity(10000.0, 1.5, 100.0), 0.0001);
         self::assertFalse($riskLevels->isLimitedByMaxPositionWeight(10000.0, 1.5, 100.0));
+    }
+
+    /**
+     * La razon de ser de v2.83: la sugerencia es un objetivo ESTABLE. Comprada
+     * la cantidad sugerida, volver a preguntar devuelve la misma cantidad, en
+     * los dos regimenes (acotado por riesgo y acotado por peso). Antes no era
+     * asi: la base del calculo era el valor total de la cartera, que crecia
+     * con la propia compra, asi que la sugerencia subia cada vez que el
+     * usuario compraba para cuadrar con ella.
+     */
+    public function testLaSugerenciaNoSeMueveAlComprarla(): void
+    {
+        // Acotada por riesgo (stop lejos: 10% del precio).
+        $porRiesgo = RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
+        $otras = 10000.0;
+        $cantidad = $porRiesgo->suggestedQuantity($otras, 1.5, 100.0);
+
+        self::assertNotNull($cantidad);
+        // Comprada: el riesgo asumido es exactamente el 1,5% de la cartera
+        // resultante, y las "otras posiciones" no han cambiado, asi que la
+        // sugerencia tampoco.
+        self::assertEqualsWithDelta(
+            1.5,
+            (($cantidad * 10.0) / ($otras + ($cantidad * 100.0))) * 100,
+            0.000001
+        );
+        self::assertEqualsWithDelta($cantidad, $porRiesgo->suggestedQuantity($otras, 1.5, 100.0), 0.000001);
+
+        // Acotada por peso (valor poco volatil, stop muy cerca del precio).
+        $porPeso = RiskLevels::compute(42.24, 0.79508, 2.5, 2.0);
+        $otrasPeso = 2182.83;
+        $cantidadPeso = $porPeso->suggestedQuantity($otrasPeso, 1.5, 42.24, 20.0);
+
+        self::assertNotNull($cantidadPeso);
+        self::assertTrue($porPeso->isLimitedByMaxPositionWeight($otrasPeso, 1.5, 42.24, 20.0));
+        // Comprada: pesa exactamente el 20% de la cartera resultante.
+        $valorPosicion = $cantidadPeso * 42.24;
+        self::assertEqualsWithDelta(
+            20.0,
+            ($valorPosicion / ($otrasPeso + $valorPosicion)) * 100,
+            0.000001
+        );
     }
 
     /**
@@ -91,18 +140,18 @@ final class RiskLevelsTest extends TestCase
      * ahi manda el peso maximo por posicion (ver versions.md v2.65).
      *
      * Caso real medido sobre la cartera del usuario (ELE.MC, 2026-08-08):
-     * portfolioValue=2182,83, riskPercent=1,5%, precio=42,24,
+     * otrasPosiciones=2182,83, riskPercent=1,5%, precio=42,24,
      * ATR14=0,79508 -> stop=40,2523 (riesgo por accion 1,9877).
-     * cantidad por riesgo = (2182,83*1,5%)/1,9877 = 16,47 acciones = 31,9%
-     * de la cartera; el tope del 20% deja exactamente
-     * (2182,83*20%)/42,24 = 10,335... acciones.
+     * cantidad por riesgo = 2182,83*1,5 / (100*1,9877 - 1,5*42,24) = 24,18
+     * acciones; el tope del 20% deja 2182,83*20 / (42,24*80) = 12,919...
      */
     public function testSuggestedQuantitySeAcotaAlPesoMaximoPorPosicion(): void
     {
         $riskLevels = RiskLevels::compute(42.24, 0.79508, 2.5, 2.0);
 
-        $expected = (2182.83 * 0.20) / 42.24;
+        $expected = (2182.83 * 20) / (42.24 * (100 - 20));
 
+        self::assertEqualsWithDelta(12.919212, $expected, 0.000001);
         self::assertEqualsWithDelta($expected, $riskLevels->suggestedQuantity(2182.83, 1.5, 42.24, 20.0), 0.000001);
         self::assertTrue($riskLevels->isLimitedByMaxPositionWeight(2182.83, 1.5, 42.24, 20.0));
     }
@@ -116,22 +165,29 @@ final class RiskLevelsTest extends TestCase
     {
         $riskLevels = RiskLevels::compute(100.0, 0.4, 2.5, 2.0);
 
-        // cantidad por riesgo = (1000*1,5%)/1 = 15 acciones (1.500, un 150%
-        // de la cartera); tope del 20% = (1000*20%)/100 = 2 acciones.
-        self::assertEqualsWithDelta(2.0, $riskLevels->suggestedQuantity(1000.0, 1.5, 100.0), 0.0001);
+        // stop = 99, o sea el 1% por debajo del precio: menos que el 1,5% de
+        // riesgo permitido, asi que la ecuacion del riesgo no cierra (cada
+        // accion comprada añade a la cartera mas presupuesto de riesgo del que
+        // consume) y manda el tope por peso, que es el que siempre acota:
+        // 1000*20 / (100*80) = 2,5 acciones.
+        self::assertEqualsWithDelta(2.5, $riskLevels->suggestedQuantity(1000.0, 1.5, 100.0), 0.0001);
+        self::assertTrue($riskLevels->isLimitedByMaxPositionWeight(1000.0, 1.5, 100.0));
     }
 
     /**
-     * Retrocompatibilidad: con maxPositionPercent=100 el tope es el valor
-     * entero de la cartera, exactamente el comportamiento anterior a
-     * v2.65 (portfolioValue / price = 10 acciones).
+     * Un peso maximo del 100% (o mas) no tiene sentido desde v2.83 y devuelve
+     * null: la condicion "esta posicion pesa el 100% de una cartera que la
+     * incluye" la cumple cualquier cantidad, y el punto fijo se va a infinito.
+     * Antes de v2.83 ese valor servia para desactivar el tope y quedarse con
+     * "lo maximo comprable" (cartera/precio), un tope que en la practica no
+     * acotaba nada (ver v2.65).
      */
-    public function testSuggestedQuantityConPesoMaximo100SeComportaComoAntes(): void
+    public function testSuggestedQuantityConPesoMaximo100NoTieneSentidoYDevuelveNull(): void
     {
         $riskLevels = RiskLevels::compute(100.0, 0.4, 2.5, 2.0);
 
-        self::assertEqualsWithDelta(10.0, $riskLevels->suggestedQuantity(1000.0, 1.5, 100.0, 100.0), 0.0001);
-        self::assertTrue($riskLevels->isLimitedByMaxPositionWeight(1000.0, 1.5, 100.0, 100.0));
+        self::assertNull($riskLevels->suggestedQuantity(1000.0, 1.5, 100.0, 100.0));
+        self::assertFalse($riskLevels->isLimitedByMaxPositionWeight(1000.0, 1.5, 100.0, 100.0));
     }
 
     /**

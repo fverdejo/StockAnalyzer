@@ -80,16 +80,22 @@ class SuggestedPositionCalculator
             // esta fila se queda sin sugerencia (el badge ya sabe pintar
             // una sugerencia ausente) y las demas conservan la suya.
             $rate = $portfolio->getRateToEurFor($ticker);
+            // Base del calculo: la cartera SIN esta posicion (v2.83). Con el
+            // total, comprar hasta la cantidad sugerida aumentaba la base y
+            // con ella la siguiente sugerencia, asi que el objetivo se movia
+            // cada vez que el usuario lo perseguia. Ver RiskLevels
+            // ::suggestedQuantity() para el punto fijo que resuelve.
+            $ownValueEur = $portfolio->getMarketValueEurFor($ticker);
 
-            if ($levels === null || $price === null || $rate === null || $rate <= 0) {
+            if ($levels === null || $price === null || $rate === null || $rate <= 0 || $ownValueEur === null) {
                 $positions[$ticker] = null;
 
                 continue;
             }
 
-            $portfolioValueInTickerCurrency = $portfolioValueEur / $rate;
+            $otherPositionsInTickerCurrency = ($portfolioValueEur - $ownValueEur) / $rate;
             $quantity = $levels->suggestedQuantity(
-                $portfolioValueInTickerCurrency,
+                $otherPositionsInTickerCurrency,
                 $riskPercent,
                 $price,
                 $maxPositionPercent
@@ -100,7 +106,7 @@ class SuggestedPositionCalculator
                 : new SuggestedPosition(
                     $quantity,
                     $levels->isLimitedByMaxPositionWeight(
-                        $portfolioValueInTickerCurrency,
+                        $otherPositionsInTickerCurrency,
                         $riskPercent,
                         $price,
                         $maxPositionPercent

@@ -46,6 +46,13 @@ class Layout
             --accent-soft: #dff4f1;
             --good: #147a46;
             --warn: #986a10;
+            /* Variante oscura del ambar SOLO para texto sobre el fondo crema
+               #fff1d2 (badge HOLD, aviso de concentracion): --warn ahi da
+               4,26:1 y WCAG AA pide 4,5 para texto pequeño en negrita; este
+               tono da 6,11:1 sobre el mismo fondo. --warn se queda como esta
+               porque en bordes, puntos de leyenda y .signal-neutral cumple de
+               sobra (ahi el minimo es 3:1). Ver versions.md v2.85. */
+            --warn-text: #7a5309;
             --bad: #b42318;
             --focus: #2563eb;
             --shadow: 0 12px 30px rgba(23, 32, 42, 0.08);
@@ -451,6 +458,30 @@ class Layout
 
         .table-compact th, .table-compact td { font-size: 13px; padding: 9px 8px; }
 
+        /* Filas con celdas de altura muy desigual (una sola linea en unas
+           columnas y dos o tres en otras, como las posiciones abiertas de la
+           cartera: importes con su equivalencia en euros al lado de badges de
+           stop/objetivo). Alineadas arriba, el dato corto se queda flotando
+           lejos del que le corresponde y la fila cuesta de leer en horizontal. */
+        .table-middle td {
+            vertical-align: middle;
+        }
+
+        /* Columna de la estrella de watchlist. La cabecera es texto de 12px
+           alineado a la izquierda y la celda un boton con su propio padding y
+           un glifo de 20px, asi que los centros de uno y otro no coincidian
+           (11px de desfase, medidos): la estrella se veia corrida respecto a
+           su propia cabecera. Centrando las dos, la columna queda a plomo sin
+           tocar el boton ni su area de pulsacion. */
+        .table-middle th:first-child,
+        .table-middle td:first-child {
+            text-align: center;
+        }
+
+        .table-middle td:first-child .inline-form {
+            display: inline-block;
+        }
+
         th {
             background: var(--surface-alt);
             color: var(--muted);
@@ -471,6 +502,23 @@ class Layout
         .ticker,
         .score {
             font-weight: 800;
+        }
+
+        /* Grupos que no deben partirse por un salto de linea: importes con su
+           simbolo de divisa, equivalencias entre parentesis. th/td llevan
+           overflow-wrap: anywhere para que los nombres largos no desborden, y
+           eso partia "234,57 €" dejando el simbolo y el parentesis de cierre
+           solos en la linea siguiente (v2.85). */
+        .nowrap {
+            white-space: nowrap;
+        }
+
+        /* Un ticker es un identificador corto y no se parte nunca: el
+           overflow-wrap: anywhere de th/td (que existe para que los nombres
+           largos de empresa no desborden) lo cortaba en columnas estrechas y
+           dejaba "BBVA.M / C" en dos lineas. Ver versions.md v2.85. */
+        .ticker {
+            white-space: nowrap;
         }
 
         .rank-cell {
@@ -506,7 +554,7 @@ class Layout
         }
 
         .buy { background: #dff3e8; color: var(--good); }
-        .hold { background: #fff1d2; color: var(--warn); }
+        .hold { background: #fff1d2; color: var(--warn-text); }
         .sell { background: #f9dedb; color: var(--bad); }
 
         .chips {
@@ -617,7 +665,7 @@ class Layout
             border-radius: 999px;
             padding: 2px 7px;
             background: #fff1d2;
-            color: var(--warn);
+            color: var(--warn-text);
             font-size: 11px;
             font-weight: 700;
             white-space: nowrap;
@@ -686,6 +734,78 @@ class Layout
             z-index: 40;
             box-shadow: var(--shadow);
             text-transform: none;
+            /* El tooltip se pinta encima de los elementos vecinos, asi que si
+               captura el raton los tapa: al mover el cursor hacia el icono de
+               al lado, el puntero entra en el tooltip (que cuenta como hover
+               del propio icono), el tooltip no se cierra y el icono vecino se
+               vuelve inalcanzable. Detectado con Playwright en la cabecera del
+               backtesting, donde el icono de "t de la alpha" quedaba tapado
+               por el tooltip de "Alpha vs todos los dias" (ver versions.md
+               v2.80). */
+            pointer-events: none;
+        }
+
+        /* Variantes para iconos de ayuda dentro de una cabecera de tabla.
+           -below lo abre hacia abajo: hacia arriba quedaria invisible, porque
+           .table-wrap tiene overflow-x auto y eso hace que el eje vertical
+           tambien recorte, y por arriba la cabecera no tiene margen ninguno.
+           -end lo alinea por su borde derecho en las ultimas columnas: son
+           280px centrados sobre el icono, que en las columnas finales se
+           salen del ancho de la tabla (medido con Playwright columna a
+           columna, ver versions.md v2.80: desbordaba desde `Benchmark`).
+           Se descarto resolver el recorte inferior con position fixed —que si
+           escapa del overflow— porque un tooltip fixed se desancla del icono
+           en cuanto la tabla se desplaza en horizontal, que es el estado
+           normal de una tabla de 12 columnas: se pierde de vista por
+           completo, peor que verlo cortado. El atributo title del <th> cubre
+           ese caso. */
+        .info-icon-below:hover::after,
+        .info-icon-below:focus-visible::after {
+            bottom: auto;
+            top: 150%;
+        }
+
+        .info-icon-end:hover::after,
+        .info-icon-end:focus-visible::after {
+            left: auto;
+            right: -6px;
+            transform: none;
+        }
+
+        /* Tooltip "portado": un unico nodo al final del <body>, fuera de
+           cualquier contenedor con scroll, colocado por el script compartido
+           a partir de la posicion real del icono. Es la unica forma de que un
+           tooltip de cabecera de tabla se vea entero: el ::after vive dentro
+           de .table-wrap y ahi lo recorta el overflow, y position fixed sobre
+           el pseudo-elemento no sirve porque su posicion estatica ignora el
+           desplazamiento horizontal del contenedor. Ver versions.md v2.82. */
+        .info-tip {
+            display: none;
+            position: fixed;
+            width: 280px;
+            max-width: min(320px, 90vw);
+            background: #17202a;
+            color: #ffffff;
+            padding: 9px 11px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.45;
+            box-shadow: var(--shadow);
+            z-index: 60;
+            pointer-events: none;
+        }
+
+        .info-tip-visible {
+            display: block;
+        }
+
+        /* Con el script activo el pseudo-elemento sobra para estos iconos: lo
+           pinta el nodo portado. Sin JS, el ::after sigue siendo el tooltip
+           (recortado en tablas de pocas filas, pero legible). */
+        body.js-tips .info-icon-below:hover::after,
+        body.js-tips .info-icon-below:focus-visible::after {
+            content: none;
         }
 
         .value-box strong {
@@ -1244,6 +1364,95 @@ class Layout
             <span>Demo educativa. Sin operaciones reales ni conexion con broker.</span>
         </div>
     </footer>
+    <script>
+    /*
+     * Tooltips de los iconos de ayuda que viven dentro de una tabla con scroll
+     * (ver versions.md v2.82). Solo afecta a `.table-wrap .info-icon`: los de
+     * la ficha de detalle siguen siendo CSS puro, porque ahi nada los recorta.
+     *
+     * El motivo de necesitar JS: el tooltip del ::after es hijo del icono, que
+     * esta dentro de .table-wrap; ese contenedor tiene overflow-x auto (y por
+     * tanto tambien recorta en vertical), asi que el tooltip se corta contra
+     * su borde. Sacarlo con position fixed no funciona sobre un
+     * pseudo-elemento: su posicion estatica no descuenta el desplazamiento
+     * horizontal del contenedor y el tooltip acaba fuera de la pantalla. Un
+     * unico nodo al final del <body>, colocado desde getBoundingClientRect(),
+     * si se ve entero y sigue al icono aunque la tabla este desplazada.
+     */
+    (function () {
+        var icons = document.querySelectorAll('.table-wrap .info-icon[data-tooltip]');
+
+        if (!icons.length) { return; }
+
+        document.body.classList.add('js-tips');
+
+        var tip = document.createElement('div');
+        tip.className = 'info-tip';
+        document.body.appendChild(tip);
+
+        var MARGIN = 8;
+        var current = null;
+
+        function place() {
+            if (current === null) { return; }
+
+            var rect = current.getBoundingClientRect();
+            var wrap = current.closest('.table-wrap');
+
+            // Si la tabla se ha desplazado hasta dejar el icono fuera de su
+            // parte visible, no hay nada que explicar: fuera el tooltip.
+            if (wrap !== null) {
+                var wrapRect = wrap.getBoundingClientRect();
+
+                if (rect.right < wrapRect.left || rect.left > wrapRect.right) {
+                    hide();
+
+                    return;
+                }
+            }
+
+            var left = rect.left + (rect.width / 2) - (tip.offsetWidth / 2);
+            var top = rect.bottom + MARGIN;
+
+            // Que no se salga por los lados ni por abajo de la ventana.
+            left = Math.min(Math.max(left, MARGIN), window.innerWidth - tip.offsetWidth - MARGIN);
+
+            if (top + tip.offsetHeight > window.innerHeight - MARGIN) {
+                top = Math.max(MARGIN, rect.top - tip.offsetHeight - MARGIN);
+            }
+
+            tip.style.left = Math.round(left) + 'px';
+            tip.style.top = Math.round(top) + 'px';
+        }
+
+        function show(icon) {
+            current = icon;
+            tip.textContent = icon.getAttribute('data-tooltip');
+            // Visible antes de medir: con display none no tiene dimensiones.
+            tip.classList.add('info-tip-visible');
+            place();
+        }
+
+        function hide() {
+            current = null;
+            tip.classList.remove('info-tip-visible');
+        }
+
+        Array.prototype.forEach.call(icons, function (icon) {
+            icon.addEventListener('mouseenter', function () { show(icon); });
+            icon.addEventListener('mouseleave', hide);
+            icon.addEventListener('focus', function () { show(icon); });
+            icon.addEventListener('blur', hide);
+        });
+
+        // En captura para enterarse tambien del scroll de .table-wrap, que no
+        // burbujea. Se recoloca en vez de ocultar: los eventos de scroll llegan
+        // en el frame siguiente, asi que ocultar sin mas cerraba tooltips que
+        // se acababan de abrir tras desplazar la tabla para llegar al icono.
+        window.addEventListener('scroll', place, true);
+        window.addEventListener('resize', place);
+    })();
+    </script>
 </body>
 </html>
 HTML;
@@ -1291,6 +1500,11 @@ HTML;
     {
         $symbol = self::currencySymbol($currency);
 
+        // Espacio normal a proposito: este formateador tambien alimenta el
+        // texto de las alertas y las exportaciones CSV, donde un espacio duro
+        // seria un caracter raro colado en los datos. El salto de linea entre
+        // cifra y simbolo se evita donde es un problema (celdas estrechas) con
+        // la clase .nowrap, no aqui. Ver versions.md v2.85.
         return $symbol === '' ? self::formatNumber($value) : self::formatNumber($value) . ' ' . $symbol;
     }
 

@@ -117,10 +117,14 @@ HTML;
         }
 
         $topCount = min(3, $concentration->getPositionCount());
+        // "Valor total (EUR)" se quito en v2.85: era exactamente el mismo
+        // numero que la tarjeta "Valor actual" del resumen de arriba, en la
+        // misma pantalla y a pocos pixeles de distancia.
         $metrics = sprintf(
-            '<section class="cards"><div class="metric"><span class="muted">Valor total (EUR)</span><strong>%s</strong></div><div class="metric"><span class="muted">Top %d posiciones</span><strong>%s</strong></div><div class="metric"><span class="muted">Indice HHI</span><strong>%s</strong></div><div class="metric"><span class="muted">Posiciones efectivas</span><strong>%s de %d</strong></div></section>',
-            Layout::formatMoney($concentration->getTotalValueEur(), PortfolioConcentration::BASE_CURRENCY),
-            $topCount,
+            '<section class="cards"><div class="metric"><span class="muted">%s</span><strong>%s</strong></div><div class="metric"><span class="muted">Indice HHI</span><strong>%s</strong></div><div class="metric"><span class="muted">Posiciones efectivas</span><strong>%s de %d</strong></div></section>',
+            // Singular cuando solo hay una posicion: "Top 1 posiciones" estaba
+            // mal escrito (v2.85).
+            $topCount === 1 ? 'Posicion mas grande' : sprintf('Top %d posiciones', $topCount),
             self::percent($concentration->getTopPositionsWeight($topCount)),
             self::index($concentration->getHerfindahlIndex()),
             Layout::formatNumber($concentration->getEffectivePositions()),
@@ -260,7 +264,7 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table class="table-compact"><thead><tr><th>&#9733;</th><th>Ticker</th><th>Acciones</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operacion se hace siempre desde la accion que estas mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, entre parentesis, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>&#9733;</th><th>Ticker</th><th>Acciones</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operacion se hace siempre desde la accion que estas mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, entre parentesis, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
     }
 
     /**
@@ -469,8 +473,12 @@ HTML;
             return '';
         }
 
+        // nowrap para que el parentesis y el simbolo de divisa no se separen
+        // del numero: en la columna estrecha de una tabla el salto caia entre
+        // la cifra y el simbolo y dejaba "€)" solo en la linea siguiente
+        // (v2.85).
         return sprintf(
-            ' <span class="muted">(%s)</span>',
+            ' <span class="muted nowrap">(%s)</span>',
             Layout::formatMoney($valueEur, Portfolio::BASE_CURRENCY)
         );
     }

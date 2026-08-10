@@ -146,13 +146,23 @@ class PortfolioConcentration
     }
 
     /**
+     * Sectores que superan el umbral de aviso, EXCLUYENDO el grupo
+     * UNKNOWN_SECTOR (ver versions.md v2.85): "Sin sector" no es un sector,
+     * es la ausencia del dato, asi que avisar de que la cartera esta
+     * concentrada ahi no dice nada sobre su concentracion sectorial y
+     * ademas suena a un riesgo que no se ha medido. Sigue contando en
+     * getSectorWeights() (los pesos deben sumar 100%) y en el HHI: lo que se
+     * suprime es el veredicto, no el dato.
+     *
      * @return array<string,float> sectores que superan el umbral de aviso
      */
     public function getOverweightSectors(): array
     {
         return array_filter(
             $this->sectorWeights,
-            static fn (float $weight): bool => $weight > self::SECTOR_WARNING_PERCENT
+            static fn (float $weight, string $sector): bool
+                => $sector !== self::UNKNOWN_SECTOR && $weight > self::SECTOR_WARNING_PERCENT,
+            ARRAY_FILTER_USE_BOTH
         );
     }
 
