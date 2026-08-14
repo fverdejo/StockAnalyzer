@@ -66,12 +66,34 @@ use Throwable;
  */
 class Application
 {
-    private const DEFAULT_UNIVERSE = 'general';
+    /**
+     * Universo con el que arranca el Home cuando la peticion no pide otro.
+     *
+     * Hasta `v2.85` era `general` (los movimientos del dia, ver
+     * `MOVERS_UNIVERSE`). Se cambio a una lista curada estable porque esa
+     * poblacion no es la que este motor sabe puntuar: mediana de score 43,6
+     * frente a 60,2 aqui, 35 de 40 tickers en SELL/STRONG SELL en una
+     * pantalla que pregunta que comprar, 3,25 de 12 ratios fundamentales
+     * ausentes por ticker (frente a 0,88) y, sobre todo, el 90-95% de la
+     * lista cambia cada dia: ni se puede seguir una recomendacion de ayer ni
+     * `score_history`/`fundamentals_history` acumulan profundidad temporal.
+     * Ver versions.md `v2.86`.
+     */
+    private const DEFAULT_UNIVERSE = 'largecap60';
+
+    /**
+     * Universo dinamico de los movimientos del dia ("Movimientos de hoy"):
+     * el unico que no sale de la lista fija de `config/universes.php`, sino
+     * del screener en vivo de Yahoo (ver `v2.12`). Sigue siendo
+     * seleccionable, ya no es la pantalla de entrada.
+     */
+    private const MOVERS_UNIVERSE = 'general';
+
     private const DEFAULT_TICKERS = 'AAPL MSFT NVDA AMZN GOOGL META TSLA AVGO BRK-B JPM LLY V XOM UNH MA COST NFLX WMT PG JNJ HD ABBV BAC KO CRM ORCL CVX MRK AMD PEP LIN TMO ACN MCD CSCO ADBE IBM QCOM WFC CAT TXN INTU AMGN DIS GS ISRG VZ NOW PFE NKE SAN.MC BBVA.MC IBE.MC ITX.MC REP.MC TEF.MC FER.MC AMS.MC CABK.MC ELE.MC';
 
     /**
      * Cuantos tickers pedir a cada lado (subidas/bajadas) del screener de
-     * Yahoo para construir el universo dinamico de "general" (ver
+     * Yahoo para construir el universo dinamico `MOVERS_UNIVERSE` (ver
      * versions.md v2.12). 20 + 20 = 40 tickers, por debajo del limite de
      * TickerNormalizer::MAX_TICKERS.
      */
@@ -93,7 +115,7 @@ class Application
     private ProviderConfig $providerConfig;
     private UniverseConfig $universeConfig;
     private AnalysisJsonPresenter $jsonPresenter;
-    private bool $generalUniverseIsLive = false;
+    private bool $moversUniverseIsLive = false;
     private YahooCorporateProfileProvider $corporateProfileProvider;
     private CorporateProfileCacheRepository $corporateProfileCache;
     private ScoreHistoryRepository $scoreHistoryRepository;
@@ -288,7 +310,7 @@ class Application
             $universe,
             $this->universeConfig->all(),
             $recommendation,
-            $this->generalUniverseIsLive,
+            $this->moversUniverseIsLive,
             CsrfToken::get(),
             $this->watchedTickers($currentUser),
             // Concentracion sectorial del top del ranking (v2.75): se
@@ -370,7 +392,7 @@ class Application
         } catch (Throwable) {
             // Silencioso a proposito, mismo criterio que el resto de
             // captura "best effort" de esta clase (ver
-            // resolveGeneralUniverseTickers()/handleResendVerification()).
+            // resolveMoversUniverseTickers()/handleResendVerification()).
         }
 
         // Descripcion/sector/industria y proximas fechas de resultados y
@@ -443,8 +465,8 @@ class Application
 
         $universe = $this->isValidUniverseKey($requestedUniverse) ? $requestedUniverse : self::DEFAULT_UNIVERSE;
 
-        if ($universe === self::DEFAULT_UNIVERSE) {
-            $raw = $this->resolveGeneralUniverseTickers();
+        if ($universe === self::MOVERS_UNIVERSE) {
+            $raw = $this->resolveMoversUniverseTickers();
 
             return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
         }
@@ -456,14 +478,14 @@ class Application
     }
 
     /**
-     * Universo dinamico de "busqueda general" (ver versions.md v2.12): las
+     * Universo dinamico "Movimientos de hoy" (ver versions.md v2.12): las
      * `GENERAL_MOVERS_COUNT` acciones que mas suben y las que mas bajan
      * hoy en EEUU, segun el screener de Yahoo Finance. Si el screener
      * falla (endpoint no oficial, puede cambiar sin aviso), se cae en la
      * lista estatica de respaldo de `config/universes.php` y se marca
-     * `generalUniverseIsLive = false` para que el Home lo indique.
+     * `moversUniverseIsLive = false` para que el Home lo indique.
      */
-    private function resolveGeneralUniverseTickers(): string
+    private function resolveMoversUniverseTickers(): string
     {
         try {
             $gainers = $this->marketMoversProvider->getTopGainers(self::GENERAL_MOVERS_COUNT);
@@ -474,12 +496,12 @@ class Application
                 throw new \RuntimeException('El screener de Yahoo Finance no devolvio ningun ticker.');
             }
 
-            $this->generalUniverseIsLive = true;
+            $this->moversUniverseIsLive = true;
 
             return implode(' ', $tickers);
         } catch (Throwable) {
-            $this->generalUniverseIsLive = false;
-            $fromUniverse = $this->universeConfig->tickers(self::DEFAULT_UNIVERSE);
+            $this->moversUniverseIsLive = false;
+            $fromUniverse = $this->universeConfig->tickers(self::MOVERS_UNIVERSE);
 
             return $fromUniverse !== [] ? implode(' ', $fromUniverse) : self::DEFAULT_TICKERS;
         }

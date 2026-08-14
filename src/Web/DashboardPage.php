@@ -22,7 +22,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.79';
+    private const APP_VERSION = 'v2.90';
 
     /**
      * @param list<StockAnalysis> $results
@@ -35,10 +35,10 @@ class DashboardPage
         array $results,
         array $errors,
         ?User $currentUser = null,
-        string $selectedUniverse = 'general',
+        string $selectedUniverse = 'largecap60',
         array $universes = [],
         string $selectedRecommendation = '',
-        bool $generalUniverseIsLive = false,
+        bool $moversUniverseIsLive = false,
         string $csrfToken = '',
         array $watchedTickers = [],
         ?array $sectorWeights = null
@@ -52,14 +52,14 @@ class DashboardPage
         $recommendationOptions = self::renderRecommendationOptions($selectedRecommendation);
         $apiHref = '?page=api&universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
         $redirectTo = '?universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
-        $generalUniverseNote = self::renderGeneralUniverseNote($selectedUniverse, $generalUniverseIsLive);
+        $moversUniverseNote = self::renderMoversUniverseNote($selectedUniverse, $moversUniverseIsLive);
         $errorsHtml = self::renderErrors($errors);
         $cards = self::renderCards($results, $rawTickers);
         $topBuys = self::renderRecommendationList($results, ['BUY'], $rawTickers);
         $holds = self::renderRecommendationList($results, ['HOLD'], $rawTickers);
         $topSells = self::renderRecommendationList($results, ['SELL', 'STRONG SELL'], $rawTickers);
         $watched = array_fill_keys($watchedTickers, true);
-        $starHeader = $currentUser instanceof User ? '<th>&#9733;</th>' : '';
+        $starHeader = $currentUser instanceof User ? '<th class="star-cell">&#9733;</th>' : '';
         $rows = self::renderRows($results, $rawTickers, $currentUser, $csrfToken, $watched, $redirectTo);
         $sectorNote = self::renderSectorNote($sectorWeights, count($results));
         $updatedAt = Layout::escape((new DateTimeImmutable())->format('Y-m-d H:i'));
@@ -84,7 +84,7 @@ class DashboardPage
             <p class="muted panel-note"><a href="{$apiHref}">API JSON de este ranking</a></p>
         </section>
 
-        {$generalUniverseNote}
+        {$moversUniverseNote}
         {$errorsHtml}
         {$cards}
 
@@ -107,14 +107,14 @@ class DashboardPage
             <h2>Ranking completo</h2>
             {$sectorNote}
             <div class="table-wrap">
-                <table>
+                <table class="table-middle">
                     <thead>
                         <tr>
-                            <th>#</th>
+                            <th class="rank-cell">#</th>
                             {$starHeader}
                             <th>Accion</th>
-                            <th>Precio</th>
-                            <th>Score</th>
+                            <th class="num">Precio</th>
+                            <th class="num">Score</th>
                             <th>Recomendacion</th>
                         </tr>
                     </thead>
@@ -160,7 +160,7 @@ HTML;
 
         return sprintf(
             '<section class="panel panel-notice"><strong>%s concentra %s de las %d primeras posiciones (%s%%).</strong> El ranking ordena por puntuacion, no reparte por sector: comprar el top tal cual seria apostar en buena parte por un solo sector. Reparto completo: %s.</section>',
-            Layout::escape($top['sector']),
+            Layout::escape(SectorLabel::translate($top['sector'])),
             Layout::escape((string) $top['count']),
             $shown,
             Layout::escape(Layout::formatNumber($top['percent'])),
@@ -174,7 +174,10 @@ HTML;
     private static function describeSectors(array $sectorWeights): string
     {
         return implode(', ', array_map(
-            static fn (array $weight): string => sprintf('%s %d', $weight['sector'], $weight['count']),
+            // Traducido al pintar (v2.89): Yahoo sirve la taxonomia de
+            // Morningstar siempre en ingles, y este aviso salia mezclando
+            // "Financial Services" con texto en español.
+            static fn (array $weight): string => sprintf('%s %d', SectorLabel::translate($weight['sector']), $weight['count']),
             $sectorWeights
         ));
     }
@@ -201,11 +204,11 @@ HTML;
             $recommendation = $score->getRecommendation();
             $detailHref = self::detailHref($company->getTicker(), $rawTickers);
             $starCell = $currentUser instanceof User
-                ? sprintf('<td>%s</td>', WatchlistStar::render($company->getTicker(), $currentUser, isset($watched[$company->getTicker()]), $csrfToken, $redirectTo))
+                ? sprintf('<td class="star-cell">%s</td>', WatchlistStar::render($company->getTicker(), $currentUser, isset($watched[$company->getTicker()]), $csrfToken, $redirectTo))
                 : '';
 
             $rows[] = sprintf(
-                '<tr><td class="rank-cell">%d</td>%s<td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td>%s<div class="muted">Vol. %s</div></td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td></tr>',
+                '<tr><td class="rank-cell">%d</td>%s<td><a class="ticker-link" href="%s"><div class="ticker">%s</div><div class="muted">%s<br>%s</div></a></td><td class="num">%s<div class="muted">Vol. %s</div></td><td class="score num">%s%%</td><td><span class="recommendation %s">%s</span></td></tr>',
                 $position + 1,
                 $starCell,
                 $detailHref,
@@ -376,18 +379,20 @@ HTML;
     }
 
     /**
-     * Nota de atribucion para el universo dinamico "Busqueda general" (ver
-     * versions.md v2.12): de donde salen los 20+20 tickers que se analizan
-     * por defecto. Solo se muestra cuando ese universo esta activo.
+     * Nota de atribucion para el universo dinamico "Movimientos de hoy"
+     * (ver versions.md v2.12): de donde salen sus 20+20 tickers. Solo se
+     * muestra cuando ese universo esta activo, y desde `v2.86` advierte de
+     * lo que se midio sobre esa poblacion: no es la que el motor sabe
+     * puntuar, y cambia casi entera cada dia.
      */
-    private static function renderGeneralUniverseNote(string $selectedUniverse, bool $isLive): string
+    private static function renderMoversUniverseNote(string $selectedUniverse, bool $isLive): string
     {
         if ($selectedUniverse !== 'general') {
             return '';
         }
 
         if ($isLive) {
-            return '<p class="muted panel-note">Universo "Busqueda general": las 20 acciones que mas suben y las 20 que mas bajan hoy en el mercado de EEUU, segun el listado "Day Gainers" / "Day Losers" de <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank" rel="noopener">Yahoo Finance</a>. Se analizan igual que cualquier otro universo para decidir que comprar, vender o mantener.</p>';
+            return '<p class="muted panel-note">Universo "Movimientos de hoy": las 20 acciones que mas suben y las 20 que mas bajan hoy en el mercado de EEUU, segun el listado "Day Gainers" / "Day Losers" de <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank" rel="noopener">Yahoo Finance</a>. <strong>No es una lista de candidatos a compra:</strong> son valores que ya se han movido mucho hoy, con menos datos fundamentales disponibles que un universo curado, y la lista cambia casi entera de un dia para otro, asi que una recomendacion de ayer no se puede seguir aqui.</p>';
         }
 
         return '<p class="muted panel-note">No se ha podido consultar en vivo el listado de subidas/bajadas de Yahoo Finance; se muestra una lista de respaldo diversificada en su lugar.</p>';

@@ -121,14 +121,21 @@ HTML;
         $pill = $alert->isRead() ? '' : '<span class="alert-pill">Sin leer</span>';
 
         return sprintf(
+            // Los botones cuelgan del <article> y no de .alert-head desde
+            // `v2.89`: dentro de la cabecera quedaban pegados a la primera
+            // linea, no centrados contra la tarjeta entera (que tiene dos
+            // lineas). Ahora .alert es una fila flex con el texto a la
+            // izquierda y las acciones centradas en altura a la derecha.
             '<article class="alert%s" id="alert-%d" tabindex="-1">'
+            . '<div class="alert-body">'
             . '<div class="alert-head">'
             . '<strong class="alert-ticker"><a href="?ticker=%s">%s</a></strong>'
             . '<time class="alert-date" datetime="%s">%s</time>'
             . '%s'
-            . '<div class="alert-actions">%s%s</div>'
             . '</div>'
             . '<p class="alert-message">%s</p>'
+            . '</div>'
+            . '<div class="alert-actions">%s%s</div>'
             . '</article>',
             $alert->isRead() ? '' : ' alert-unread',
             $alert->getId(),
@@ -137,9 +144,9 @@ HTML;
             Layout::escape($alert->getCreatedAt()->format(DateTimeInterface::ATOM)),
             Layout::escape($alert->getCreatedAt()->format('d/m/Y H:i')),
             $pill,
+            Layout::escape($alert->getMessage()),
             self::toggleForm($alert, $csrfToken),
-            self::deleteForm($alert, $csrfToken),
-            Layout::escape($alert->getMessage())
+            self::deleteForm($alert, $csrfToken)
         );
     }
 
@@ -156,7 +163,11 @@ HTML;
             $alert,
             $csrfToken,
             $read ? 'mark_unread' : 'mark_read',
-            $read ? '&#9675;' : '&#9679;',
+            // Marca de verificacion y no un circulo relleno/hueco (`v2.89`):
+            // el par ●/○ a 16px era indistinguible de un adorno y no decia
+            // que hacia el boton. La leida usa la marca con el trazo mas
+            // fino de "deshacer".
+            $read ? '&#10227;' : '&#10003;',
             $read ? 'Marcar como no leida' : 'Marcar como leida',
             'alert-action'
         );

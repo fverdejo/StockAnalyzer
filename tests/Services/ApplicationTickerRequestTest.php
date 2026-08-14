@@ -99,17 +99,35 @@ final class ApplicationTickerRequestTest extends TestCase
         self::assertNotContains('GAIN1', $tickers, 'No debe mezclarse con el universo dinamico.');
     }
 
-    public function testUnUniversoDesconocidoCaeEnElDinamicoPorDefecto(): void
+    public function testUnUniversoDesconocidoCaeEnElCuradoPorDefecto(): void
     {
         [, $tickers, $universe] = $this->resolve(['universe' => 'no-existe']);
 
-        self::assertSame('general', $universe);
-        self::assertSame(['GAIN1', 'GAIN2', 'LOSE1', 'LOSE2'], $tickers);
+        self::assertSame('largecap60', $universe);
+        self::assertSame((new UniverseConfig())->tickers('largecap60'), $tickers);
     }
 
-    public function testSinParametrosUsaElUniversoDinamico(): void
+    /**
+     * `v2.86`: la pantalla de entrada arranca en la lista curada, no en los
+     * movimientos del dia. El motivo esta medido (ver `Application::DEFAULT_UNIVERSE`):
+     * la poblacion de movers puntua mucho peor y rota casi entera cada dia.
+     */
+    public function testSinParametrosUsaElUniversoCuradoNoLosMovimientosDelDia(): void
     {
         [, $tickers, $universe] = $this->resolve([]);
+
+        self::assertSame('largecap60', $universe);
+        self::assertSame((new UniverseConfig())->tickers('largecap60'), $tickers);
+        self::assertNotContains('GAIN1', $tickers, 'El Home ya no arranca con el screener en vivo.');
+    }
+
+    /**
+     * El universo dinamico sigue existiendo y funcionando: solo deja de ser
+     * la pantalla de entrada.
+     */
+    public function testElUniversoDeMovimientosSigueResolviendoseEnVivoSiSePide(): void
+    {
+        [, $tickers, $universe] = $this->resolve(['universe' => 'general']);
 
         self::assertSame('general', $universe);
         self::assertSame(['GAIN1', 'GAIN2', 'LOSE1', 'LOSE2'], $tickers);
@@ -172,7 +190,7 @@ final class ApplicationTickerRequestTest extends TestCase
                 }
             });
 
-        [, $tickers, $universe] = $this->resolve([]);
+        [, $tickers, $universe] = $this->resolve(['universe' => 'general']);
 
         self::assertSame('general', $universe);
         self::assertNotSame([], $tickers);
@@ -198,7 +216,7 @@ final class ApplicationTickerRequestTest extends TestCase
                 }
             });
 
-        [, $tickers] = $this->resolve([]);
+        [, $tickers] = $this->resolve(['universe' => 'general']);
 
         self::assertSame((new UniverseConfig())->tickers('general'), $tickers);
     }

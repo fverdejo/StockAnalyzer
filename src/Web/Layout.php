@@ -458,6 +458,32 @@ class Layout
 
         .table-compact th, .table-compact td { font-size: 13px; padding: 9px 8px; }
 
+        /* Celdas numericas (v2.87). Lo unico que se hace con las columnas de
+           cifras de una cartera es compararlas entre filas, y alineadas a la
+           izquierda con digitos de ancho variable eso no se puede hacer: el
+           orden de magnitud queda escondido detras de una cifra mas larga.
+           `text-align: right` pone las unidades en la misma vertical y
+           `tabular-nums` da a cada digito el mismo ancho. La cabecera se
+           alinea igual para que el titulo no quede desplazado de su columna. */
+        .num,
+        th.num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Dato secundario de una celda (la equivalencia en euros de un importe
+           en divisa extranjera). Antes iba inline entre parentesis, lo que
+           duplicaba el ancho de cuatro columnas y hacia desbordar la tabla en
+           escritorio: bajado a una segunda linea, el ancho lo marca la cifra
+           principal y el dato sigue estando. */
+        .cell-sub {
+            display: block;
+            margin-top: 2px;
+            font-size: 11px;
+            line-height: 1.3;
+            color: var(--muted);
+        }
+
         /* Filas con celdas de altura muy desigual (una sola linea en unas
            columnas y dos o tres en otras, como las posiciones abiertas de la
            cartera: importes con su equivalencia en euros al lado de badges de
@@ -472,13 +498,22 @@ class Layout
            un glifo de 20px, asi que los centros de uno y otro no coincidian
            (11px de desfase, medidos): la estrella se veia corrida respecto a
            su propia cabecera. Centrando las dos, la columna queda a plomo sin
-           tocar el boton ni su area de pulsacion. */
-        .table-middle th:first-child,
-        .table-middle td:first-child {
+           tocar el boton ni su area de pulsacion.
+
+           Clase en la propia celda y no una regla posicional como
+           `.table-middle th:first-child` (que es lo que hubo hasta v2.89):
+           en el ranking del Home la estrella es la SEGUNDA columna, detras
+           del numero de posicion, asi que cualquier regla atada a
+           `:first-child` la dejaba sin centrar justo ahi. Y al extender
+           `.table-middle` al historial de operaciones, esa misma regla
+           habria centrado su columna "Fecha", que no lleva estrella. */
+        .star-cell {
+            width: 1%;
             text-align: center;
+            white-space: nowrap;
         }
 
-        .table-middle td:first-child .inline-form {
+        .star-cell .inline-form {
             display: inline-block;
         }
 
@@ -651,12 +686,6 @@ class Layout
         .risk-badge-quantity {
             background: var(--accent-soft);
             color: var(--accent-strong);
-        }
-
-        .concentration-list {
-            margin-top: 8px;
-            gap: 4px;
-            font-size: 13px;
         }
 
         .concentration-warning {
@@ -910,9 +939,9 @@ class Layout
 
         /* Acciones en cartera (v2.71). La columna heredo el espacio que
            ocupaba el formulario de venta por fila, asi que la cantidad se
-           destaca y la unidad queda en gris: el numero es el dato, "acc."
-           solo lo etiqueta. `tabular-nums` alinea los digitos entre filas
-           para poder comparar cantidades de un vistazo. */
+           destaca. La unidad que la acompañaba se retiro en v2.89: la
+           columna ya se titula "Acciones". `tabular-nums` alinea los
+           digitos entre filas para comparar cantidades de un vistazo. */
         .shares {
             white-space: nowrap;
             font-variant-numeric: tabular-nums;
@@ -926,12 +955,26 @@ class Layout
             gap: 10px;
         }
 
+        /* Fila: el texto a la izquierda y los dos botones centrados en
+           altura a la derecha (v2.89). Antes los botones vivian dentro de
+           .alert-head y quedaban clavados a la primera de las dos lineas de
+           la tarjeta, visiblemente altos respecto al mensaje. */
         .alert {
+            display: flex;
+            align-items: center;
+            gap: 12px;
             border: 1px solid var(--line);
             border-left: 4px solid var(--line-strong);
             border-radius: 6px;
             background: var(--surface-alt);
             padding: 9px 12px;
+        }
+
+        /* min-width: 0 para que un mensaje largo se ajuste en vez de
+           empujar los botones fuera de la tarjeta. */
+        .alert-body {
+            flex: 1;
+            min-width: 0;
         }
 
         /* Leido/sin leer no se distingue solo por el color del borde: la
@@ -977,8 +1020,8 @@ class Layout
 
         .alert-actions {
             display: flex;
+            flex-shrink: 0;
             gap: 4px;
-            margin-left: auto;
         }
 
         .alert-message {
@@ -987,16 +1030,24 @@ class Layout
             overflow-wrap: anywhere;
         }
 
+        /* El area de pulsacion ya era de 40px, pero el glifo iba a 16px y se
+           leia como un adorno. A 20px y centrado con flex (el `line-height`
+           solo no centra un glifo cuya caja tipografica no esta a media
+           altura, que es justo el caso de × y ✓). Ver v2.89. */
         .alert-action {
+            display: flex;
+            align-items: center;
+            justify-content: center;
             width: 40px;
             min-width: 40px;
+            height: 40px;
             min-height: 40px;
             border: 1px solid transparent;
             border-radius: 8px;
             padding: 0;
             background: transparent;
             color: var(--muted);
-            font-size: 16px;
+            font-size: 20px;
             line-height: 1;
         }
 
@@ -1130,6 +1181,101 @@ class Layout
         .score-bar-fill {
             height: 100%;
             background: var(--accent);
+        }
+
+        /* Los dos repartos de la concentracion (por posicion y por sector)
+           uno al lado del otro en pantalla ancha. Apilados a todo lo ancho
+           el panel crecia 166px en escritorio respecto a las listas que
+           sustituyen (medido con una cartera de 6 posiciones), y una barra
+           de 1.200px de ancho no se lee mejor que una de 580. Por debajo de
+           920px cae a una columna, que es donde las barras ganan de verdad:
+           el panel baja de 1.603px a 1.203px en movil. */
+        .concentration-groups {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0 28px;
+            align-items: start;
+        }
+
+        .concentration-groups .panel-subtitle {
+            margin-top: 12px;
+        }
+
+        @media (max-width: 920px) {
+            .concentration-groups {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Anillo de reparto por sector (v2.89). SVG en linea, sin libreria:
+           el trazo se dibuja con stroke-dasharray sobre un circulo y el
+           hueco de 2px entre porciones lo deja el propio calculo del arco,
+           asi que aqui no hay mas que geometria y tamaños. */
+        .donut {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-top: 12px;
+        }
+
+        .donut-svg {
+            flex-shrink: 0;
+            width: 140px;
+            height: 140px;
+            /* Empieza arriba, no a las 3 en punto, que es donde un lector
+               espera que arranque la porcion mas grande. */
+            transform: rotate(-90deg);
+        }
+
+        .donut-arc {
+            fill: none;
+            stroke-width: 20;
+        }
+
+        .donut-legend {
+            flex: 1;
+            min-width: 0;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        /* La leyenda no es decoracion: tres de los seis tonos no llegan a
+           3:1 contra el fondo blanco, asi que el nombre y el porcentaje
+           escritos son lo que hace legible el anillo, no un extra. */
+        .donut-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+            font-size: 13px;
+        }
+
+        .donut-swatch {
+            flex-shrink: 0;
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+        }
+
+        .donut-legend-label {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .donut-legend-value {
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        /* Barra que supera un umbral de aviso (concentracion de la cartera,
+           v2.87). Aqui el color si codifica un veredicto —"esto pesa mas de
+           lo recomendable"— asi que usa --warn, al contrario que las barras
+           de categoria del score, donde todas son el mismo accent porque
+           ninguna es peor que otra por definicion. */
+        .score-bar-fill-warn {
+            background: var(--warn);
         }
 
         .signal-history-return {
@@ -1322,6 +1468,29 @@ class Layout
             .footer-shell,
             .score-bar-head {
                 display: grid;
+            }
+
+            /* Excepcion a la regla de arriba (v2.87). Apilar etiqueta y valor
+               en movil existe para las barras del score, cuyas etiquetas son
+               frases ("Analisis fundamental", "24 / 30"). En la concentracion
+               de la cartera la etiqueta es un ticker o un sector y el valor un
+               porcentaje: caben de sobra en una linea de 338px, y apilarlos
+               costaba 26px por barra (234px con 9 barras). */
+            .concentration-groups .score-bar-head {
+                display: flex;
+            }
+
+            /* El anillo pasa a apilarse sobre su leyenda: a 140px de ancho
+               fijo mas la leyenda al lado, los nombres largos de sector
+               ("Servicios de Comunicacion") se partian en tres lineas. */
+            .donut {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+            }
+
+            .donut-svg {
+                align-self: center;
             }
 
             .list-row {

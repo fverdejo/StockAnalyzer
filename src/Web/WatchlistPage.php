@@ -84,7 +84,7 @@ HTML;
             $analysis = $analyses[$ticker] ?? null;
             $star = WatchlistStar::render($ticker, $user, true, $csrfToken, '?page=watchlist');
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td>%s</tr>',
+                '<tr><td class="star-cell">%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td>%s</tr>',
                 $star,
                 urlencode($ticker),
                 Layout::escape($ticker),
@@ -93,7 +93,12 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>&#9733;</th><th>Ticker</th><th>Siguiendo desde</th><th>Precio</th><th>Score</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+        // Misma densidad y misma alineacion que "Posiciones abiertas"
+        // (v2.87): esta tabla pinta la misma fila conceptual (un valor con
+        // su precio, su recomendacion y sus niveles de riesgo) y hasta
+        // ahora lo hacia con otra altura de fila y las cifras a la
+        // izquierda, asi que las dos pantallas no se leian igual.
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th class="star-cell">&#9733;</th><th>Ticker</th><th>Siguiendo desde</th><th class="num">Precio</th><th class="num">Score</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
     }
 
     private static function renderAnalysisCells(?StockAnalysis $analysis, ?string $errorMessage): string
@@ -107,7 +112,7 @@ HTML;
         $currency = $analysis->getStock()->getCompany()->getCurrency();
 
         return sprintf(
-            '<td>%s</td><td class="score">%s%%</td><td><span class="recommendation %s">%s</span></td><td>%s</td>',
+            '<td class="num">%s</td><td class="score num">%s%%</td><td><span class="recommendation %s">%s</span></td><td>%s</td>',
             Layout::escape(Layout::formatMoney($analysis->getStock()->getQuote()->getPrice(), $currency)),
             Layout::formatNumber($score->getPercentage()),
             Layout::recommendationClass($recommendation),

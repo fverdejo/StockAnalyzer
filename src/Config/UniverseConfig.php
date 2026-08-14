@@ -7,7 +7,13 @@ namespace StockAnalyzer\Config;
 class UniverseConfig
 {
     private const CONFIG_PATH = __DIR__ . '/../../config/universes.php';
-    private const FALLBACK_KEY = 'general';
+    /**
+     * Universo al que caen `tickers()`/`label()` cuando la clave pedida no
+     * existe. Debe coincidir con `Application::DEFAULT_UNIVERSE`: desde
+     * `v2.86` es la lista curada, no el universo dinamico de movimientos
+     * del dia (que rota el 90-95% cada sesion y no sirve de respaldo).
+     */
+    private const FALLBACK_KEY = 'largecap60';
 
     /**
      * Universos sectoriales homogeneos (agrupan por modelo de negocio, no
@@ -75,7 +81,7 @@ class UniverseConfig
     {
         $universes = $this->all();
 
-        return $universes[$key]['label'] ?? $universes[self::FALLBACK_KEY]['label'] ?? 'Busqueda general (por defecto)';
+        return $universes[$key]['label'] ?? $universes[self::FALLBACK_KEY]['label'] ?? 'EEUU liquidas 60 (por defecto)';
     }
 
     /**

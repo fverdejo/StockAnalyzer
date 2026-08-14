@@ -32,6 +32,21 @@ final class SyntheticStock
         );
     }
 
+    /**
+     * Igual, con el sector que interese. El sector viaja dentro del propio
+     * `Stock` del analisis desde `v2.47` y alimenta el panel de
+     * concentracion de la cartera, asi que hay tests que necesitan
+     * controlarlo.
+     */
+    public static function withSector(string $sector): Stock
+    {
+        return new Stock(
+            new Company('TST', 'Test Corp', $sector, 'software', 'NASDAQ', 'USD'),
+            new Quote(100.0, 100.0, 100.0, 100.0, 100.0, 1_000_000, new DateTimeImmutable('2024-01-01')),
+            self::excellentFundamentals()
+        );
+    }
+
     private static function excellentFundamentals(): Fundamentals
     {
         return new Fundamentals(

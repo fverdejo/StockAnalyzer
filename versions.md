@@ -6,7 +6,7 @@ Este documento resume el estado real del proyecto frente a `project.md` y `roadm
 
 La aplicacion es una demo funcional avanzada, ahora con la fase de producto personal implementada hasta `v2.26`. Permite consultar acciones reales en Yahoo Finance, calcular indicadores tecnicos completos (incluyendo EMA, MACD, Bollinger y ATR, con stop-loss/objetivo sugeridos basados en ATR14, `v2.19`) y fundamentales reales (PER, PEG, ROE, margenes, deuda, dividendo...), combinarlos en un score con pesos configurables por categoria y explicado punto por punto (con el resumen y los "indicadores determinantes" mostrando de forma equilibrada tanto el analisis tecnico como el fundamental, no solo el primero), y mostrar tanto un ranking como una ficha de detalle por accion con graficos Chart.js mas altos y con temporalidades intradia, incluido el historial real de la señal de compra de cada ticker (`v2.23`).
 
-Tambien incluye cuentas de usuario con verificacion de email obligatoria (con Mailpit disponible en local via DDEV, y enlace absoluto y clicable desde `v2.20`), migraciones SQL para MariaDB, cartera simulada basada en operaciones inmutables (con compra/venta por importe en dinero, rentabilidad por operacion en el historico, precio de cada operacion mostrado tambien en euros y dolares cuando aplica, `v2.25`, grafico de evolucion del valor de la cartera en el tiempo y exportacion CSV de posiciones abiertas e historial de operaciones, `v2.26`), watchlist personal con boton de seguimiento en la ficha de detalle, alertas basicas dentro de la propia web cuando cambia la recomendacion de una accion de la cartera o la watchlist, menu de navegacion, configuracion local de proveedor, tooltips/explicaciones ampliadas de indicadores, graficos con temporalidad seleccionable (desde 1 semana hasta 2 años, mas intradia por velas de 1h/15m/5m/1m) y maximo/minimo diario, cache de datos de mercado, rankings diarios guardados, universos configurables (incluido `ibex35` completo a 35 valores y 4 universos ADR geograficos nuevos, `v2.24`), busqueda por ticker o nombre de empresa, API JSON, backtesting basico (con simulacion de gestion por stop-loss/objetivo, `v2.21`) y noticias/sentimiento importables por CSV. El universo por defecto del Home ("general") ya no es una lista fija: se construye en vivo con las 20 acciones que mas suben y las 20 que mas bajan hoy segun Yahoo Finance, con una lista de respaldo si ese dato en vivo falla.
+Tambien incluye cuentas de usuario con verificacion de email obligatoria (con Mailpit disponible en local via DDEV, y enlace absoluto y clicable desde `v2.20`), migraciones SQL para MariaDB, cartera simulada basada en operaciones inmutables (con compra/venta por importe en dinero, rentabilidad por operacion en el historico, precio de cada operacion mostrado tambien en euros y dolares cuando aplica, `v2.25`, grafico de evolucion del valor de la cartera en el tiempo y exportacion CSV de posiciones abiertas e historial de operaciones, `v2.26`), watchlist personal con boton de seguimiento en la ficha de detalle, alertas basicas dentro de la propia web cuando cambia la recomendacion de una accion de la cartera o la watchlist, menu de navegacion, configuracion local de proveedor, tooltips/explicaciones ampliadas de indicadores, graficos con temporalidad seleccionable (desde 1 semana hasta 2 años, mas intradia por velas de 1h/15m/5m/1m) y maximo/minimo diario, cache de datos de mercado, rankings diarios guardados, universos configurables (incluido `ibex35` completo a 35 valores y 4 universos ADR geograficos nuevos, `v2.24`), busqueda por ticker o nombre de empresa, API JSON, backtesting basico (con simulacion de gestion por stop-loss/objetivo, `v2.21`) y noticias/sentimiento importables por CSV. El universo por defecto del Home es una lista curada estable (`largecap60`) desde `v2.86`; el universo dinamico que se construye en vivo con las 20 acciones que mas suben y las 20 que mas bajan hoy segun Yahoo Finance sigue disponible como "Movimientos de hoy", con una lista de respaldo si ese dato en vivo falla.
 
 No es todavia una plataforma robusta de produccion porque faltan tests automatizados de extremo a extremo (si hay una suite `phpunit` con 26 tests, ver `v2.21`, pero no cubre todavia la mayoria de `Services`/`Web`) y proveedores externos oficiales para noticias/datos. Ademas, la obtencion de fundamentales depende de un endpoint no oficial de Yahoo Finance (ver v1.3); si falla, la aplicacion sigue funcionando con el resto de indicadores.
 
@@ -4143,6 +4143,272 @@ La pagina deja de fallar accesibilidad en su badge mas frecuente, de partir tick
 
 ---
 
+## v2.86 - El Home deja de arrancar en los movimientos del dia
+
+Estado: implementado.
+
+Objetivo:
+
+Cerrar la idea que `analista-mercado` dejo anotada el `2026-08-10` en "Ideas adicionales sugeridas": la pantalla de entrada de la aplicacion analizaba el universo `general`, que desde `v2.12` son las 20 acciones que mas suben y las 20 que mas bajan hoy segun el screener de Yahoo. **Decision del usuario en esta sesion**, sobre las cifras ya medidas entonces.
+
+El problema no es que el screener funcione mal, sino que esa poblacion no es la que este motor sabe puntuar:
+
+| | `general` (movers) | `largecap60` |
+|---|---|---|
+| Mediana de score | 43,6 | 60,2 |
+| Tickers en SELL/STRONG SELL | 35 de 40 | — |
+| Ratios fundamentales ausentes por ticker | 3,25 de 12 (58% sin PER) | 0,88 de 12 |
+| `RISK` saturado a 0,0 | 16 de 40 | — |
+| Solape de la lista con la sesion siguiente | 5-9% | 100% |
+
+Y dos consecuencias que no son de calidad de datos sino de producto: ningun ticker de los 40 pertenece a un universo curado, asi que el respaldo de grupo de pares del historial de señal (`v2.34`) no se activa nunca en la pantalla de entrada; y con el 90-95% de la lista cambiando cada dia, `score_history`/`fundamentals_history` acumulan una fila suelta de 40 tickers nuevos al dia en vez de profundidad temporal — justo lo contrario de lo que `v2.79` acababa de desbloquear.
+
+### Que cambia
+
+- `Application::DEFAULT_UNIVERSE` pasa de `general` a `largecap60`. La constante llevaba haciendo dos trabajos a la vez (cual es el universo por defecto y cual es el universo dinamico), asi que se parte en dos: `DEFAULT_UNIVERSE` y `MOVERS_UNIVERSE`. Sin esa separacion, cambiar el defecto habria apagado el screener.
+- `general` se queda como universo seleccionable, con etiqueta **"Movimientos de hoy"** en vez de "Busqueda general": el nombre anterior lo describia como la busqueda normal de la aplicacion, que es exactamente lo que ha dejado de ser.
+- Su nota de atribucion pasa a advertir de lo que se midio: no es una lista de candidatos a compra, son valores que ya se han movido mucho hoy, con menos datos fundamentales, y la lista cambia casi entera de un dia para otro, asi que una recomendacion de ayer no se puede seguir ahi.
+- `UniverseConfig::FALLBACK_KEY` (a donde caen `tickers()`/`label()` con una clave desconocida) pasa tambien a `largecap60`: un universo que rota el 90% cada sesion no sirve de respaldo de nada.
+- `config/universes.php` reordena `largecap60` al principio, que es donde el desplegable del Home lo pinta.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **195 tests, 621 assertions, OK**. `ApplicationTickerRequestTest` gana un caso nuevo (`?universe=general` sigue resolviendo el screener en vivo) y dos de los suyos cambian de expectativa a proposito: sin parametros y con universo desconocido ahora se cae en `largecap60`, no en los movers.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- HTTP real contra ddev: `?` en 200 con `largecap60` seleccionado en el desplegable y 60 filas de ranking; `?universe=general` en 200 con "Movimientos de hoy" seleccionado y la nueva advertencia presente.
+
+Limitaciones conocidas:
+
+- El sesgo de supervivencia de `largecap60` (es la lista de hoy, no la de hace 10 años) sigue igual de presente que antes; este cambio no lo toca.
+- La primera carga del dia del Home pasa a analizar 60 tickers en vez de 40 (28s medidos sin cache, ~0,2s con ella). A cambio, esos 60 son siempre los mismos, asi que la cache y las series historicas si sirven de un dia para otro.
+
+---
+
+## v2.87 - "Mi cartera": los tres bloques de rediseño que quedaban aprobados
+
+Estado: implementado.
+
+Objetivo:
+
+`v2.85` implemento los 6 bugs de la auditoria de `diseno-usabilidad` y dejo los tres bloques de rediseño aprobados por el usuario y aplazados "a una sesion con tiempo". Son estos.
+
+Todo lo de aqui abajo esta **medido en Chromium** sobre la pagina renderizada, antes y despues, con la misma cartera sintetica de 6 posiciones y 2 divisas (`bin/render-portfolio-fixture.php`, nuevo, ver mas abajo), en escritorio (1280x900) y en movil (390x844).
+
+### 1. Reordenar los paneles
+
+Tarjetas -> **posiciones abiertas** -> grafico de evolucion -> concentracion -> historial. Las posiciones son el motivo de entrar en la pagina y estaban las terceras.
+
+| | antes | despues |
+|---|---|---|
+| "Posiciones abiertas" empieza en (escritorio) | y=1.271 | **y=419** |
+| "Posiciones abiertas" empieza en (movil) | y=2.750 | **y=890** |
+
+Cambio de interpolaciones dentro del heredoc de `render()`. El `<script>` de Chart.js se emite dentro de `renderValueHistoryChart()`, asi que viaja con su grafico y no hace falta tocarlo por separado.
+
+### 2. Las cifras a la derecha, y la equivalencia en euros a una segunda linea
+
+Clase `.num` (`text-align: right` + `font-variant-numeric: tabular-nums`) en Acciones / Precio medio / Precio actual / Invertido / Beneficio, cabecera incluida. Lo unico que se hace con esas columnas es compararlas entre filas, y alineadas a la izquierda con digitos de ancho variable eso no se puede hacer.
+
+La equivalencia en euros baja de inline entre parentesis a una segunda linea `.cell-sub` de 11px en gris: inline duplicaba el ancho de cuatro columnas. La tabla de posiciones baja de 667px a **607px** de alto en escritorio y de 1.153px a **1.000px** en movil.
+
+La misma densidad y alineacion se aplica al **historial de operaciones** y a la **watchlist** (`WatchlistPage`), que pintaban la misma fila conceptual con otra altura y las cifras a la izquierda. Eso obligo a un arreglo previo: la regla que centra la columna de la estrella colgaba de `.table-middle th:first-child`, y al extender `.table-middle` al historial habria centrado su columna "Fecha". Se parte en una clase propia `.table-star`.
+
+### 3. Panel de concentracion reescrito
+
+- Las listas `.list-row` pasan a **barras horizontales** reutilizando `.score-bars` (ya en la hoja de estilos, cero JavaScript). Las que superan el umbral se pintan ademas en `--warn` con un modificador nuevo `.score-bar-fill-warn`: aqui el color si codifica un veredicto, al contrario que en las barras de categoria del score.
+- **"Por divisa" deja de ser una lista fija**: se resume en una linea y solo se convierte en aviso destacado si se supera el umbral del 70%, con el patron condicional que ya usa `DashboardPage::renderSectorNote()`.
+- **El HHI crudo sale de las tarjetas** y baja al `data-tooltip` de un `.info-icon` sobre "Posiciones efectivas": es la cifra de la que sale esa otra, y a 24px en negrita competia con su propia traduccion.
+- Los subtitulos pasan a `<h3 class="panel-subtitle">` en vez de `.metric`, que quitaba el efecto de tarjeta dentro de tarjeta.
+
+Dos ajustes que **solo aparecieron al medir**, no estaban en el plan de la auditoria:
+
+- Apiladas a todo lo ancho, las barras hacian el panel **166px mas alto** que las listas que sustituyen en escritorio (una barra de 1.200px no se lee mejor que una de 580). Se resuelve con `.concentration-groups`, una rejilla de dos columnas por encima de 920px.
+- En movil, `.score-bar-head` pasa a `display: grid` de una columna por una regla existente pensada para las etiquetas largas del score ("Analisis fundamental" / "24 / 30"). Con tickers y porcentajes eso costaba 26px por barra, 234px con 9 barras: excepcion acotada a `.concentration-groups`.
+
+| panel de concentracion | antes | despues |
+|---|---|---|
+| alto en escritorio | 552px | 555px (con barras en vez de listas) |
+| alto en movil | 1.603px | **923px** |
+| pagina completa en movil | 4.782px | **3.822px** |
+
+### `bin/render-portfolio-fixture.php` (nuevo)
+
+Renderiza "Mi cartera" con una cartera sintetica a stdout, con tres presets (`full`, `single`, `nosector`). Existe porque la pagina real exige sesion y la cartera del usuario no se toca: sin esto, cualquier medicion en navegador de esta pantalla hay que rehacerla desde cero cada vez. `v2.80` dejo anotado como limitacion que su script de Playwright fue de un solo uso; esta es la mitad cara de aquel trabajo, y se queda en el repositorio.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **200 tests, 645 assertions, OK**. Cinco casos nuevos en `PortfolioPageTest`: orden de los paneles, barras con umbral aplicado (3 de 4 barras en aviso, la cuarta no), el reparto por divisa en sus dos ramas (resumen y aviso), "Sin sector" nunca marcado como concentracion (la regresion de `v2.85` bug 4 en su nueva forma) y las cabeceras numericas.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Medido en Chromium**, escritorio y movil, con los tres presets. Los cuatro casos limite que pedia la auditoria, comprobados uno a uno: 1 posicion (2 barras, ambas en aviso al 100%), 1 sector, "Sin sector" al 100% sin chip de aviso, y cartera solo en euros (sin segunda linea de equivalencia, correcto).
+- El caso de aviso de divisa se ejercito de verdad (preset `nosector`, 90,34% en USD): sale el aviso destacado y no la linea de resumen.
+- Capturas de pagina completa revisadas a ojo en ambos anchos.
+
+Limitaciones conocidas:
+
+- La tabla de posiciones sigue desbordando en movil (909px de contenido en 338px de ancho): son 9 columnas, y eso no lo arregla la alineacion. El `overflow-x` de `.table-wrap` sigue siendo la respuesta ahi.
+- Las dos cosas que la auditoria marco como decisiones de producto siguen sin tocar: `SELL` y `STRONG SELL` comparten pildora rosa, y no hay dark mode.
+- El panel de concentracion no adelgaza en escritorio (555px frente a 552px). Lo que mejora ahi es la lectura, no el espacio; el ahorro real es de movil.
+
+---
+
+## v2.88 - El peso del bloque RISK, medido de nuevo: el lastre no aparece
+
+Estado: investigado, sin cambio de codigo (solo el comentario que deja la razon escrita en `config/weights.php`).
+
+Objetivo:
+
+`v2.78` cerro sus tres frentes y elevo al usuario una decision de producto: neutralizar o rebajar `RISK` era "el unico cambio probado que mejora los tres universos a la vez, alpha media de -0,18 a -0,06". El usuario decide en esta sesion **bajarlo a la mitad**, con la condicion explicita de medirlo antes y despues con backtest real.
+
+Se midio. **El resultado no reproduce aquel hallazgo, asi que el peso se queda en 10.**
+
+Metodo: `bin/backtest.php --cross-sectional --horizon=20 --history=10y --top=10`, que es la metrica que responde lo que la aplicacion promete (alpha del top-10 del ranking contra la media del universo, no umbrales absolutos ticker a ticker). 6 universos, ~121 fechas independientes cada uno, 10 años de historico, con las clases de produccion.
+
+| universo | `risk` = 10 | `risk` = 5 | `risk` = 1 |
+|---|---|---|---|
+| `largecap60` | -0,22 | -0,18 | -0,20 |
+| `ibex35` | -0,03 | -0,06 | -0,06 |
+| `healthcare` | -0,17 | -0,07 | -0,07 |
+| `industrials` | -0,15 | -0,14 | -0,10 |
+| `consumer_staples` | +0,03 | +0,03 | +0,02 |
+| `energy` | +0,28 | +0,27 | +0,34 |
+| **media** | **-0,043** | **-0,025** | **-0,012** |
+
+Bajar el peso a la mitad mejora **3 universos de 6**, empeora 2 y deja 1 igual, y mueve la media +0,018 pp. El error tipico de la alpha por universo esta en 0,19-0,23 pp y ningun t-stat pasa de |1,61|: **toda la curva de 10 a 1 cabe dentro del ruido**. No hay ninguna ganancia que justifique rebajar una penalizacion de volatilidad que es intencionada y que sostiene el stop-loss sugerido (`v2.19`) y la cantidad sugerida (`v2.50`).
+
+Por que `v2.78` vio otra cosa: midio 3 universos y no 6, y su cifra de "neutralizado" corresponde a apagar el bloque, no a partirlo por la mitad. Sobre esos mismos 3 universos, la media de aqui va de -0,14 (peso 10) a -0,11 (peso 1) — mismo signo que entonces, un tercio del tamaño, y sin significancia. La leccion es la de siempre en este proyecto: una diferencia de 0,1 pp en 3 universos no sobrevive a medirse en 6.
+
+Verificado:
+
+- Las 18 ejecuciones de la tabla son reales contra Yahoo (historico ya cacheado a 7 dias desde `v2.79`), una por universo y ajuste.
+- `config/weights.php` vuelve a `'risk' => 10` y `git diff` confirma que del experimento solo queda el comentario con la medicion.
+- `ddev exec vendor/bin/phpunit`: **200 tests, 645 assertions, OK**.
+
+Limitaciones conocidas:
+
+- Sigue en pie el sesgo de anticipacion de los fundamentales (`stockAt()` usa los de hoy, ver backlog): el 56% del peso del score entra como constante por ticker tambien en esta medicion, asi que lo que se ha medido de verdad es como se comporta `RISK` **dentro** de un score cuya mitad fundamental no varia en el tiempo.
+- No se ha probado cambiar la formula de `TechnicalScoreAnalyzer::risk()` (que satura a 0 con volatilidad alta, ver `v2.86`), solo su peso.
+
+---
+
+## v2.89 - Cuatro correcciones de la revision del usuario, y el diagrama de sectores
+
+Estado: implementado.
+
+Objetivo:
+
+El usuario revisa `v2.86`-`v2.88` con capturas y pide cuatro cosas. La cuarta reabre —y esta vez decide— la unica idea de diseño que quedaba anotada como "decidida en contra" en el roadmap.
+
+### 1. La unidad "acc." sale de la columna Acciones
+
+Cada fila repetia "acc." detras de la cantidad en una columna ya titulada "Acciones". Se mantiene en el badge `RiskLevelsBadge` ("Sugerido ~2,1 acc."), que va suelto entre niveles de precio y ahi si distingue una cosa de otra.
+
+### 2. Los botones de las alertas: centrados y visibles
+
+Dos problemas distintos en el mismo sitio:
+
+- **No estaban centrados** porque vivian dentro de `.alert-head`, la fila del ticker y la fecha: quedaban clavados a la primera de las dos lineas de la tarjeta, no a su centro. Ahora `.alert` es una fila flex —`.alert-body` con el texto, `.alert-actions` a la derecha— y los botones se centran contra la tarjeta entera, tenga el mensaje una linea o tres.
+- **Se veian pequeños** aunque el area de pulsacion ya fuera de 40x40: el glifo iba a 16px. Sube a 20px y se centra con flex, porque `line-height` solo no centra un glifo cuya caja tipografica no esta a media altura (que es justo el caso de `×`). De paso, el par ●/○ de "marcar como leida" pasa a ✓/↻: un circulo relleno no dice que hace el boton.
+
+### 3. El ranking del Home, a plomo
+
+La tabla del ranking no llevaba `.table-middle`, asi que en filas de tres lineas (ticker + nombre + mercado) el numero de posicion y la estrella se quedaban arriba. Medido despues del cambio: las cinco celdas de la primera fila comparten centro vertical exacto (y=1.002, altura de fila 95px).
+
+Eso obligo a un cambio previo: la regla que centra la columna de la estrella colgaba de `.table-star th:first-child`, y en el ranking la estrella es la **segunda** columna, detras del numero. Se sustituye por una clase en la propia celda, `.star-cell`, que funciona este donde este. De paso, Precio y Score pasan a `.num` como el resto de columnas de cifras de la aplicacion.
+
+### 4. Diagrama de sectores (y los sectores, en español)
+
+El usuario ya habia preguntado por un diagrama de sectores; se descarto en su dia con un motivo concreto anotado en `roadmap.md` —la aplicacion no tenia paleta categorica, solo un accent y `--good`/`--warn`/`--bad`, que significan *veredicto*: un sector en rojo se leeria como "sector malo"— y con una condicion para retomarlo: definir antes tokens de color categoricos validados. Ahora lo pide explicitamente, con la lista de los once sectores. Se hace, cumpliendo la condicion.
+
+**La paleta se valido, no se eligio a ojo.** Son los ocho tonos de la paleta de referencia de la skill `dataviz`, pasados por su validador contra fondo blanco: banda de luminosidad, suelo de croma, separacion para daltonismo (peor par adyacente ΔE 9,1 protan sobre un objetivo de 8) y separacion en vision normal (peor par 19,6 sobre un suelo de 15). El listado de adyacencias es el correcto para un anillo —que es una barra apilada doblada, donde cada porcion solo toca a la anterior y la siguiente— e incluye el par de cierre, que se comprobo aparte (rojo-azul, ΔE 21,6). El validador marca `WARN` de contraste en tres de los ocho tonos, lo que **obliga** a que el nombre y el porcentaje esten escritos al lado de cada porcion: por eso la leyenda no es decorativa.
+
+**SVG en linea, no Chart.js**: son 9 porciones como mucho, sin ejes, y asi el panel se pinta con JavaScript desactivado. El hueco de 2px entre porciones sale del propio calculo del arco.
+
+**Los nombres, en español.** Yahoo sirve la taxonomia de Morningstar —exactamente los once sectores que enumero el usuario— siempre en ingles. `Web\SectorLabel` (nuevo) traduce **solo al pintar**: el valor en ingles sigue siendo la clave con la que agrupan `PortfolioConcentrationCalculator` y `RankingSectorConcentrationCalculator`, y traducirlo antes obligaria a traducir de vuelta para comparar. Un sector que Yahoo añadiera despues se enseña tal cual, sin inventarle traduccion. La misma traduccion se aplica al aviso de concentracion sectorial del ranking del Home, que hasta ahora mezclaba "Financial Services" con texto en español.
+
+**Dos decisiones documentadas, porque las dos tienen coste:**
+
+- **Ocho sectores con color propio y el resto en "Otros", no seis.** La guia recomienda como mucho seis porciones en un anillo, y esa fue la primera version. Se cambio **al verlo renderizado**: con seis, una cartera repartida en nueve sectores dejaba un "Otros" del 25,84%, o sea la porcion mas grande del grafico era la que no dice nada. Con ocho, "Otros" agrupa como mucho los tres sectores mas pequeños de la taxonomia (6,20% en el mismo caso). Se prefiere una porcion de mas a un anillo cuya mayor porcion sea un cajon de sastre.
+- **El color va por orden de peso, no fijo por sector.** Con once sectores posibles y ocho tonos validados no hay forma de dar un color estable a cada uno, e inventar tres tonos mas es lo que la guia prohibe. Como cada anillo se lee contra su propia leyenda, ordenada igual, aqui el color hace de indice a la leyenda y no de identidad permanente entre pantallas.
+
+Limitacion asumida y consciente: **un anillo compara mal valores parecidos**, y una cartera repartida los tiene (14,74% / 13,98% / 12,26%...). Es literalmente el caso que la guia desaconseja. Se acepta porque la pregunta de este panel es "¿estoy repartido o concentrado?", que es lo que un anillo enseña de un vistazo, y porque la cifra exacta sigue escrita al lado de cada sector. El reparto **por posicion** se queda en barras, que es donde si se comparan valores.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **202 tests, 656 assertions, OK**. Dos casos nuevos: el anillo con nombres traducidos (y sin rastro de los ingleses) y el agrupamiento en "Otros" a partir del noveno sector. Tres casos existentes cambian de expectativa a proposito (la unidad "acc.", el numero de barras en aviso ahora que los sectores no son barras, y el nombre del test de la unidad).
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Paleta validada con el script**, no razonada: `validate_palette.js` sobre los 8 tonos, sobre el par de cierre del anillo y sobre el gris de "Otros" entre sus dos vecinos reales. El gris incumple a proposito el suelo de croma (un residuo no debe competir con los sectores reales); su separacion contra ambos vecinos si pasa.
+- **Medido y capturado en Chromium**: el anillo con 3 y con 9 sectores, en escritorio y en movil (donde pasa a apilarse sobre su leyenda, porque "Servicios de Comunicacion" a 140px de anillo al lado se partia en tres lineas); la alineacion del ranking celda a celda; la tabla de posiciones sin la unidad; y las alertas con mensaje de una y de tres lineas.
+- `bin/render-portfolio-fixture.php` gana un preset `sectors` (9 sectores distintos) para que el caso del anillo con "Otros" sea repetible.
+
+Limitaciones conocidas:
+
+- Sin dark mode, como el resto de la aplicacion. La paleta de referencia trae sus pasos oscuros ya validados, asi que el dia que se haga el trabajo ya esta hecho.
+- El anillo no tiene tooltip propio: usa el `<title>` nativo del SVG. Con la leyenda al lado no hace falta mas.
+
+---
+
+## v2.90 - La suite empieza a hablar con MySQL
+
+Estado: implementado.
+
+Objetivo:
+
+Cerrar el pendiente de prioridad media que quedaba sin depender de un proveedor externo ni de que se acumule historial: "ampliar la cobertura de tests a `Repository/` y al resto de rutas de `Application.php`". Y con el, el pendiente suelto que `roadmap.md` arrastraba desde `v2.69`: **"un test de integracion contra MySQL para el `AND user_id` de las alertas; la comprobacion manual con dos usuarios ya se hizo y pasa, pero nada impide una regresion futura"**.
+
+Hasta aqui la suite entera funcionaba sin base de datos. Eso dejaba fuera justo lo que solo demuestra el motor: que un `WHERE ... AND user_id` aisla a un usuario de otro, que un `UNIQUE` impide duplicar, que un `ON DELETE CASCADE` limpia lo que debe y que una clave primaria compuesta separa de verdad dos filas.
+
+**De 202 a 246 tests** (44 nuevos: 32 de integracion y 12 unitarios).
+
+### La infraestructura: `tests/Integration/IntegrationTestCase.php`
+
+Tres reglas, en este orden de importancia:
+
+1. **Nunca la base de datos de la aplicacion.** La conexion sale de `DB_DSN_TEST`, no de `DB_DSN`; sin ella se usa el esquema `test` que DDEV ya crea aparte. Antes de conectar, `assertNotAppDatabase()` compara el esquema destino con el de la aplicacion y aborta si coinciden. No es paranoia decorativa: estos tests hacen `TRUNCATE` de `users`, `transactions` y `alerts`, y el usuario tiene ahi su cartera real. La comprobacion **lee `DB_DSN` del fichero `.env`** y no solo del entorno, porque en el entorno casi nunca esta y la guarda habria pasado de largo justo cuando hace falta.
+2. **Se saltan solos si no hay base de datos**, con el motivo escrito en el skip. La suite sigue verde donde no haya MySQL delante.
+3. **Cada test arranca con las tablas vacias.**
+
+El esquema de pruebas se construye **desde cero en cada ejecucion** con las migraciones reales de `database/migrations/`, no con un esquema paralelo escrito a mano: si el esquema de los tests y el de produccion divergen, estos tests dejan de demostrar nada.
+
+Reconstruir en vez de "aplicar lo que falte" no es pereza, y salio de un fallo real durante el desarrollo: **las migraciones de este proyecto no son idempotentes y no pueden serlo.** La `017` borra de `market_data_cache` las dos columnas que la `014` necesita para su `ADD COLUMN ... AFTER history_cached_at`, asi que la segunda pasada sobre un esquema ya migrado moria con `Unknown column 'history_cached_at'`. Ese orden es correcto en produccion, donde cada migracion se aplica una vez. Partiendo de vacio, el problema desaparece y las migraciones se aplican **sin ninguna tolerancia a errores**, que es como interesa: que un fallo de migracion salte aqui y no en la Raspberry.
+
+(De paso, el troceador de sentencias quita los comentarios antes de partir por `;`. Varias migraciones llevan comentarios `--` en prosa, con puntos y comas dentro, y partir en crudo dejaba media frase como si fuera SQL.)
+
+### Lo que se cubre
+
+| Fichero | Casos | Que demuestra |
+|---|---|---|
+| `AlertRepositoryUserScopeTest` | 11 | El `AND user_id` en las 7 operaciones de alertas |
+| `UserScopedRepositoriesTest` | 7 | Aislamiento de watchlist y operaciones, `UNIQUE`, fracciones de accion, cascada |
+| `UserRepositoryTest` | 8 | Registro, `UNIQUE` del email, tokens de verificacion y su caducidad |
+| `MarketHistoryCacheRangeTest` | 6 | La clave `(ticker, history_range)` de `v2.79` |
+| `PortfolioCsvExporterTest` | 7 | El contrato de formato del CSV (`v2.26`) |
+| `ApplicationHoldingsAnalysisTest` | 5 | Que un fallo del proveedor en un ticker no tumba la cartera |
+
+Cuatro cosas que merece la pena destacar:
+
+- **Las alertas** son el unico sitio de la aplicacion donde un id llega directo del POST del cliente y se usa en un `WHERE`. Sin `AND user_id`, cualquiera podria marcar o borrar alertas ajenas iterando ids. Estos casos **no se pueden escribir con un doble en memoria**: `InMemoryAlertRepository` implementa el filtro en PHP, asi que probaria el doble y no el SQL, que es donde vive el riesgo.
+- **La cache de historico por rango** (`v2.79`) tiene un caso escrito tal y como ocurria el fallo: la web deja su serie de 2 años, pasa un backtest con `--history=10y`, y se comprueba que la web sigue viendo la suya. Con la clave anterior (solo el ticker) se pisaban mutuamente sin que nadie se enterara. `CachedMarketDataProviderTtlTest` ya cubria la otra mitad (TTL distinto por rango), pero con dobles: nunca tocaba la tabla.
+- **Las fracciones de accion** (`v2.2`/`v2.6`) hacen un viaje de ida y vuelta real a la columna `DECIMAL`: 0,978785 acciones a 347,750865 salen como entraron. Un `FLOAT` en la columna se comeria decimales, y eso no lo ve ningun test que no pase por la base de datos.
+- **El `catch (Throwable)` silencioso de `analyzeHoldingsForAlerts()`** es exactamente el tipo de codigo que se rompe sin que nadie se entere: basta mover una linea fuera del `try` para que un ticker retirado tumbe "Mi cartera" entera. Ahora hay un caso con tres posiciones donde la de en medio lanza, y otro que comprueba que del ticker que falla no queda ningun dato a medias ni se actualiza su estado de alerta (registrarlo generaria una alerta falsa en la siguiente visita).
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **246 tests, 766 assertions, OK**.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Los tests de aislamiento se comprobaron por mutacion, no solo viendolos pasar**: quitando el `AND user_id` de `markRead()` y de `delete()` fallan exactamente 3 casos, y al restaurarlo vuelven a pasar los 11. Un test que pasa por el motivo equivocado no demuestra nada.
+- **Las dos salvaguardas, ejercitadas**: con `DB_DSN_TEST` apuntando a un host inexistente, los 32 casos se **saltan** (no fallan); apuntando al esquema de la aplicacion, abortan con "DB_DSN_TEST apunta al mismo esquema que la aplicacion (db). Estos tests hacen TRUNCATE."
+- **La base de datos real, intacta** despues de toda la sesion: 1 usuario, 13 operaciones, 2 alertas.
+- Repetibilidad comprobada ejecutando la suite de integracion dos veces seguidas.
+
+Limitaciones conocidas:
+
+- **Los tests de integracion solo corren dentro de `ddev exec`.** El `php` del host no tiene driver PDO (ni las extensiones `dom`/`xmlwriter` que pide PHPUnit, ya anotado en `v2.80`), asi que ahi no se saltan: es que PHPUnit no arranca. La verificacion de este proyecto se sigue haciendo siempre con `ddev exec`.
+- Reconstruir el esquema cuesta ~1,3s por proceso de phpunit. La suite pasa de 0,1s a ~4,8s. Es el precio de que el esquema de pruebas sea el de las migraciones y no una copia.
+- Siguen sin cobertura los repositorios de cache que no son el de historico (`market_movers_cache`, `ticker_backtest_cache`, `corporate_profile_cache`), `DailyRankingRepository` y `NewsRepository`. Son los de menos riesgo: sin `user_id` que aislar y sin clave compuesta que pueda colisionar.
+- De `Application.php` se cubre `analyzeHoldingsForAlerts()`, `resolveTickerRequest()` (`v2.79`) y `applyAlertsAction()` (ya existente). Las rutas que renderizan pagina siguen sin test: dependen de `redirect()`, que hace `exit`.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
@@ -4168,6 +4434,6 @@ Ideas nuevas anotadas por `analista-mercado` el 2026-08-09, tras revisar el moto
 
 Ideas nuevas anotadas por `analista-mercado` el 2026-08-10, tras revisar el universo por defecto del Home (`config/universes.php` linea 12 + `Services\Application::resolveGeneralUniverseTickers()`, linea 466) y medirlo con las clases de produccion sobre los 40 movers reales de hoy y sobre `largecap60`/`ibex35`/`healthcare`/`industrials`/`consumer_staples`/`energy` (34.765 muestras walk-forward a 10 años + 121 fechas independientes por universo en `--cross-sectional`). Tampoco estan pedidas ni comprometidas.
 
-- **El universo por defecto del Home (`general` = `day_gainers` + `day_losers`) no es la poblacion que este motor sabe puntuar; conviene que el Home arranque en una lista curada estable.** Medido sobre los 40 movers de hoy con `StockAnalysisService`: median de score 43,6 frente a 60,2 en `largecap60`, 35 de 40 en SELL/STRONG SELL en una pantalla titulada "que comprar hoy", 3,25 de 12 ratios fundamentales ausentes por ticker (frente a 0,88) con el 58% sin PER, `RISK` clavado en 0,0 en 16 de los 40 (la formula `max(0, 6 - vol*1,1)` de `TechnicalScoreAnalyzer::risk()` satura) y `QUALITY` en 0,0 en 12 de los 40; ademas 0 de los 40 tickers pertenece a ningun universo curado, asi que el respaldo de grupo de pares de `Application::renderDetailJson()` (linea 1182, `narrowestSectorFor()`) nunca se activa en la pantalla de entrada. El `--cross-sectional` no muestra que el ranking sea peor ahi (alpha del top-10 -0,20, t=-0,65, frente a -0,25/t=-1,29 en `largecap60`), pero si que es **mas disperso con la misma ventaja nula** (desviacion tipica de la alpha 3,43 vs 2,15). Propuesta: `Application::DEFAULT_UNIVERSE` a un universo curado (`largecap60`) y conservar los movers como universo seleccionable con etiqueta que no prometa compra ("Movimientos de hoy"), no como pantalla de entrada.
-- **`undervalued_large_caps` como universo dinamico alternativo, si se quiere conservar un listado en vivo en el Home.** De los screeners predefinidos de Yahoo verificados hoy uno a uno (responden `most_actives`, `day_gainers`, `day_losers`, `undervalued_growth_stocks`, `growth_technology_stocks`, `undervalued_large_caps`, `aggressive_small_caps`, `small_cap_gainers`; los de fondos devuelven participaciones, inservibles aqui), `undervalued_large_caps` es el unico cuya poblacion encaja con lo que el motor mide: 1,10 de 12 ratios ausentes, `RISK` medio 4,27/10, `QUALITY` 8,53/10, median de score 65,6 y 5 BUY de 20 (`most_actives`, la otra alternativa neutral en direccion, se queda en 2,50 ausentes y 0 BUY). Dos matices a documentar si se implementa: filtra por PER y PEG bajos, es decir por parte de lo que ya puntua `FundamentalAnalyzer::valuation()` (el motor re-premia el propio filtro), y hoy sale con 4 de sus 5 primeras posiciones en petroleo y gas, justo el caso que `RankingSectorConcentrationCalculator` (`v2.75`) avisa.
-- **Rotacion diaria del universo por defecto: impide seguimiento y vacia las series historicas que `v2.79` acaba de desbloquear.** Con el umbral real de la lista de hoy (movimientos de +8% a +33% y de -6,4% a -17,3%), el solape medio de la lista con la sesion siguiente es del 5-9% medido sobre `largecap60`/`healthcare`/`energy` a 10 años (18,9-21,5% con el umbral minimo de 3% del screener): el 90-95% de la pantalla de entrada cambia cada dia, asi que el usuario no puede seguir una recomendacion de ayer, `score_history`/`fundamentals_history` acumulan una fila suelta de 40 tickers nuevos cada dia en vez de profundidad temporal (justo lo contrario de lo que buscaba `v2.79`), y `market_data_cache`/`market_history_cache` arrancan en frio a diario sobre tickers que no se volveran a consultar, con el riesgo de 429 de Yahoo ya documentado.
+- **El universo por defecto del Home (`general` = `day_gainers` + `day_losers`) no es la poblacion que este motor sabe puntuar — implementado en `v2.86`.** Medido sobre los 40 movers de hoy con `StockAnalysisService`: median de score 43,6 frente a 60,2 en `largecap60`, 35 de 40 en SELL/STRONG SELL en una pantalla titulada "que comprar hoy", 3,25 de 12 ratios fundamentales ausentes por ticker (frente a 0,88) con el 58% sin PER, `RISK` clavado en 0,0 en 16 de los 40 (la formula `max(0, 6 - vol*1,1)` de `TechnicalScoreAnalyzer::risk()` satura) y `QUALITY` en 0,0 en 12 de los 40; ademas 0 de los 40 tickers pertenece a ningun universo curado, asi que el respaldo de grupo de pares de `Application::renderDetailJson()` (linea 1182, `narrowestSectorFor()`) nunca se activa en la pantalla de entrada. El `--cross-sectional` no muestra que el ranking sea peor ahi (alpha del top-10 -0,20, t=-0,65, frente a -0,25/t=-1,29 en `largecap60`), pero si que es **mas disperso con la misma ventaja nula** (desviacion tipica de la alpha 3,43 vs 2,15). Propuesta: `Application::DEFAULT_UNIVERSE` a un universo curado (`largecap60`) y conservar los movers como universo seleccionable con etiqueta que no prometa compra ("Movimientos de hoy"), no como pantalla de entrada.
+- **`undervalued_large_caps` como universo dinamico alternativo — descartada al implementar `v2.86`.** Deja de tener sentido tal y como estaba planteada ("si se quiere conservar un listado en vivo *en el Home*"): el Home ya no arranca en un listado en vivo, asi que el hueco que esta idea venia a llenar no existe. Como universo mas de la lista tampoco se añade, por el matiz que la propia idea documenta y que es descalificante para este motor: el screener filtra por PER y PEG bajos, o sea por parte de lo que ya punta `FundamentalAnalyzer::valuation()`, con lo que el score re-premiaria el propio filtro de entrada y el ranking mediria en buena parte su propia seleccion. La investigacion original se conserva entera aqui abajo por si algun dia se busca un universo dinamico con otro criterio. De los screeners predefinidos de Yahoo verificados hoy uno a uno (responden `most_actives`, `day_gainers`, `day_losers`, `undervalued_growth_stocks`, `growth_technology_stocks`, `undervalued_large_caps`, `aggressive_small_caps`, `small_cap_gainers`; los de fondos devuelven participaciones, inservibles aqui), `undervalued_large_caps` es el unico cuya poblacion encaja con lo que el motor mide: 1,10 de 12 ratios ausentes, `RISK` medio 4,27/10, `QUALITY` 8,53/10, median de score 65,6 y 5 BUY de 20 (`most_actives`, la otra alternativa neutral en direccion, se queda en 2,50 ausentes y 0 BUY). Dos matices a documentar si se implementa: filtra por PER y PEG bajos, es decir por parte de lo que ya puntua `FundamentalAnalyzer::valuation()` (el motor re-premia el propio filtro), y hoy sale con 4 de sus 5 primeras posiciones en petroleo y gas, justo el caso que `RankingSectorConcentrationCalculator` (`v2.75`) avisa.
+- **Rotacion diaria del universo por defecto — resuelta en `v2.86`** al dejar de usar ese universo como pantalla de entrada (sigue siendo cierto todo lo de abajo *dentro* de "Movimientos de hoy", pero ya no afecta a lo que se ve al entrar ni a las series historicas). Con el umbral real de la lista de hoy (movimientos de +8% a +33% y de -6,4% a -17,3%), el solape medio de la lista con la sesion siguiente es del 5-9% medido sobre `largecap60`/`healthcare`/`energy` a 10 años (18,9-21,5% con el umbral minimo de 3% del screener): el 90-95% de la pantalla de entrada cambia cada dia, asi que el usuario no puede seguir una recomendacion de ayer, `score_history`/`fundamentals_history` acumulan una fila suelta de 40 tickers nuevos cada dia en vez de profundidad temporal (justo lo contrario de lo que buscaba `v2.79`), y `market_data_cache`/`market_history_cache` arrancan en frio a diario sobre tickers que no se volveran a consultar, con el riesgo de 429 de Yahoo ya documentado.

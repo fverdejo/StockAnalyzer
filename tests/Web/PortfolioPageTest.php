@@ -6,6 +6,7 @@ namespace StockAnalyzer\Tests\Web;
 
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
+use StockAnalyzer\DTO\PortfolioConcentration;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
 use StockAnalyzer\Models\User;
@@ -78,13 +79,20 @@ final class PortfolioPageTest extends TestCase
         self::assertStringContainsString('watchlist_action', $this->render());
     }
 
-    public function testLasAccionesSeMuestranConCuatroDecimalesYUnidad(): void
+    public function testLasAccionesSeMuestranConCuatroDecimalesYSinUnidadRepetida(): void
     {
         $html = $this->render();
 
-        self::assertStringContainsString('<th>Acciones</th>', $html);
+        // La cabecera lleva `class="num"` desde v2.87 (columna numerica
+        // alineada a la derecha), asi que se comprueba el literal, no el
+        // `<th>` exacto.
+        self::assertStringContainsString('>Acciones</th>', $html);
         self::assertStringContainsString('0,9234', $html);
-        self::assertStringContainsString('acc.', $html);
+        // La unidad se quito de la celda en v2.89: la columna ya se titula
+        // "Acciones" y repetirlo en cada fila solo la ensancha. Se
+        // comprueba el marcado y no el literal suelto, que tambien aparece
+        // en un comentario de la hoja de estilos.
+        self::assertStringNotContainsString('<span class="muted">acc.</span>', $html);
         // Los 6 decimales completos ya no se pintan en la celda...
         self::assertStringNotContainsString('<strong>0,923448</strong>', $html);
         // ...pero el valor exacto no se pierde: sigue en el title.
@@ -107,5 +115,197 @@ final class PortfolioPageTest extends TestCase
     public function testSeIndicaDondeSeOperaAhora(): void
     {
         self::assertStringContainsString('Para comprar o vender, entra en la ficha del valor', $this->render());
+    }
+
+    /**
+     * `v2.87`, bloque 1 del rediseño: las posiciones abiertas son el motivo
+     * de entrar en esta pagina y tienen que ir antes del grafico y del panel
+     * de concentracion. Medido en navegador, ese orden las sube de y=1.271 a
+     * y=419 en escritorio y de y=2.750 a y=890 en movil.
+     *
+     * El test compara posiciones en la cadena y no pixeles a proposito: es
+     * lo que puede romperse al reordenar el heredoc de `render()`.
+     */
+    public function testLasPosicionesAbiertasVanAntesDelGraficoYDeLaConcentracion(): void
+    {
+        $html = $this->renderWithConcentration();
+
+        $posiciones = strpos($html, '<h2>Posiciones abiertas</h2>');
+        $evolucion = strpos($html, 'Evolucion de la cartera');
+        $concentracion = strpos($html, 'Concentracion de la cartera');
+        $historial = strpos($html, '<h2>Historial de operaciones</h2>');
+
+        self::assertIsInt($posiciones);
+        self::assertIsInt($evolucion);
+        self::assertIsInt($concentracion);
+        self::assertIsInt($historial);
+        self::assertLessThan($evolucion, $posiciones, 'Las posiciones van antes del grafico de evolucion.');
+        self::assertLessThan($concentracion, $evolucion, 'El grafico va antes de la concentracion.');
+        self::assertLessThan($historial, $concentracion, 'El historial cierra la pagina.');
+    }
+
+    /**
+     * `v2.87`, bloque 3: los repartos de concentracion son barras y no
+     * listas de etiqueta + porcentaje, y las que superan el umbral se
+     * pintan ademas en `--warn`.
+     */
+    public function testLaConcentracionSePintaConBarrasYMarcaLasQueSuperanElUmbral(): void
+    {
+        $html = $this->renderWithConcentration();
+
+        self::assertStringContainsString('score-bar-fill', $html);
+        self::assertStringNotContainsString('concentration-list', $html);
+        // ADBE 62% y REP.MC 38% superan el 20% por posicion: dos barras en
+        // aviso. Desde `v2.89` los sectores ya no son barras sino un anillo,
+        // asi que aqui solo quedan las de posicion.
+        // Se cuenta el atributo completo y no el nombre suelto: la propia
+        // regla CSS de la hoja de estilos tambien contiene el literal.
+        self::assertSame(2, substr_count($html, 'class="score-bar-fill score-bar-fill-warn"'));
+        // El HHI crudo ya no es una tarjeta: vive en el tooltip de
+        // "Posiciones efectivas".
+        self::assertStringNotContainsString('>Indice HHI<', $html);
+        self::assertStringContainsString('HHI actual:', $html);
+    }
+
+    /**
+     * `v2.89`: el reparto por sector es un anillo, y sus nombres salen en
+     * español aunque el proveedor los sirva siempre en ingles.
+     */
+    public function testElRepartoPorSectorEsUnAnilloConNombresEnEspanol(): void
+    {
+        $html = $this->renderWithConcentration(null, ['Financial Services' => 62.0, 'Consumer Defensive' => 38.0]);
+
+        self::assertStringContainsString('donut-svg', $html);
+        self::assertSame(2, substr_count($html, 'class="donut-arc"'));
+        self::assertStringContainsString('Servicios Financieros', $html);
+        self::assertStringContainsString('Consumo Defensivo', $html);
+        self::assertStringNotContainsString('Financial Services', $html);
+        self::assertStringNotContainsString('Consumer Defensive', $html);
+    }
+
+    /**
+     * La taxonomia tiene 11 sectores y la paleta validada 6: a partir del
+     * septimo se agrupan, en vez de inventar tonos sin validar.
+     */
+    public function testMasDeOchoSectoresSeAgrupanEnOtros(): void
+    {
+        $html = $this->renderWithConcentration(null, [
+            'Technology' => 30.0,
+            'Healthcare' => 20.0,
+            'Energy' => 15.0,
+            'Utilities' => 12.0,
+            'Industrials' => 10.0,
+            'Real Estate' => 6.0,
+            'Basic Materials' => 4.0,
+            'Consumer Cyclical' => 2.0,
+            'Inexistente' => 1.0,
+        ]);
+
+        // 8 sectores con color propio + 1 porcion "Otros" = 9 arcos.
+        self::assertSame(9, substr_count($html, 'class="donut-arc"'));
+        self::assertStringContainsString('Otros sectores', $html);
+        // El unico agrupado es el mas pequeño (1%), no varios: con 8 tonos
+        // validados "Otros" nunca se come media tarta.
+        self::assertStringContainsString('Otros sectores</span><span class="donut-legend-value">1,00%', $html);
+        // Los ocho con color propio si salen traducidos y por su nombre.
+        self::assertStringContainsString('Inmobiliario', $html);
+        self::assertStringContainsString('Materiales Basicos', $html);
+    }
+
+    /**
+     * `v2.87`, bloque 3: "Por divisa" solo se destaca si se supera el
+     * umbral; por debajo se resume en una linea, para que la ausencia de
+     * aviso no se lea como que nadie lo ha mirado.
+     */
+    public function testElRepartoPorDivisaSoloAvisaSiSuperaElUmbral(): void
+    {
+        $bajoUmbral = $this->renderWithConcentration(['EUR' => 55.0, 'USD' => 45.0]);
+
+        self::assertStringContainsString('Reparto por divisa: EUR 55,00%, USD 45,00%.', $bajoUmbral);
+        self::assertStringNotContainsString('no en euros', $bajoUmbral);
+
+        $sobreUmbral = $this->renderWithConcentration(['USD' => 90.0, 'EUR' => 10.0]);
+
+        self::assertStringContainsString('El 90,00% de la cartera esta en USD', $sobreUmbral);
+        self::assertStringContainsString('panel-notice', $sobreUmbral);
+    }
+
+    /**
+     * Regresion de `v2.85` (bug 4) en su nueva forma de barra: "Sin sector"
+     * significa *no tengo el dato*, asi que nunca lleva el chip de aviso por
+     * mucho que pese, aunque si cuenta para los pesos.
+     */
+    public function testSinSectorNuncaSeMarcaComoConcentracion(): void
+    {
+        $html = $this->renderWithConcentration(null, [PortfolioConcentration::UNKNOWN_SECTOR => 80.0, 'Energy' => 20.0]);
+
+        self::assertStringContainsString(PortfolioConcentration::UNKNOWN_SECTOR, $html);
+        self::assertStringNotContainsString(
+            PortfolioConcentration::UNKNOWN_SECTOR . '<span class="concentration-warning">',
+            $html
+        );
+    }
+
+    /**
+     * Las cifras de la tabla se comparan entre filas, asi que van alineadas
+     * a la derecha y con digitos de ancho fijo (`v2.87`).
+     */
+    public function testLasColumnasDeCifrasSonNumericas(): void
+    {
+        $html = $this->render();
+
+        foreach (['Acciones', 'Precio medio', 'Precio actual', 'Invertido', 'Beneficio'] as $columna) {
+            self::assertStringContainsString('<th class="num">' . $columna . '</th>', $html);
+        }
+
+        // La equivalencia en euros baja a una segunda linea en vez de ir
+        // inline entre parentesis, que es lo que ensanchaba la tabla.
+        self::assertStringContainsString('class="cell-sub nowrap"', $html);
+    }
+
+    /**
+     * @param ?array<string,float> $currencyWeights
+     * @param ?array<string,float> $sectorWeights
+     */
+    private function renderWithConcentration(?array $currencyWeights = null, ?array $sectorWeights = null): string
+    {
+        $holdings = [
+            new Holding('ADBE', 5.0, 250.41, 265.21, null, 1082.0, 1146.0),
+            new Holding('REP.MC', 60.0, 11.85, 12.94, null, 711.0, 776.0),
+        ];
+
+        $portfolio = new Portfolio(
+            $holdings,
+            [],
+            0.0,
+            ['ADBE' => 265.21, 'REP.MC' => 12.94],
+            ['ADBE' => 'USD', 'REP.MC' => 'EUR'],
+            0.8649,
+            ['USD' => 0.8649],
+            0.0,
+            null
+        );
+
+        $concentration = new PortfolioConcentration(
+            1922.0,
+            ['ADBE' => 62.0, 'REP.MC' => 38.0],
+            $sectorWeights ?? ['Technology' => 62.0, 'Energy' => 38.0],
+            $currencyWeights ?? ['EUR' => 55.0, 'USD' => 45.0]
+        );
+
+        return PortfolioPage::render(
+            $this->user(),
+            $portfolio,
+            'token',
+            null,
+            null,
+            ['labels' => ['2026-08-01', '2026-08-02'], 'values' => [1900.0, 1922.0]],
+            [],
+            0,
+            [],
+            [],
+            [],
+            $concentration
+        );
     }
 }

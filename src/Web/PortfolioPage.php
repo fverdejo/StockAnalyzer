@@ -47,18 +47,26 @@ class PortfolioPage
         $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels, $suggestedPositions);
         $transactions = self::renderTransactions($portfolio);
 
+        // Orden de los paneles (v2.87): tarjetas -> posiciones abiertas ->
+        // evolucion -> concentracion -> historial. Las posiciones son el
+        // motivo de entrar en esta pagina y antes empezaban en y=1.253 en
+        // escritorio (fuera del primer pantallazo) y en y=2.857 en movil,
+        // detras del panel de concentracion y del grafico. El `<script>` de
+        // Chart.js se emite dentro de renderValueHistoryChart(), asi que
+        // viaja con su grafico al moverlo.
         $body = <<<HTML
         {$messageHtml}
         {$errorHtml}
         {$alertsNote}
         {$cards}
-        {$concentrationPanel}
-        {$valueChart}
 
         <section class="panel">
             <h2>Posiciones abiertas</h2>
             {$holdings}
         </section>
+
+        {$valueChart}
+        {$concentrationPanel}
 
         <section class="panel">
             <h2>Historial de operaciones</h2>
@@ -120,43 +128,50 @@ HTML;
         // "Valor total (EUR)" se quito en v2.85: era exactamente el mismo
         // numero que la tarjeta "Valor actual" del resumen de arriba, en la
         // misma pantalla y a pocos pixeles de distancia.
+        //
+        // "Indice HHI" se quito de las tarjetas en v2.87 y bajo al tooltip
+        // de "Posiciones efectivas": es la cifra cruda de la que sale esa
+        // otra, y a 24px en negrita competia con su propia traduccion.
         $metrics = sprintf(
-            '<section class="cards"><div class="metric"><span class="muted">%s</span><strong>%s</strong></div><div class="metric"><span class="muted">Indice HHI</span><strong>%s</strong></div><div class="metric"><span class="muted">Posiciones efectivas</span><strong>%s de %d</strong></div></section>',
+            '<section class="cards"><div class="metric"><span class="muted">%s</span><strong>%s</strong></div><div class="metric"><span class="muted">Posiciones efectivas %s</span><strong>%s de %d</strong></div></section>',
             // Singular cuando solo hay una posicion: "Top 1 posiciones" estaba
             // mal escrito (v2.85).
             $topCount === 1 ? 'Posicion mas grande' : sprintf('Top %d posiciones', $topCount),
             self::percent($concentration->getTopPositionsWeight($topCount)),
-            self::index($concentration->getHerfindahlIndex()),
+            self::infoIcon(sprintf(
+                'Cuantas posiciones igualmente ponderadas darian esta misma concentracion. Sale de 1/HHI, donde el indice HHI (Herfindahl-Hirschman) es la suma de los cuadrados de los pesos: cuanto mas alto, mas concentrada esta la cartera. HHI actual: %s.',
+                self::index($concentration->getHerfindahlIndex())
+            )),
             Layout::formatNumber($concentration->getEffectivePositions()),
             $concentration->getPositionCount()
         );
 
-        $lists = sprintf(
-            '<section class="cards">%s%s%s</section>',
-            self::weightList(
-                'Por posicion',
+        // "Por divisa" ya no se pinta siempre: en una cartera de un unico
+        // usuario español son casi siempre dos filas (EUR y USD) que ocupan
+        // un tercio del panel para decir algo que solo importa si se pasa
+        // del umbral. Se resume en una linea, con el mismo patron
+        // condicional que DashboardPage::renderSectorNote().
+        $bars = sprintf(
+            '<div class="concentration-groups"><div><h3 class="panel-subtitle">Por posicion</h3>%s</div><div><h3 class="panel-subtitle">Por sector</h3>%s</div></div>%s',
+            self::weightBars(
                 $concentration->getPositionWeights(),
                 $concentration->getOverweightPositions(),
                 PortfolioConcentration::POSITION_WARNING_PERCENT
             ),
-            self::weightList(
-                'Por sector',
+            self::sectorDonut(
                 $concentration->getSectorWeights(),
-                $concentration->getOverweightSectors(),
-                PortfolioConcentration::SECTOR_WARNING_PERCENT
+                $concentration->getOverweightSectors()
             ),
-            self::weightList(
-                'Por divisa',
+            self::currencyNote(
                 $concentration->getCurrencyWeights(),
-                $concentration->getOverweightForeignCurrencies(),
-                PortfolioConcentration::FOREIGN_CURRENCY_WARNING_PERCENT
+                $concentration->getOverweightForeignCurrencies()
             )
         );
 
         return sprintf(
-            '<section class="panel"><h2>Concentracion de la cartera</h2><p class="muted panel-note">Pesos sobre el valor de mercado actual de las posiciones abiertas, convertido a euros con el tipo de cambio de hoy (el beneficio por posicion sigue mostrandose en su divisa nativa, ver "Posiciones abiertas"). El indice HHI es la suma de los cuadrados de los pesos: cuanto mas alto, mas concentrada esta la cartera; las posiciones efectivas (1/HHI) indican cuantas posiciones igualmente ponderadas darian esa misma concentracion.</p>%s%s<p class="muted panel-note">Los avisos son orientativos y no bloquean nada: se marcan las posiciones por encima del %s, los sectores por encima del %s y la exposicion a una divisa distinta del euro por encima del %s.</p></section>',
+            '<section class="panel"><h2>Concentracion de la cartera</h2><p class="muted panel-note">Pesos sobre el valor de mercado actual de las posiciones abiertas, convertido a euros con el tipo de cambio de hoy (el beneficio por posicion sigue mostrandose en su divisa nativa, ver "Posiciones abiertas").</p>%s%s<p class="muted panel-note">Los avisos son orientativos y no bloquean nada: se marcan las posiciones por encima del %s, los sectores por encima del %s y la exposicion a una divisa distinta del euro por encima del %s.</p></section>',
             $metrics,
-            $lists,
+            $bars,
             self::thresholdPercent(PortfolioConcentration::POSITION_WARNING_PERCENT),
             self::thresholdPercent(PortfolioConcentration::SECTOR_WARNING_PERCENT),
             self::thresholdPercent(PortfolioConcentration::FOREIGN_CURRENCY_WARNING_PERCENT)
@@ -164,35 +179,259 @@ HTML;
     }
 
     /**
-     * Una tarjeta con el reparto de pesos de un criterio (posicion, sector
-     * o divisa), reutilizando el patron `.metric` + `.list`/`.list-row` ya
-     * usado en el resto de la app en vez de una tabla: son listas cortas de
-     * etiqueta + porcentaje, y las tablas de esta hoja de estilos tienen un
-     * ancho minimo pensado para las tablas grandes de la pagina.
+     * Paleta categorica del reparto por sector (`v2.89`).
+     *
+     * Son los ocho tonos de la paleta de referencia de la skill `dataviz`,
+     * validados con su script sobre fondo blanco antes de escribirlos aqui:
+     * banda de luminosidad, suelo de croma, separacion para daltonismo
+     * (peor par adyacente ΔE 9,1 protan, objetivo >=8) y separacion en
+     * vision normal (peor par 19,6, suelo 15), incluido el par de cierre
+     * del anillo (rojo-azul: ΔE 21,6). El listado de adyacencias es el
+     * correcto aqui: un anillo es una barra apilada doblada, y sus
+     * porciones solo se tocan con la anterior y la siguiente. Tres de los
+     * ocho no
+     * llegan a 3:1 de contraste contra el blanco, lo que **obliga** a que
+     * el nombre y el porcentaje esten escritos al lado de cada porcion, no
+     * solo codificados en color; por eso la leyenda no es opcional.
+     *
+     * NO son `--good`/`--warn`/`--bad`: esos significan *veredicto* en esta
+     * aplicacion, y un sector no es bueno ni malo por ser el sector que es.
+     * Ese fue el motivo por el que la tarta se descarto en su dia: la app
+     * no tenia paleta categorica. Ahora la tiene, y vive solo aqui.
+     */
+    private const SECTOR_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+
+    /**
+     * Gris deliberado para el resto agrupado: no es un septimo sector, es
+     * la ausencia de identidad. Por eso incumple a proposito el suelo de
+     * croma de la paleta categorica (un residuo no debe competir con los
+     * sectores reales); su separacion contra sus dos vecinos reales en el
+     * anillo si se comprobo (ΔE 9,5 deutan contra el rojo del octavo,
+     * 17,3 en vision normal contra el azul del primero).
+     */
+    private const SECTOR_COLOR_OTHER = '#8a8a8a';
+
+    /**
+     * Cuantos sectores llevan color propio antes de agruparse en "Otros".
+     * La taxonomia tiene once sectores y la paleta validada ocho: pasar de
+     * ahi obligaria a inventar tonos sin validar, que es justo lo que la
+     * guia prohibe.
+     *
+     * Ocho y no seis (que es el maximo que recomienda la guia para un
+     * anillo) porque con seis, una cartera repartida en nueve sectores
+     * dejaba un "Otros" del 25,84% — la porcion mas grande del grafico era
+     * la que no dice nada. Con ocho, "Otros" agrupa como mucho los tres
+     * sectores mas pequeños de la taxonomia. Se prefiere un anillo con una
+     * porcion de mas a un anillo cuya mayor porcion sea un cajon de
+     * sastre.
+     */
+    private const SECTOR_DONUT_MAX = 8;
+
+    /**
+     * Reparto por sector como anillo, pedido por el usuario ("un diagrama
+     * de sectores en vez del texto"), `v2.89`.
+     *
+     * SVG en linea y no Chart.js: son 7 porciones como mucho, sin ejes ni
+     * interaccion que justifiquen 200 KB de libreria, y asi el panel se
+     * pinta igual con JavaScript desactivado.
+     *
+     * Limitacion asumida y consciente: un anillo compara mal valores
+     * parecidos, y una cartera repartida los tiene (26%, 18%, 16%, 15%...).
+     * Se acepta porque la pregunta que responde este panel es "¿estoy
+     * repartido o concentrado?", que es justo lo que un anillo enseña de un
+     * vistazo, y **la cifra exacta sigue escrita** al lado de cada sector en
+     * la leyenda, que es donde se comparan.
+     *
+     * El color va por orden de peso y no fijo por sector: con once sectores
+     * posibles y ocho tonos validados no hay forma de dar un color estable a
+     * cada uno. Como cada anillo se lee contra su propia leyenda, ordenada
+     * igual, el color funciona aqui de indice a la leyenda y no de identidad
+     * permanente entre pantallas.
+     *
+     * @param array<string,float> $weights sector => % del total, ya en orden descendente
+     * @param array<string,float> $overweight subconjunto que supera el umbral de aviso
+     */
+    private static function sectorDonut(array $weights, array $overweight): string
+    {
+        if ($weights === []) {
+            return '<div class="muted">Sin datos suficientes.</div>';
+        }
+
+        $slices = self::sectorSlices($weights);
+        $circumference = 2 * M_PI * 60.0;
+        $offset = 0.0;
+        $segments = [];
+        $legend = [];
+
+        foreach ($slices as $index => $slice) {
+            $color = $slice['other'] ? self::SECTOR_COLOR_OTHER : self::SECTOR_COLORS[$index];
+            $length = $circumference * $slice['weight'] / 100;
+            // Separador de 2px entre porciones, del color del fondo. Con una
+            // sola porcion no se recorta nada: dejaria una muesca en un
+            // anillo que no tiene ninguna division que marcar.
+            $gap = count($slices) > 1 ? min(2.0, $length) : 0.0;
+
+            $segments[] = sprintf(
+                '<circle class="donut-arc" cx="70" cy="70" r="60" stroke="%s" stroke-dasharray="%s %s" stroke-dashoffset="%s"><title>%s: %s</title></circle>',
+                $color,
+                Layout::escape(number_format(max(0.0, $length - $gap), 3, '.', '')),
+                Layout::escape(number_format($circumference, 3, '.', '')),
+                Layout::escape(number_format(-$offset, 3, '.', '')),
+                Layout::escape($slice['label']),
+                Layout::escape(self::percent($slice['weight']))
+            );
+
+            $legend[] = sprintf(
+                '<li class="donut-legend-item"><span class="donut-swatch" style="background:%s"></span><span class="donut-legend-label">%s%s</span><span class="donut-legend-value">%s</span></li>',
+                $color,
+                Layout::escape($slice['label']),
+                isset($overweight[$slice['key']])
+                    ? sprintf('<span class="concentration-warning">&gt; %s</span>', self::thresholdPercent(PortfolioConcentration::SECTOR_WARNING_PERCENT))
+                    : '',
+                self::percent($slice['weight'])
+            );
+
+            $offset += $length;
+        }
+
+        // role="img" + aria-label: para un lector de pantalla el anillo es
+        // una imagen, y su contenido util ya esta en la lista de al lado.
+        return sprintf(
+            '<div class="donut"><svg class="donut-svg" viewBox="0 0 140 140" role="img" aria-label="Reparto de la cartera por sector">%s</svg><ul class="donut-legend">%s</ul></div>',
+            implode('', $segments),
+            implode('', $legend)
+        );
+    }
+
+    /**
+     * Los sectores que llevan color propio, mas un "Otros" con la suma del
+     * resto si sobran. Se agrupa por peso y no por nombre: si hay que
+     * esconder sectores, los que menos duelen son los mas pequeños.
+     *
+     * @param array<string,float> $weights sector => % del total, en orden descendente
+     * @return list<array{key: string, label: string, weight: float, other: bool}>
+     */
+    private static function sectorSlices(array $weights): array
+    {
+        $slices = [];
+        $rest = 0.0;
+
+        foreach ($weights as $sector => $weight) {
+            if (count($slices) < self::SECTOR_DONUT_MAX) {
+                $slices[] = [
+                    'key' => (string) $sector,
+                    'label' => SectorLabel::translate((string) $sector),
+                    'weight' => $weight,
+                    'other' => false,
+                ];
+
+                continue;
+            }
+
+            $rest += $weight;
+        }
+
+        if ($rest > 0.0) {
+            $slices[] = [
+                'key' => '',
+                'label' => 'Otros sectores',
+                'weight' => $rest,
+                'other' => true,
+            ];
+        }
+
+        return $slices;
+    }
+
+    /**
+     * Reparto de pesos de un criterio (posicion o sector) como barras
+     * horizontales, reutilizando `.score-bars` de la ficha de detalle (ya
+     * en la hoja de estilos, sin JavaScript) en vez de la lista
+     * etiqueta-porcentaje que habia hasta `v2.86`.
+     *
+     * El motivo es que un peso es una proporcion y la lista obligaba a
+     * comparar numeros de dos en dos para verlo; la barra lo enseña sin
+     * leer. Las que superan el umbral se pintan en `--warn` ademas de
+     * llevar el chip, porque ahi el color si codifica un veredicto.
      *
      * @param array<string,float> $weights etiqueta => % del total, ya en orden descendente
      * @param array<string,float> $overweight subconjunto de $weights que supera el umbral de aviso
      */
-    private static function weightList(string $title, array $weights, array $overweight, float $warningPercent): string
+    private static function weightBars(array $weights, array $overweight, float $warningPercent): string
     {
+        if ($weights === []) {
+            return '<div class="muted">Sin datos suficientes.</div>';
+        }
+
         $rows = [];
 
         foreach ($weights as $label => $weight) {
+            $isOverweight = isset($overweight[$label]);
             $rows[] = sprintf(
-                '<div class="list-row"><span>%s%s</span><span>%s</span></div>',
+                '<div class="score-bar-row"><div class="score-bar-head"><span>%s%s</span><span class="muted">%s</span></div><div class="score-bar-track"><div class="score-bar-fill%s" style="width:%s%%"></div></div></div>',
                 Layout::escape((string) $label),
-                isset($overweight[$label])
+                $isOverweight
                     ? sprintf('<span class="concentration-warning">&gt; %s</span>', self::thresholdPercent($warningPercent))
                     : '',
-                self::percent($weight)
+                self::percent($weight),
+                $isOverweight ? ' score-bar-fill-warn' : '',
+                // Un peso ya viene en 0-100 y acotado por el calculador,
+                // pero el ancho de una barra no puede depender de eso: un
+                // redondeo por encima de 100 desbordaria el carril.
+                Layout::escape(number_format(max(0.0, min(100.0, $weight)), 2, '.', ''))
             );
         }
 
+        return '<div class="score-bars">' . implode('', $rows) . '</div>';
+    }
+
+    /**
+     * Reparto por divisa en una sola linea, y solo como aviso destacado si
+     * se supera el umbral de exposicion a divisa extranjera. Mismo criterio
+     * que `DashboardPage::renderSectorNote()`: sin concentracion destacable
+     * el reparto se resume igualmente, para que la ausencia de aviso no se
+     * lea como que nadie lo ha mirado.
+     *
+     * @param array<string,float> $weights divisa => % del total, ya en orden descendente
+     * @param array<string,float> $overweight subconjunto que supera el umbral
+     */
+    private static function currencyNote(array $weights, array $overweight): string
+    {
+        if ($weights === []) {
+            return '';
+        }
+
+        $parts = [];
+
+        foreach ($weights as $currency => $weight) {
+            $parts[] = Layout::escape((string) $currency) . ' ' . self::percent($weight);
+        }
+
+        $summary = implode(', ', $parts);
+
+        if ($overweight === []) {
+            return sprintf('<p class="muted panel-note">Reparto por divisa: %s.</p>', $summary);
+        }
+
+        $currency = (string) array_key_first($overweight);
+
         return sprintf(
-            '<div class="metric"><span class="muted">%s</span><div class="list concentration-list">%s</div></div>',
-            Layout::escape($title),
-            implode('', $rows)
+            '<section class="panel panel-notice"><strong>El %s de la cartera esta en %s,</strong> no en euros: su valor en euros sube y baja tambien con el tipo de cambio, al margen de lo que hagan las acciones. Reparto completo: %s.</section>',
+            self::percent($overweight[$currency]),
+            Layout::escape($currency),
+            $summary
         );
+    }
+
+    /**
+     * Mismo icono de ayuda que la ficha de detalle (`v2.10`): tooltip
+     * propio en CSS, accesible por teclado con `tabindex="0"`. Aqui el
+     * texto es fijo y no viene de `IndicatorGlossary`, que solo cataloga
+     * indicadores tecnicos y fundamentales.
+     */
+    private static function infoIcon(string $text): string
+    {
+        return sprintf('<span class="info-icon" tabindex="0" data-tooltip="%s">i</span>', Layout::escape($text));
     }
 
     private static function percent(float $value): string
@@ -245,7 +484,7 @@ HTML;
             $recommendation = $recommendations[$holding->getTicker()] ?? null;
             $star = WatchlistStar::render($holding->getTicker(), $user, isset($watched[$holding->getTicker()]), $csrfToken, '?page=portfolio');
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td class="%s">%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td class="star-cell">%s</td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%s</td><td class="num">%s</td><td class="num">%s%s</td><td class="num">%s</td><td class="num %s">%s</td><td>%s</td><td>%s</td></tr>',
                 $star,
                 urlencode($holding->getTicker()),
                 $ticker,
@@ -264,7 +503,7 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>&#9733;</th><th>Ticker</th><th>Acciones</th><th>Precio medio</th><th>Precio actual</th><th>Invertido</th><th>Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operacion se hace siempre desde la accion que estas mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, entre parentesis, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th class="star-cell">&#9733;</th><th>Ticker</th><th class="num">Acciones</th><th class="num">Precio medio</th><th class="num">Precio actual</th><th class="num">Invertido</th><th class="num">Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operacion se hace siempre desde la accion que estas mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
     }
 
     /**
@@ -302,7 +541,11 @@ HTML;
     /**
      * Acciones en cartera. Desde v2.71 esta columna ya no compite por el
      * espacio con el formulario de venta, asi que puede leerse de un
-     * vistazo: cantidad destacada y la unidad en gris. Se muestran 4
+     * vistazo. La unidad ("acc.") se retiro en `v2.89`: la columna se
+     * titula "Acciones", asi que repetirlo en cada fila solo alarga la
+     * celda. Donde si se mantiene es en el badge de cantidad sugerida
+     * (`RiskLevelsBadge`), que va suelto entre niveles de precio y ahi la
+     * unidad si distingue una cosa de la otra. Se muestran 4
      * decimales en vez de los 6 de `number()` porque con fracciones de
      * accion los dos ultimos son ruido visual en una tabla de 9 columnas;
      * el valor exacto sigue disponible en el `title` y, sin redondear, en
@@ -315,7 +558,7 @@ HTML;
         $decimals = round($quantity, 4) == 0.0 && $quantity > 0 ? 6 : 4;
 
         return sprintf(
-            '<span class="shares" title="%s"><strong>%s</strong> <span class="muted">acc.</span></span>',
+            '<span class="shares" title="%s"><strong>%s</strong></span>',
             Layout::escape(self::number($quantity)),
             Layout::escape(rtrim(rtrim(number_format($quantity, $decimals, ',', '.'), '0'), ','))
         );
@@ -337,7 +580,7 @@ HTML;
             $percent = $portfolio->getTransactionProfitPercent($transaction);
             $currency = $portfolio->getCurrencyFor($transaction->getTicker());
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%s</td><td>%s</td><td class="%s">%s</td></tr>',
+                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%s</td><td class="num">%s</td><td class="num %s">%s</td></tr>',
                 Layout::escape($transaction->getExecutedAt()->format('Y-m-d H:i')),
                 $type === TransactionType::BUY ? 'buy' : 'sell',
                 Layout::escape($type->label()),
@@ -351,7 +594,7 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Cantidad</th><th>Precio</th><th>Beneficio vs. precio actual</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">El precio de cada operacion se muestra en la divisa en la que cotiza el valor y, entre parentesis, su equivalencia en euros al cambio de hoy (una operacion en euros no lleva equivalencia porque seria el mismo importe repetido). La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas (importe y porcentaje entre parentesis en la misma celda).</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Beneficio vs. precio actual</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">El precio de cada operacion se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operacion en euros no lleva equivalencia porque seria el mismo importe repetido). La columna de beneficio compara el precio de cada operacion con el precio de mercado actual, tanto para compras como para ventas (importe y porcentaje entre parentesis en la misma celda).</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a></p>';
     }
 
     /**
@@ -451,7 +694,7 @@ HTML;
         }
 
         return sprintf(
-            '<br><span class="muted">en EUR (con cambio): </span><span class="%s">%s<span> (%s%%)</span></span>',
+            '<span class="cell-sub">en EUR (con cambio): <span class="%s">%s (%s%%)</span></span>',
             self::profitClass($profitEur),
             Layout::formatMoney($profitEur, 'EUR'),
             Layout::formatNumber($percentEur)
@@ -460,12 +703,17 @@ HTML;
 
     /**
      * Equivalencia en euros de un importe que se muestra en divisa
-     * extranjera, entre parentesis y en gris junto al importe nativo (ver
-     * versions.md v2.68: convencion elegida por el usuario). Un ticker que
-     * ya cotiza en euros no lleva equivalencia, porque seria el mismo
-     * numero repetido; tampoco se muestra nada cuando no se pudo convertir
-     * (sin tipo de cambio), en vez de un "-" que ensuciaria la celda al
-     * lado de un importe que si esta disponible.
+     * extranjera (ver versions.md v2.68: convencion elegida por el usuario).
+     * Un ticker que ya cotiza en euros no lleva equivalencia, porque seria
+     * el mismo numero repetido; tampoco se muestra nada cuando no se pudo
+     * convertir (sin tipo de cambio), en vez de un "-" que ensuciaria la
+     * celda al lado de un importe que si esta disponible.
+     *
+     * Desde `v2.87` va en una segunda linea en gris y no inline entre
+     * parentesis: inline duplicaba el ancho de cuatro columnas y era la
+     * causa de que la tabla desbordara en escritorio. Sigue con `.nowrap`
+     * porque el `overflow-wrap: anywhere` de th/td separaba la cifra de su
+     * simbolo de divisa (v2.85).
      */
     private static function eurEquivalent(?float $valueEur, string $currency): string
     {
@@ -473,12 +721,8 @@ HTML;
             return '';
         }
 
-        // nowrap para que el parentesis y el simbolo de divisa no se separen
-        // del numero: en la columna estrecha de una tabla el salto caia entre
-        // la cifra y el simbolo y dejaba "€)" solo en la linea siguiente
-        // (v2.85).
         return sprintf(
-            ' <span class="muted nowrap">(%s)</span>',
+            '<span class="cell-sub nowrap">%s</span>',
             Layout::formatMoney($valueEur, Portfolio::BASE_CURRENCY)
         );
     }
