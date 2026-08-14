@@ -35,3 +35,6 @@ Thumbs.db
 
 # ADS de Windows
 *:Zone.Identifier
+
+# Volcados de datos para trasvasar entre entornos (no son codigo y pesan MB).
+/storage/exports/

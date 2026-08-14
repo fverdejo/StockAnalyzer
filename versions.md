@@ -4482,6 +4482,79 @@ Verificado:
 
 ---
 
+## v2.93 - El historico de fundamentales deja de esperar al calendario
+
+Estado: implementado y ejecutado. Cobertura point-in-time real: de **0% a 86-100%** en los tickers rellenados.
+
+Objetivo:
+
+`v2.91` dejo el backtest preparado para usar fundamentales de epoca, pero con cobertura 0%: la serie empezaba el 2026-08-14 y crecia un dia por sesion. A ese ritmo, medir la mitad fundamental del score era cosa de un año. Esta version la rellena **hacia atras**.
+
+La idea es que no hace falta comprar "los ratios del 15 de marzo de 2019": se **reconstruyen**. De los 18 campos de `fundamentals_history`, 11 salen solo de las cuentas, 6 de las cuentas cruzadas con el precio de ese dia, y el precio diario **ya estaba cacheado** de Yahoo. Solo faltaba la pata de las cuentas con su fecha de publicacion.
+
+### Lo que se ha construido
+
+- **`DTO\FiscalPeriod`**: un ejercicio contable con sus cifras en bruto y, lo que hace posible todo esto, `filingDate`. Se guardan cifras en bruto y no ratios del proveedor: los ratios se derivan aqui con las convenciones exactas de `YahooParser`, para que un `Fundamentals` reconstruido sea indistinguible de uno en vivo. Con los ratios de FMP, cada uno vendria con su propia definicion y el score historico no seria comparable con el actual.
+- **`Services\PointInTimeFundamentalsBuilder`**: la pieza delicada, y por eso **pura** (ni red, ni base de datos, ni reloj). Para la fecha D toma el ejercicio mas reciente **publicado** hasta D y recalcula los ratios de precio con el cierre de ese dia.
+- **`Providers\FmpFiscalPeriodProvider`**: cruza los tres estados financieros de FMP por ejercicio. No implementa `MarketDataProviderInterface` a proposito: no sirve datos en vivo, solo alimenta el relleno.
+- **`bin/backfill-fundamentals.php`**: el CLI, con `--dry-run`, `--skip-existing` para reanudar entre dias y `--max-tickers` para no pasarse del cupo diario.
+
+### La regla que da sentido a todo
+
+Apple cerro su ejercicio 2025 el **27 de septiembre** y lo publico el **31 de octubre**. Entre esas dos fechas el mercado no conocia esas cifras. Usar `endDate` en vez de `filingDate` daria al backtest un mes de ventaja, **no produciria ningun error**, y el resultado saldria mejor de lo que fue. Es el primer test del fichero.
+
+### Que da el plan gratuito, medido contra la API real
+
+Antes de escribir codigo se sondeo la API. Los hallazgos cambiaron el plan dos veces:
+
+| | Resultado |
+|---|---|
+| Trimestrales | `limit` topado en **5** (~15 meses) |
+| `from`/`to`/`page`/`offset` | **Ignorados**: no hay forma de paginar al pasado, ni despacio |
+| **Anuales** | **5 ejercicios**, que es lo que hace viable el relleno gratis |
+| `filingDate`/`acceptedDate` | **Presentes** — sin esto no habria nada que hacer |
+| `ratios`, `key-metrics` trimestrales | Bloqueados (y da igual: con las cuentas en bruto se calcula todo) |
+| Tickers `.MC` | Bloqueados |
+| **Simbolos de EEUU** | **Bloqueados en parte**: 28 de los 60 de `largecap60` (ACN, AMGN, BKNG, CAT, HON, IBM, INTU, ISRG, LOW, MCD, NOW, PG, PM, QCOM, RTX, SPGI, TMO, TXN, UPS...) |
+
+Ese ultimo no estaba en ningun folleto y solo aparecio al ejecutar el relleno completo.
+
+### Validacion contra los datos en vivo
+
+Antes de escribir nada en la base se comparo la reconstruccion con lo que sirve Yahoo hoy:
+
+| | Yahoo (TTM) | Reconstruido | Lectura |
+|---|---|---|---|
+| ROE, margenes, capitalizacion, yield, payout, FCF | — | — | **Cuadran** (1-3%) |
+| PER 34,97 vs 40,92; crecimiento 16,40 vs 6,43 | — | — | **Esperado y correcto**: Yahoo usa 12 meses moviles; en una fecha pasada solo se conocia el ultimo ejercicio publicado |
+| Deuda/Patrimonio 0,78 vs 1,52 | — | — | **Discrepancia de definicion**, ver limitaciones |
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **284 tests, 878 assertions, OK** (de 265). 19 casos nuevos.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Relleno real ejecutado** sobre `largecap60`: 32 tickers, **35.933 filas**, historico desde 2021-10-06.
+- **La cobertura sube de verdad**, que es la unica prueba que cuenta: backtest a 5 años de AAPL 100%, KO 94,83%, NVDA 93,10%, MSFT 86,21%. Y PG sigue en 0% porque su simbolo no lo cubre el plan: el aviso de `v2.91` lo dice en pantalla en vez de disimularlo.
+
+### Un bug encontrado y corregido durante la ejecucion
+
+Guzzle lanza en 4xx con un mensaje que **incluye la URL entera, y la URL lleva la API key**. Los 28 fallos de plan la volcaron a la salida del CLI. Corregido con `http_errors => false` e inspeccion del codigo de estado en el propio proveedor, mas un test que falla si la credencial vuelve a aparecer en un mensaje de error.
+
+Limitaciones conocidas:
+
+- **Grano anual, no trimestral.** Los ratios de balance escalonan una vez al año. Los de precio (PER, capitalizacion, P/VC, EV/EBITDA, rentabilidad por dividendo) si varian a diario, porque el precio varia. Con un plan de pago basta cambiar `PERIOD` y `LIMIT` en `FmpFiscalPeriodProvider`: el resto del codigo no se entera, porque `FiscalPeriod` no sabe si un ejercicio es anual o trimestral.
+- **5 años, no 10.** Un backtest a 10 años tendra ~50% de cobertura; a 5 años, casi 100%.
+- **53% de `largecap60`.** Los 28 simbolos bloqueados seguiran en 0% hasta que se pague o se cambie de proveedor.
+- **`debtToEquity` no es comparable entre historico y presente.** El reconstruido sale del balance publicado (`totalDebt/totalStockholdersEquity`, auditable); el de Yahoo pasa por la heuristica de `normalizeDebtToEquity`, que el propio codigo documenta como no verificada. Dentro del backtest la medida es consistente consigo misma; entre backtest y ranking en vivo, no.
+- **Cifras reexpresadas**: FMP sirve las cuentas como estan hoy en su base. El sesgo de *fecha* desaparece; el de *reexpresion* no.
+- **Sesgo de supervivencia intacto**: siguen siendo las listas de hoy.
+
+Resultado:
+
+La mitad fundamental del score pasa de no ser backtesteable a serlo, hoy y sin pagar, para la mitad del universo por defecto y con 5 años de profundidad. Y las conclusiones de `v2.51`, `v2.64` y `v2.88` —que solo midieron el bloque tecnico— se pueden empezar a rehacer.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
