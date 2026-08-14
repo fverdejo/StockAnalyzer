@@ -228,6 +228,18 @@ final class PortfolioPageTest extends TestCase
 
         self::assertStringContainsString('El 90,00% de la cartera esta en USD', $sobreUmbral);
         self::assertStringContainsString('panel-notice', $sobreUmbral);
+        // El aviso va DENTRO del panel de concentracion, no suelto detras.
+        // De esa anidacion depende la regla `.panel .panel-notice` que le da
+        // su separacion superior (`v2.92`): sacarlo del panel lo dejaria
+        // otra vez pegado a las barras.
+        $panel = strpos($sobreUmbral, '<h2>Concentracion de la cartera</h2>');
+        $aviso = strpos($sobreUmbral, 'panel panel-notice', (int) $panel);
+        $umbrales = strpos($sobreUmbral, 'Los avisos son orientativos', (int) $panel);
+
+        self::assertIsInt($panel);
+        self::assertIsInt($aviso);
+        self::assertIsInt($umbrales);
+        self::assertLessThan($umbrales, $aviso, 'El aviso va dentro del panel, antes de su nota de cierre.');
     }
 
     /**

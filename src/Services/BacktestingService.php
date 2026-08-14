@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StockAnalyzer\Services;
 
 use DateInterval;
+use DateTimeImmutable;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
@@ -12,11 +13,14 @@ use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Enums\ScoreCategory;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Models\Company;
+use StockAnalyzer\Models\Fundamentals;
 use StockAnalyzer\Models\HistoricalQuote;
 use StockAnalyzer\Models\Quote;
 use StockAnalyzer\Models\Score;
 use StockAnalyzer\Models\Stock;
+use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
+use Throwable;
 
 class BacktestingService
 {
@@ -26,9 +30,25 @@ class BacktestingService
         private readonly ScoreCalculator $scoreCalculator,
         private readonly RiskLevelsCalculator $riskLevelsCalculator,
         private readonly DividendGrowthCalculator $dividendGrowthCalculator = new DividendGrowthCalculator(),
-        private readonly BacktestingConfig $backtestingConfig = new BacktestingConfig()
+        private readonly BacktestingConfig $backtestingConfig = new BacktestingConfig(),
+        /**
+         * Snapshots diarios de fundamentales (`v2.74`). Opcional a
+         * proposito: sin el, `stockAt()` se comporta como antes de `v2.91`
+         * (los fundamentales de hoy en toda fecha pasada), que es lo que
+         * necesitan los tests que no hablan con base de datos.
+         */
+        private readonly ?FundamentalsHistoryRepository $fundamentalsHistory = null
     ) {
     }
+
+    /**
+     * Cuantas muestras del recorrido pudieron usar fundamentales de su
+     * propia fecha y cuantas tuvieron que caer en los de hoy. Se reinician
+     * en cada `backtestTicker()` para que el porcentaje publicado sea el de
+     * ese ticker y no un acumulado de toda la ejecucion.
+     */
+    private int $pointInTimeHits = 0;
+    private int $pointInTimeMisses = 0;
 
     /**
      * @param list<string> $tickers
@@ -616,6 +636,10 @@ class BacktestingService
     private function backtestTicker(string $ticker, int $horizonDays, int $step, string $mode = 'full'): array
     {
         $this->assertValidMode($mode);
+        // Por ticker, no acumulado: el porcentaje que se publica abajo tiene
+        // que describir ESTE recorrido.
+        $this->pointInTimeHits = 0;
+        $this->pointInTimeMisses = 0;
 
         $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
         $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
@@ -664,6 +688,14 @@ class BacktestingService
                 ? round($alpha / $alphaStdErr, 2)
                 : null,
             'benchmark_return' => round($benchmark, 2),
+            // Que porcentaje de las muestras uso fundamentales de su propia
+            // fecha en vez de los de hoy (`v2.91`). Sin esta cifra, un
+            // backtest con el 2% de cobertura y otro con el 100% se leen
+            // exactamente igual, y el primero sigue arrastrando el sesgo de
+            // anticipacion sobre el 56% del peso del score. `null` cuando no
+            // hay repositorio conectado, que es distinto de 0,0: 0,0
+            // significa "se busco y no habia nada".
+            'fundamentals_point_in_time_pct' => $this->pointInTimePercent(),
             'recent_samples' => array_slice($samples, -10),
             'buy_samples' => $this->datedReturnsFor($samples, ['BUY']),
             'buy_managed_samples' => count($managedSamples),
@@ -772,6 +804,26 @@ class BacktestingService
         );
     }
 
+    /**
+     * El `Stock` tal y como se veia en una fecha pasada: cotizacion de ese
+     * dia y, desde `v2.91`, los fundamentales que se le conocian **en esa
+     * fecha** si hay snapshot en `fundamentals_history` (`v2.74`).
+     *
+     * Hasta aqui el backtest reutilizaba los fundamentales de HOY para
+     * cada fecha pasada, asi que FUNDAMENTAL+VALUATION+QUALITY+DIVIDEND —el
+     * 56% del peso del score— entraban como una constante por ticker y con
+     * sesgo de anticipacion. Eso significa que los veredictos "neutro en
+     * backtest" de `v2.51`, `v2.64` y `v2.88` en realidad solo midieron el
+     * bloque tecnico.
+     *
+     * **Si no hay snapshot para esa fecha se sigue usando el de hoy**, no
+     * se salta la muestra. Es deliberado: la serie empezo a acumularse el
+     * 2026-08-14 y saltar todo lo anterior dejaria el backtest sin muestras
+     * durante meses, cambiando un sesgo conocido por un backtest vacio. Lo
+     * que no puede pasar es que la mezcla sea invisible, y por eso cada
+     * muestra cuenta en `pointInTimeHits`/`pointInTimeMisses` y el
+     * resultado publica el porcentaje real (ver `fundamentalsPointInTimePct`).
+     */
     private function stockAt(Stock $stock, HistoricalQuote $historical): Stock
     {
         $company = $stock->getCompany();
@@ -794,8 +846,63 @@ class BacktestingService
                 $historical->getVolume(),
                 $historical->getDate()
             ),
-            $stock->getFundamentals()
+            $this->fundamentalsAt($company->getTicker(), $historical->getDate(), $stock->getFundamentals())
         );
+    }
+
+    /**
+     * Porcentaje de muestras que uso fundamentales de su propia fecha.
+     * `null` sin repositorio conectado: ahi la pregunta no se llego a
+     * hacer, que no es lo mismo que hacerla y no encontrar nada.
+     */
+    private function pointInTimePercent(): ?float
+    {
+        if (!$this->fundamentalsHistory instanceof FundamentalsHistoryRepository) {
+            return null;
+        }
+
+        $total = $this->pointInTimeHits + $this->pointInTimeMisses;
+
+        return $total === 0 ? 0.0 : round($this->pointInTimeHits / $total * 100, 2);
+    }
+
+    /**
+     * Fundamentales de un ticker en una fecha concreta, con los de hoy como
+     * respaldo. Lleva la cuenta de aciertos y fallos para que el resultado
+     * del backtest pueda decir de cuanto se fia de verdad.
+     *
+     * `dividendGrowth5y` se conserva del objeto actual cuando el snapshot no
+     * lo trae: se calcula aparte en `withDividendGrowth()` a partir del
+     * historial de dividendos, que tampoco es reconstruible hacia atras
+     * (limitacion ya documentada en `v2.64`).
+     */
+    private function fundamentalsAt(string $ticker, DateTimeImmutable $date, Fundamentals $today): Fundamentals
+    {
+        if (!$this->fundamentalsHistory instanceof FundamentalsHistoryRepository) {
+            return $today;
+        }
+
+        try {
+            $snapshot = $this->fundamentalsHistory->findAsOf($ticker, $date);
+        } catch (Throwable) {
+            // Un fallo de base de datos no puede tumbar un backtest de diez
+            // años: se degrada al comportamiento anterior, contado como
+            // fallo para que se note en la cobertura.
+            $snapshot = null;
+        }
+
+        if ($snapshot === null) {
+            ++$this->pointInTimeMisses;
+
+            return $today;
+        }
+
+        ++$this->pointInTimeHits;
+        $historical = FundamentalsHistoryRepository::fromArray($snapshot);
+
+        return $historical->getDividendGrowth5y() === null
+            ? $historical->withDividendGrowth5y($today->getDividendGrowth5y())
+            : $historical;
     }
 
     /**

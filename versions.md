@@ -4409,6 +4409,79 @@ Limitaciones conocidas:
 
 ---
 
+## v2.91 - El backtest deja de mirar el futuro en la mitad fundamental del score
+
+Estado: implementado (la mecanica); pendiente de que la serie acumule profundidad para que sirva de algo.
+
+Objetivo:
+
+La unica idea que quedaba en prioridad alta, y el ultimo frente grande del motor sin medir: `BacktestingService::stockAt()` reutilizaba los fundamentales de **HOY** para cada fecha pasada. Es decir, FUNDAMENTAL + VALUATION + QUALITY + DIVIDEND —**65 de 115 puntos, el 56% del peso del score**— entraban en todo backtest como una constante por ticker y con sesgo de anticipacion.
+
+La consecuencia es mas grave de lo que suena: significa que los veredictos "neutro en backtest" de `v2.51` (CurrentRatio/RevenueGrowth), `v2.64` (crecimiento de dividendo) y `v2.88` (peso de RISK) **en realidad solo midieron el bloque tecnico**. Ninguna conclusion de calibracion de este proyecto cubre esa mitad del motor.
+
+El roadmap lo tenia como "bloqueado por profundidad de serie, **no por codigo**". Cierto para *medir*, pero no para *implementar*: con el cron sembrando desde el 2026-08-14, la mecanica se puede dejar puesta hoy para que empiece a funcionar sola en cuanto haya historial.
+
+### Que cambia
+
+- **`FundamentalsHistoryRepository::fromArray()`** (nuevo), inversa de `toArray()`. Es lo que convierte la tabla de `v2.74` de archivo muerto en algo consumible. Deliberadamente tolerante: una clave ausente vale `null`, porque un snapshot escrito hoy se leera dentro de meses y para entonces `FIELDS` puede haber ganado ratios que ese payload no tiene — lanzar invalidaria de golpe todo el historico anterior. Normaliza ademas `int` a `float` (un PER guardado como `20` vuelve asi de `json_decode`, y `Fundamentals` declara `?float`).
+- **`BacktestingService`** acepta el repositorio como septimo parametro, **opcional**. `stockAt()` pide `findAsOf($ticker, $fecha)` y usa ese snapshot si existe.
+- **Si no hay snapshot se siguen usando los de hoy**, no se salta la muestra. Es una decision, no un descuido: la serie empezo el 2026-08-14 y saltar todo lo anterior dejaria el backtest sin muestras durante meses, cambiando un sesgo conocido por un backtest vacio.
+- **Lo que no puede pasar es que la mezcla sea invisible.** Cada muestra cuenta como acierto o fallo y el resultado publica `fundamentals_point_in_time_pct`. `null` cuando no hay repositorio conectado —la pregunta no se llego a hacer—, que es distinto de `0.0`, que significa "se busco y no habia nada".
+- **La pantalla de backtesting lo dice en grande.** Por debajo del 99,5% de cobertura sale un aviso destacado explicando que el resto se calculo con ratios que en aquella fecha nadie conocia y que eso favorece a la señal. Va como aviso y no como columna trece porque es una propiedad de la ejecucion entera (todos los tickers comparten rango de fechas), y en una tabla de 12 columnas una mas se perderia.
+- Conectado en los **tres** puntos de composicion: la pantalla de backtesting, el historial de señal de la ficha de detalle (si una usara fundamentales de hoy y la otra los de cada fecha, las dos pantallas darian cifras distintas para la misma pregunta) y `bin/backtest.php`.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **265 tests, 809 assertions, OK** (de 246). 19 casos nuevos.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Que la consulta no mire al futuro**, contra MySQL real (7 casos): fecha exacta, caida al snapshot anterior mas cercano (el cron no corre fines de semana, asi que un backtest que muestree un sabado no encontrara ese dia), aislamiento entre tickers, UPSERT del mismo dia y supervivencia de los decimales. El caso central es `testNuncaDevuelveUnSnapshotPosteriorALaFechaPedida`: **devolver un snapshot posterior seria exactamente el sesgo que se esta eliminando y no daria ningun error**, el backtest simplemente saldria con mejor pinta.
+- **Que el backtest lo use de verdad** (6 casos de integracion): sin repositorio se comporta como antes y no inventa cobertura; con repositorio vacio da 0,0 y **no pierde ni una muestra**; con snapshots que cubren el recorrido da 100,0; con fundamentales pesimos en el historico **las señales BUY que producian los excelentes de hoy desaparecen** (que es la prueba de que se estan usando los del snapshot y no los actuales); la cobertura parcial se reporta como tal; y los contadores se reinician por ticker.
+- **La hidratacion** (6 casos, sin base de datos): ida y vuelta completa, ida y vuelta pasando por `json_encode`/`json_decode` con el mismo flag que usa `recordSnapshot()`, enteros normalizados, payload antiguo al que le faltan ratios, `null` guardado que sigue siendo `null` (cero es un dato; aqui hay ausencia de dato) y valores corruptos tratados como ausentes.
+- **Backtest real por HTTP** de `magnificent7`: HTTP 200 y el aviso sale diciendo la verdad —"Solo el 0,00% de las muestras uso fundamentales de su propia fecha"—, que es el estado correcto hoy en local.
+
+Limitaciones conocidas:
+
+- **Hoy esto no mejora ninguna medicion.** La cobertura real es 0% y lo seguira siendo para las fechas anteriores al 2026-08-14. Lo que cambia es que a partir de ahora el backtest *puede* ser honesto y *dice* cuando no lo es. Para que una calibracion fundamental valga, hacen falta meses de serie.
+- `dividendGrowth5y` se conserva del objeto actual cuando el snapshot no lo trae: se calcula a partir del historial de dividendos, que tampoco es reconstruible hacia atras (misma limitacion que ya documentaba `v2.64`).
+- La cache `ticker_backtest_cache` no incluye la cobertura en su clave, asi que tras desplegar convive durante 24h (su TTL) con resultados calculados sin point-in-time. Se cura solo.
+- **Las conclusiones de `v2.51`, `v2.64` y `v2.88` siguen siendo las que son**: se tomaron sobre el bloque tecnico. Rehacerlas solo tendra sentido cuando la cobertura sea alta, y conviene anotarlo aqui para no darlas por validadas en el frente fundamental.
+
+Resultado:
+
+El 56% del peso del score deja de ser estructuralmente no backtesteable. La mecanica esta puesta, probada y conectada; a partir de ahora el limite es el calendario, no el codigo. Y mientras tanto, la pantalla de backtesting avisa de cuanto de lo que enseña se apoya en informacion que en su momento no existia — que es justo lo que llevaba anos sin decir.
+
+---
+
+## v2.92 - El aviso de divisa deja de ir pegado a las barras
+
+Estado: implementado.
+
+Objetivo:
+
+El usuario reporta con captura que en "Concentracion de la cartera" el aviso verde de exposicion a divisa aparece pegado a las barras de posiciones, hasta el punto de leerse como si fuera parte de la ultima fila.
+
+Medido en Chromium antes de tocar nada: **0px de separacion por arriba, frente a 16px por abajo**. La asimetria tiene causa concreta — `.panel` define `margin-bottom` pero no `margin-top`, y ese aviso es un `.panel.panel-notice` **anidado dentro** del panel de concentracion, un caso que no existia hasta `v2.89`. Los avisos de primer nivel (alertas sin leer, concentracion sectorial del ranking) no lo sufren porque se separan por el flujo normal del documento.
+
+Se arregla con una regla que ataca el caso general y no solo esta pantalla:
+
+```css
+.panel .panel-notice { margin-top: 16px; }
+```
+
+Solo aplica a avisos anidados en otro panel. Los 16px igualan exactamente el margen inferior que ya tenian, asi que el aviso queda centrado en su hueco en vez de colgando de la barra de arriba.
+
+La variante de texto del mismo bloque (`Reparto por divisa: EUR 55%, USD 45%`, cuando no se supera el umbral) se queda en sus 10px de `.panel-note`: es texto pequeño y gris, y ahi una separacion mas apretada es la correcta.
+
+Verificado:
+
+- **Medido en Chromium** con el preset `nosector` de `bin/render-portfolio-fixture.php` (90,34% en USD, que dispara el aviso): de 0px a **16px**, con los 16px de abajo intactos. La variante de texto sigue en 10px, comprobada con el preset `full`.
+- Comprobado que los avisos de **primer nivel no cambian**: el de alertas sin leer mantiene `margin-top: 0px` y no esta anidado en ningun panel.
+- `ddev exec vendor/bin/phpunit`: **265 tests, 813 assertions, OK**. Cuatro aserciones nuevas fijan la anidacion de la que depende la regla: si alguien saca el aviso fuera del panel, el CSS deja de aplicarle y el test lo dice.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- Captura del panel revisada a ojo.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

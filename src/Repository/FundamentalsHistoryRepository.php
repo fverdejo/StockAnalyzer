@@ -150,4 +150,53 @@ class FundamentalsHistoryRepository
 
         return $values;
     }
+
+    /**
+     * Inversa de `toArray()`: reconstruye el objeto a partir de un payload
+     * guardado. Es lo que convierte esta tabla de un archivo muerto en algo
+     * que el backtest puede consumir (ver versions.md `v2.91`).
+     *
+     * Tolerante a propósito con las claves que falten: un snapshot escrito
+     * hoy se leera dentro de meses, y para entonces `FIELDS` puede haber
+     * ganado ratios que ese payload antiguo no contiene. Una clave ausente
+     * vale `null`, que es exactamente lo que significa —"ese dia no
+     * guardabamos este dato"— y que el resto del motor ya trata como dato
+     * no disponible. Lanzar aqui haria que un ratio nuevo invalidase de
+     * golpe todo el historico anterior.
+     *
+     * Los valores llegan de `json_decode`, asi que un entero guardado como
+     * tal vuelve como `int`: se normaliza a `float` para que `Fundamentals`
+     * reciba siempre el tipo que declara.
+     *
+     * @param array<string,mixed> $payload
+     */
+    public static function fromArray(array $payload): Fundamentals
+    {
+        $value = static function (string $key) use ($payload): ?float {
+            $raw = $payload[$key] ?? null;
+
+            return is_numeric($raw) ? (float) $raw : null;
+        };
+
+        return new Fundamentals(
+            per: $value('per'),
+            peg: $value('peg'),
+            roe: $value('roe'),
+            roic: $value('roic'),
+            eps: $value('eps'),
+            marketCap: $value('marketCap'),
+            debtToEquity: $value('debtToEquity'),
+            freeCashFlow: $value('freeCashFlow'),
+            evToEbitda: $value('evToEbitda'),
+            priceToBook: $value('priceToBook'),
+            dividendYield: $value('dividendYield'),
+            payoutRatio: $value('payoutRatio'),
+            grossMargin: $value('grossMargin'),
+            operatingMargin: $value('operatingMargin'),
+            netMargin: $value('netMargin'),
+            revenueGrowth: $value('revenueGrowth'),
+            currentRatio: $value('currentRatio'),
+            dividendGrowth5y: $value('dividendGrowth5y')
+        );
+    }
 }

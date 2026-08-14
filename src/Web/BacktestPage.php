@@ -135,7 +135,54 @@ HTML;
             . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estandar (Welch). |t| mayor o igual que 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.', true)
             . '</tr></thead><tbody>'
             . implode('', $rows)
-            . '</tbody></table></div><p class="muted panel-note">t de la alpha: alpha dividida entre su error estandar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los dias no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p></section>';
+            . '</tbody></table></div><p class="muted panel-note">t de la alpha: alpha dividida entre su error estandar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los dias no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
+            . self::renderPointInTimeNote(is_array($result['results'] ?? null) ? $result['results'] : [])
+            . '</section>';
+    }
+
+    /**
+     * Aviso de cuanto de este backtest usa fundamentales de la fecha de cada
+     * muestra y cuanto los de hoy (`v2.91`).
+     *
+     * Va como aviso y no como columna trece a proposito: es una propiedad de
+     * la ejecucion entera, no de cada ticker (todos comparten rango de
+     * fechas y la misma serie de snapshots), y en una tabla que ya tiene 12
+     * columnas una mas se perderia.
+     *
+     * Se muestra **siempre que haya el dato**, tambien —sobre todo— cuando
+     * la cobertura es baja: mientras `fundamentals_history` no tenga
+     * profundidad, el 56% del peso del score sigue entrando con sesgo de
+     * anticipacion, y esa es justo la advertencia que no puede faltar al
+     * leer estos numeros.
+     *
+     * @param list<array<string,mixed>> $results
+     */
+    private static function renderPointInTimeNote(array $results): string
+    {
+        $coverages = [];
+
+        foreach ($results as $item) {
+            $coverage = $item['fundamentals_point_in_time_pct'] ?? null;
+
+            if (is_float($coverage) || is_int($coverage)) {
+                $coverages[] = (float) $coverage;
+            }
+        }
+
+        if ($coverages === []) {
+            return '';
+        }
+
+        $average = array_sum($coverages) / count($coverages);
+
+        if ($average >= 99.5) {
+            return '<p class="muted panel-note">Fundamentales point-in-time: el 100% de las muestras uso los ratios que se conocian en su propia fecha, no los de hoy.</p>';
+        }
+
+        return sprintf(
+            '<section class="panel panel-notice"><strong>Solo el %s%% de las muestras uso fundamentales de su propia fecha.</strong> El resto se calculo con los ratios de HOY, que en aquella fecha nadie conocia: sobre esa parte, las categorias FUNDAMENTAL, VALUATION, QUALITY y DIVIDEND —el 56%% del peso del score— entran con sesgo de anticipacion y tienden a favorecer a la señal. La serie de snapshots (<code>fundamentals_history</code>) empezo a acumularse el 2026-08-14 y crece un dia por sesion de mercado: esta cifra subira sola.</section>',
+            Layout::escape(Layout::formatNumber($average))
+        );
     }
 
     /**

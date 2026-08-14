@@ -22,7 +22,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.90';
+    private const APP_VERSION = 'v2.92';
 
     /**
      * @param list<StockAnalysis> $results

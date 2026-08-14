@@ -10,6 +10,7 @@ use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\Auth\AuthService;
 use StockAnalyzer\Auth\CsrfToken;
 use StockAnalyzer\Config\AppUrlConfig;
+use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Config\CompanyDirectory;
 use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
@@ -1073,7 +1074,13 @@ class Application
                     $this->marketDataProvider,
                     new TechnicalAnalyzer(),
                     $this->scoreCalculator,
-                    new RiskLevelsCalculator(new RiskLevelsConfig())
+                    new RiskLevelsCalculator(new RiskLevelsConfig()),
+                    new DividendGrowthCalculator(),
+                    new BacktestingConfig(),
+                    // Fundamentales point-in-time (v2.91): con snapshot de la
+                    // fecha se usa ese; sin el, los de hoy, como antes. La
+                    // pantalla publica el porcentaje real de cobertura.
+                    $this->fundamentalsHistoryRepository
                 );
                 $result = $service->run($tickers, $horizon);
             } catch (Throwable $exception) {
@@ -1178,7 +1185,14 @@ class Application
             $this->marketDataProvider,
             new TechnicalAnalyzer(),
             $this->scoreCalculator,
-            new RiskLevelsCalculator(new RiskLevelsConfig())
+            new RiskLevelsCalculator(new RiskLevelsConfig()),
+            new DividendGrowthCalculator(),
+            new BacktestingConfig(),
+            // Mismo motor que la pantalla de backtesting: si el historial de
+            // señal de la ficha usara fundamentales de hoy y el backtesting
+            // los de cada fecha, las dos pantallas darian cifras distintas
+            // para la misma pregunta (v2.91).
+            $this->fundamentalsHistoryRepository
         );
         $backtestCache = new TickerBacktestCacheRepository($this->connection);
 

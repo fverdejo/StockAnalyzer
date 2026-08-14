@@ -13,7 +13,7 @@ Esta seccion llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el
 
 **Se volvio a desincronizar igualmente.** El `2026-08-09` este documento seguia diciendo `v2.45`/`v2.47` con el proyecto ya en `v2.68`, o sea 23 versiones de retraso: la enumeracion version a version que habia aqui era exactamente la duplicacion que la regla de arriba prohibe, y se ha retirado. Si hace falta saber que hay implementado, la respuesta esta en `versions.md` y solo ahi.
 
-Resumen a fecha de la ultima revision (`2026-08-11`, `v2.90`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
+Resumen a fecha de la ultima revision (`2026-08-14`, `v2.92`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
 
 ---
 
@@ -41,12 +41,12 @@ Recalibrar los cortes ahora solo conseguiria que la app dijera "compra" con mas 
 2. ~~**Revisar el bloque `TECHNICAL` entero.**~~ **Medido, sin cambio de codigo.** Señal por señal sobre 22.727 muestras: el cruce `SMA20>SMA50` (4 puntos) ordena **invertido en 6 de 6 universos y significativo en 6 de 6** (t entre -2,06 y -4,93), y `precio > SMA50` (6 puntos) igual en 6 de 6. Pero neutralizarlos mejora dos universos y empeora el tercero, sin mover la media: mismo desenlace que el momentum en `v2.76`.
 3. ~~**Revisar el horizonte.**~~ **Descartada.** A 120 dias es peor, no mejor: en `largecap60` el top-10 se queda 4,76 pp por debajo del universo (t=-3,94), el unico resultado significativo de la ronda.
 4. **Recalibrar la escala**, ya con sentido, cuando el score ordene bien. Sigue bloqueado, y ahora con mas motivo. Ojo al alcance: los cortes afectan al ranking, al backtesting y a las alertas de cambio de recomendacion (`v2.15`).
-5. **Fundamentales point-in-time**: la tabla existe y se siembra desde `v2.74`, pero `BacktestingService::stockAt()` seguira usando los de hoy hasta que haya historial suficiente. Ese cambio es el que hara backtesteable el 56% del peso del score — y, tras `v2.78` y `v2.88`, es el unico frente grande que queda sin medir.
+5. ~~**Fundamentales point-in-time**~~ **Mecanica implementada en `v2.91`.** `stockAt()` ya usa el snapshot de `fundamentals_history` de la fecha de cada muestra, con los de hoy como respaldo, y el resultado publica `fundamentals_point_in_time_pct` para que un backtest no pueda mentir sobre cuanto de el se apoya en informacion que entonces no existia. **Hoy la cobertura real es 0%** y lo sera para toda fecha anterior al 2026-08-14: lo que cambia es que a partir de ahora el limite es el calendario y no el codigo. Ojo: las conclusiones de `v2.51`, `v2.64` y `v2.88` se tomaron sobre el bloque tecnico y solo tendra sentido rehacerlas cuando la cobertura sea alta.
 6. Proveedor oficial de noticias o datos fundamentales; universos mantenidos automaticamente.
 
 ~~**Decision pendiente del usuario, salida de `v2.78`:** neutralizar o rebajar el peso del bloque `RISK`...~~ **Decidida y cerrada en `v2.88`.** El usuario opto por bajarlo a la mitad, condicionado a medirlo antes y despues. Se midio sobre **6 universos** (no 3), 10 años y ~121 fechas independientes por universo: bajar `risk` de 10 a 5 mejora 3 universos de 6 y mueve la alpha media de -0,043 a -0,025; bajarlo a 1 la deja en -0,012. Con el error tipico por universo en 0,19-0,23 pp y ningun t-stat por encima de |1,61|, **toda la curva cabe dentro del ruido**: el "unico lastre consistente" de `v2.78` no reproduce al ampliar la muestra. El peso se queda en 10 y la razon queda escrita en `config/weights.php`. Tabla completa en `versions.md` (`v2.88`).
 
-Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **246 tests / 766 assertions**, y desde `v2.90` **habla con MySQL de verdad** (32 casos de integracion contra un esquema aparte, que se saltan solos donde no hay base de datos). `v2.79` añadio las tres piezas con historial de fallos reales en produccion (normalizacion de tickers, resolucion de universo, TTL de cache por rango) y `v2.87` cubre el rediseño de "Mi cartera" (orden de los paneles, umbrales del panel de concentracion, "Sin sector" nunca marcado como riesgo, cabeceras numericas). Sigue faltando cobertura de los repositorios de cache de menor riesgo (`market_movers_cache`, `ticker_backtest_cache`, `corporate_profile_cache`), de `DailyRankingRepository`/`NewsRepository` y de las rutas de `Application.php` que renderizan pagina (dependen de `redirect()`, que hace `exit`).
+Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **265 tests / 813 assertions**, y desde `v2.90` **habla con MySQL de verdad** (32 casos de integracion contra un esquema aparte, que se saltan solos donde no hay base de datos). `v2.79` añadio las tres piezas con historial de fallos reales en produccion (normalizacion de tickers, resolucion de universo, TTL de cache por rango) y `v2.87` cubre el rediseño de "Mi cartera" (orden de los paneles, umbrales del panel de concentracion, "Sin sector" nunca marcado como riesgo, cabeceras numericas). Sigue faltando cobertura de los repositorios de cache de menor riesgo (`market_movers_cache`, `ticker_backtest_cache`, `corporate_profile_cache`), de `DailyRankingRepository`/`NewsRepository` y de las rutas de `Application.php` que renderizan pagina (dependen de `redirect()`, que hace `exit`).
 
 Pendiente aparte, no bloqueante:
 
@@ -67,7 +67,7 @@ Pendiente aparte, no bloqueante:
 
 ## Prioridad alta
 
-- Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`) cuando el historial sea suficiente. Tras `v2.78` y `v2.88` es el unico frente grande sin medir: el 56% del peso del score sigue entrando en todo backtest con sesgo de anticipacion, asi que ninguna conclusion de calibracion cubre esa mitad del motor — incluida la de `v2.88` sobre `RISK`. **Bloqueado solo por profundidad de la serie**, no por codigo — ver el cron en "Pendiente aparte". **Es hoy la unica idea de prioridad alta que queda.**
+- ~~Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`)~~ **Hecho en `v2.91`**, con respaldo a los fundamentales de hoy cuando no hay snapshot y con la cobertura real publicada en cada backtest (`fundamentals_point_in_time_pct`) y avisada en la pantalla. **Ya no hay nada bloqueado por codigo en prioridad alta**: lo que falta es que `fundamentals_history` acumule meses, cosa que el cron de la Raspberry hace solo desde el 2026-08-14. Revisar la cobertura en la pantalla de backtesting de vez en cuando; cuando suba, rehacer las calibraciones de `v2.51`, `v2.64` y `v2.88`, que hasta ahora solo midieron el bloque tecnico.
 - ~~Decidir que hacer con el bloque `RISK`~~ **Cerrado en `v2.88`**: decidido por el usuario, medido sobre 6 universos, y el efecto resulta estar dentro del ruido. Se queda en 10.
 
 ---
@@ -786,3 +786,21 @@ Cuatro problemas encontrados y resueltos por el camino, ninguno previsto:
 4. **php-fpm no recogia el grupo `msmtp` nuevo** hasta reiniciarlo, y los correos fallaban sin dar la cara.
 
 Estado al cerrar: home 4,2s, detalle 0,14s, backtesting 0,01s, API 0,78s, todo por HTTPS. Sin usuarios (el de prueba se borro), a la espera de que el usuario registre el suyo.
+
+---
+
+## 2026-08-14 (segunda sesion: fundamentales point-in-time, la ultima idea de prioridad alta)
+
+Con la Raspberry ya en produccion y el cron sembrando, el usuario pide seguir con lo que quede. Revisado el listado, solo hay una idea que no dependa de un proveedor externo de pago: **fundamentales point-in-time**, que el roadmap tenia como "bloqueado por profundidad de serie, no por codigo".
+
+Esa distincion resulta ser la clave: cierto para *medir*, falso para *implementar*. La mecanica se puede dejar puesta hoy —con respaldo a los fundamentales de hoy cuando no hay snapshot— para que empiece a funcionar sola en cuanto el cron acumule historial. Se implementa como `v2.91`.
+
+Lo que hace: `stockAt()` deja de reutilizar los fundamentales de HOY para cada fecha pasada y pide el snapshot de esa fecha. Con eso, el 56% del peso del score (FUNDAMENTAL+VALUATION+QUALITY+DIVIDEND) deja de ser estructuralmente no backtesteable.
+
+Lo que **no** hace, y conviene tener claro: hoy no mejora ninguna medicion. La cobertura real es 0% y lo sera para toda fecha anterior al 2026-08-14. Por eso la pieza que mas importa de esta version no es el respaldo sino la **honestidad**: cada resultado publica `fundamentals_point_in_time_pct` y la pantalla avisa en grande cuando la cobertura es baja. Sin esa cifra, un backtest con el 2% de cobertura se lee exactamente igual que uno con el 100%, y el primero sigue arrastrando el sesgo entero.
+
+De paso queda anotado algo incomodo que no estaba escrito en ningun sitio: **los veredictos "neutro en backtest" de `v2.51`, `v2.64` y `v2.88` en realidad solo midieron el bloque tecnico.** Rehacerlos tendra sentido cuando la cobertura sea alta.
+
+Verificado en ddev: `vendor/bin/phpunit` de 246 a **265 tests / 809 assertions**; `vendor/bin/phpstan analyse` sin errores; backtest real por HTTP mostrando el aviso con la cifra correcta (0,00%). El caso de test central es el que comprueba que `findAsOf()` **nunca** devuelve un snapshot posterior a la fecha pedida: seria exactamente el sesgo que se esta eliminando y no daria ningun error, el backtest solo saldria con mejor pinta.
+
+Detalle tecnico completo en `versions.md` (`v2.91`).

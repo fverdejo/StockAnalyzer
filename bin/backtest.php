@@ -7,16 +7,19 @@ require __DIR__ . '/../vendor/autoload.php';
 use StockAnalyzer\Analyzer\NewsAnalyzer;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
+use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
+use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 use StockAnalyzer\Services\BacktestingService;
+use StockAnalyzer\Services\DividendGrowthCalculator;
 use StockAnalyzer\Services\RiskLevelsCalculator;
 use StockAnalyzer\Utils\TickerNormalizer;
 
@@ -111,7 +114,14 @@ $service = new BacktestingService(
     ),
     new TechnicalAnalyzer(),
     new ScoreCalculator($weights, new NewsAnalyzer(new NewsRepository($connection), $weights)),
-    new RiskLevelsCalculator(new RiskLevelsConfig())
+    new RiskLevelsCalculator(new RiskLevelsConfig()),
+    new DividendGrowthCalculator(),
+    new BacktestingConfig(),
+    // Fundamentales point-in-time (v2.91). Mirar siempre
+    // `fundamentals_point_in_time_pct` en la salida antes de sacar
+    // conclusiones: con la serie recien empezada la mayoria de las muestras
+    // siguen usando los fundamentales de hoy, igual que antes.
+    new FundamentalsHistoryRepository($connection)
 );
 
 if ($persist) {

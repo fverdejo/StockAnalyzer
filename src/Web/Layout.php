@@ -877,6 +877,20 @@ class Layout
             color: var(--accent-strong);
         }
 
+        /* Un aviso DENTRO de otro panel (el de divisa en "Concentracion de
+           la cartera") necesita separarse de lo que tiene encima: `.panel`
+           define `margin-bottom` pero no `margin-top`, asi que el aviso
+           quedaba pegado a las barras —0px medidos, frente a los 16px que
+           si tenia por debajo— y se leia como parte de la ultima fila.
+           Ver versions.md `v2.92`.
+
+           No afecta a los avisos de primer nivel (alertas sin leer,
+           concentracion sectorial del ranking), que no van anidados en un
+           panel y ya se separan por el flujo normal. */
+        .panel .panel-notice {
+            margin-top: 16px;
+        }
+
         .panel-notice a {
             color: var(--accent-strong);
         }
