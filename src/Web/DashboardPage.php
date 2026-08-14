@@ -22,7 +22,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.93';
+    private const APP_VERSION = 'v2.94';
 
     /**
      * @param list<StockAnalysis> $results
@@ -62,6 +62,10 @@ class DashboardPage
         $starHeader = $currentUser instanceof User ? '<th class="star-cell">&#9733;</th>' : '';
         $rows = self::renderRows($results, $rawTickers, $currentUser, $csrfToken, $watched, $redirectTo);
         $sectorNote = self::renderSectorNote($sectorWeights, count($results));
+        // El veredicto no sale solo: va acompañado de la ventaja que se le
+        // ha medido (v2.94). Antes el ranking pintaba BUY en verde sin
+        // ninguna pista de que su respaldo medido es negativo.
+        $edgeNotice = MeasuredEdgeNotice::render();
         $updatedAt = Layout::escape((new DateTimeImmutable())->format('Y-m-d H:i'));
 
         $body = <<<HTML
@@ -105,6 +109,7 @@ class DashboardPage
 
         <section class="panel">
             <h2>Ranking completo</h2>
+            {$edgeNotice}
             {$sectorNote}
             <div class="table-wrap">
                 <table class="table-middle">

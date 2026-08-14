@@ -4555,6 +4555,64 @@ La mitad fundamental del score pasa de no ser backtesteable a serlo, hoy y sin p
 
 ---
 
+## v2.94 - La primera medicion honesta, y el veredicto deja de salir solo
+
+Estado: implementado. Incluye la primera medicion de la mitad fundamental del score sin sesgo de anticipacion.
+
+### La medicion
+
+Con el historico de `v2.93` ya cargado, se repite el backtest transversal cambiando **solo** de donde salen los fundamentales. Mismos 32 tickers, mismas 58 fechas independientes, 5 años, horizonte 20 dias:
+
+| | Alpha del top-10 | t | Retorno top-10 |
+|---|---|---|---|
+| Score completo, fundamentales **de epoca** | **-0,62 pp** | -1,51 | 0,46% |
+| Score completo, como estaba antes (sesgado) | -0,38 pp | -0,93 | 0,71% |
+| Solo tecnico, sin fundamentales | -0,21 pp | -0,57 | 0,88% |
+| *Universo entero (referencia)* | — | — | *1,09%* |
+
+Tres lecturas:
+
+1. **El sesgo estaba maquillando el score.** Al medirlo honestamente empeora (-0,38 -> -0,62). Es lo que cabia esperar por logica —usar los ratios de hoy para el pasado favorece a las empresas que hoy sabemos que fueron bien— y ahora esta confirmado con datos.
+2. **Cuantos mas fundamentales, peor.** El orden es consistente: quitar el bloque entero es lo menos malo. Apunta a que el 56% del peso del score resta.
+3. **Ninguna version bate al universo.**
+
+**No se toca ningun peso.** El error tipico es 0,41 pp, asi que el intervalo del -0,62 va de -1,42 a +0,18: el cero esta dentro y ningun |t| llega a 1,96. Con 58 fechas no se distingue "el bloque fundamental resta" de "no hay señal en ninguna direccion". Este proyecto ya se quemo con eso en `v2.76`, `v2.78` y `v2.88`: hallazgos claros en pocos universos que se disolvieron al ampliarlos.
+
+`bin/backtest.php` gana `--no-point-in-time`, la palanca que hace posible esta comparacion: fuerza el comportamiento anterior a `v2.91` con todo lo demas identico. Herramienta de investigacion, mismo espiritu que `--mode=technical` (`v2.32`); no afecta a la aplicacion.
+
+### El cambio de producto
+
+El usuario **opera siguiendo estas recomendaciones**. Hasta ahora el Home pintaba `BUY` en verde sin ninguna pista de que su respaldo medido es negativo. Es el mismo problema de `v2.80` (una columna que mentia en su titulo) y `v2.91` (el aviso de cobertura), pero en el sitio donde mas importa.
+
+- `config/measured_edge.php` (nuevo): la ventaja medida, con su muestra, fecha y significancia. No se calcula al vuelo —el backtest que la produce tarda minutos—: se mide a proposito y se escribe ahi. Poner `alpha` a `null` desactiva el aviso, que es lo que habra que hacer el dia que el score demuestre ventaja.
+- `Config\MeasuredEdgeConfig`: lectura resiliente, mismo patron que `ScoreWeights`. Un fichero ausente o corrupto no puede tumbar el Home.
+- `Web\MeasuredEdgeNotice`: el componente, con dos presentaciones. Completa en el ranking; de una linea en la ficha del valor, donde la recomendacion ya sale destacada y el aviso debe acompañar, no competir.
+
+**Dos decisiones de tono, deliberadas y cubiertas por tests:**
+
+1. **No dice "el ranking va peor que el azar"** mientras la medicion no sea significativa. Con |t| = 1,51 lo unico sostenible es que no hay evidencia de ventaja, que no es lo mismo que haber demostrado desventaja. La aplicacion no puede exagerar en la direccion contraria al error que esta corrigiendo. Hay un test que falla si la redaccion se pasa de frenada.
+2. **No es rojo ni bloquea nada.** No es un fallo: es el estado del conocimiento sobre una herramienta que sigue siendo util para cribar y para ver indicadores.
+
+El componente sabe decir las tres cosas —ventaja, desventaja o ausencia de evidencia— segun lo que digan los numeros. No es un castigo permanente, es un informe.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **291 tests, 899 assertions, OK** (de 284). 7 casos nuevos, centrados en lo que la aplicacion **se permite afirmar** mas que en el maquetado.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- HTML real del Home y de la ficha de AAPL: el aviso sale en los dos, con la redaccion correcta para el caso no significativo.
+
+Limitaciones conocidas:
+
+- **58 fechas, 32 tickers, un universo, 5 años y grano anual.** Es una primera lectura, no un veredicto. Falta repetirla en `healthcare`, `energy`, `consumer_staples`, `industrials` y `financials` conforme el relleno los cubra.
+- La cifra del aviso es **una foto**: hay que rehacer la medicion y actualizar el fichero. Por eso el aviso muestra siempre la fecha en que se midio.
+- El aviso es global, no por universo: la alpha se midio sobre 32 valores de EEUU y se muestra tambien navegando por otros universos.
+
+Resultado:
+
+La mitad fundamental del score se mide por primera vez sin hacer trampa, y el resultado es peor que el que se venia dando por bueno. Y quien usa la aplicacion para decidir compras lo ve en pantalla, junto al veredicto, en vez de tener que leerse `versions.md`.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

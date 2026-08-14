@@ -877,6 +877,18 @@ class Layout
             color: var(--accent-strong);
         }
 
+        /* Segunda linea del aviso de ventaja medida (v2.94): la muestra y la
+           fecha de la medicion. Va en bloque aparte y mas pequeña para que
+           el titular se lea primero, pero visible: un aviso que dice "no hay
+           ventaja demostrada" sin decir sobre que muestra seria tan opaco
+           como el veredicto que viene a matizar. */
+        .edge-detail {
+            display: block;
+            margin-top: 6px;
+            font-size: 12px;
+            opacity: 0.85;
+        }
+
         /* Un aviso DENTRO de otro panel (el de divisa en "Concentracion de
            la cartera") necesita separarse de lo que tiene encima: `.panel`
            define `margin-bottom` pero no `margin-top`, asi que el aviso

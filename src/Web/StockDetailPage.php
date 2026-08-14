@@ -83,10 +83,14 @@ class StockDetailPage
             Layout::formatNumber($score->getPercentage())
         );
 
-        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div></section>',
+        // La version de una linea del aviso de ventaja medida (v2.94): aqui
+        // la recomendacion ya sale destacada arriba, asi que el aviso
+        // acompaña en vez de competir con ella.
+        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div>%s</section>',
             Layout::escape($company->getTicker()),
             Layout::escape($recommendation),
-            Layout::escape($explanation->getSummary())
+            Layout::escape($explanation->getSummary()),
+            MeasuredEdgeNotice::renderInline()
         );
 
         $signalSections = sprintf(

@@ -13,7 +13,7 @@ Esta seccion llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el
 
 **Se volvio a desincronizar igualmente.** El `2026-08-09` este documento seguia diciendo `v2.45`/`v2.47` con el proyecto ya en `v2.68`, o sea 23 versiones de retraso: la enumeracion version a version que habia aqui era exactamente la duplicacion que la regla de arriba prohibe, y se ha retirado. Si hace falta saber que hay implementado, la respuesta esta en `versions.md` y solo ahi.
 
-Resumen a fecha de la ultima revision (`2026-08-14`, `v2.93`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
+Resumen a fecha de la ultima revision (`2026-08-14`, `v2.94`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
 
 ---
 
@@ -46,7 +46,7 @@ Recalibrar los cortes ahora solo conseguiria que la app dijera "compra" con mas 
 
 ~~**Decision pendiente del usuario, salida de `v2.78`:** neutralizar o rebajar el peso del bloque `RISK`...~~ **Decidida y cerrada en `v2.88`.** El usuario opto por bajarlo a la mitad, condicionado a medirlo antes y despues. Se midio sobre **6 universos** (no 3), 10 años y ~121 fechas independientes por universo: bajar `risk` de 10 a 5 mejora 3 universos de 6 y mueve la alpha media de -0,043 a -0,025; bajarlo a 1 la deja en -0,012. Con el error tipico por universo en 0,19-0,23 pp y ningun t-stat por encima de |1,61|, **toda la curva cabe dentro del ruido**: el "unico lastre consistente" de `v2.78` no reproduce al ampliar la muestra. El peso se queda en 10 y la razon queda escrita en `config/weights.php`. Tabla completa en `versions.md` (`v2.88`).
 
-Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **284 tests / 878 assertions**, y desde `v2.90` **habla con MySQL de verdad** (32 casos de integracion contra un esquema aparte, que se saltan solos donde no hay base de datos). `v2.79` añadio las tres piezas con historial de fallos reales en produccion (normalizacion de tickers, resolucion de universo, TTL de cache por rango) y `v2.87` cubre el rediseño de "Mi cartera" (orden de los paneles, umbrales del panel de concentracion, "Sin sector" nunca marcado como riesgo, cabeceras numericas). Sigue faltando cobertura de los repositorios de cache de menor riesgo (`market_movers_cache`, `ticker_backtest_cache`, `corporate_profile_cache`), de `DailyRankingRepository`/`NewsRepository` y de las rutas de `Application.php` que renderizan pagina (dependen de `redirect()`, que hace `exit`).
+Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger a **291 tests / 899 assertions**, y desde `v2.90` **habla con MySQL de verdad** (32 casos de integracion contra un esquema aparte, que se saltan solos donde no hay base de datos). `v2.79` añadio las tres piezas con historial de fallos reales en produccion (normalizacion de tickers, resolucion de universo, TTL de cache por rango) y `v2.87` cubre el rediseño de "Mi cartera" (orden de los paneles, umbrales del panel de concentracion, "Sin sector" nunca marcado como riesgo, cabeceras numericas). Sigue faltando cobertura de los repositorios de cache de menor riesgo (`market_movers_cache`, `ticker_backtest_cache`, `corporate_profile_cache`), de `DailyRankingRepository`/`NewsRepository` y de las rutas de `Application.php` que renderizan pagina (dependen de `redirect()`, que hace `exit`).
 
 Pendiente aparte, no bloqueante:
 
@@ -806,3 +806,21 @@ De paso queda anotado algo incomodo que no estaba escrito en ningun sitio: **los
 Verificado en ddev: `vendor/bin/phpunit` de 246 a **265 tests / 809 assertions**; `vendor/bin/phpstan analyse` sin errores; backtest real por HTTP mostrando el aviso con la cifra correcta (0,00%). El caso de test central es el que comprueba que `findAsOf()` **nunca** devuelve un snapshot posterior a la fecha pedida: seria exactamente el sesgo que se esta eliminando y no daria ningun error, el backtest solo saldria con mejor pinta.
 
 Detalle tecnico completo en `versions.md` (`v2.91`).
+
+---
+
+## 2026-08-14 (tarde: relleno del historico y la primera medicion honesta)
+
+Se rellena `fundamentals_history` hacia atras (`v2.93`) y con el se hace la primera medicion de la mitad fundamental del score sin sesgo de anticipacion (`v2.94`).
+
+**El relleno**: no hace falta comprar los ratios de cada fecha, se reconstruyen. 11 de los 18 campos salen solo de las cuentas, 6 de las cuentas cruzadas con el precio de ese dia, y los precios diarios ya estaban cacheados. Solo faltaban las cuentas con su `filingDate`, que es lo que da FMP. Resultado: cobertura point-in-time de **0% a 86-100%**, 5 años, 32 de los 60 de `largecap60` (el plan gratuito bloquea 28 simbolos, cosa que no estaba en ningun folleto y solo aparecio al ejecutarlo).
+
+**La medicion**, con todo identico salvo el origen de los fundamentales: alpha del top-10 de **-0,62 pp** con fundamentales de epoca, **-0,38** con los de hoy (el sesgo maquillaba), **-0,21** quitando el bloque fundamental entero. Ninguna bate al universo. **No se toca ningun peso**: con 58 fechas y error tipico 0,41, el cero cae dentro del intervalo, y este proyecto ya se quemo tres veces actuando sobre hallazgos que no sobrevivieron a ampliar la muestra.
+
+**El cambio de producto que si se hace**: el usuario opera siguiendo estas recomendaciones, y hasta hoy el Home pintaba `BUY` en verde sin decir que su respaldo medido es negativo. Ahora el veredicto sale acompañado de la ventaja medida, en el ranking y en la ficha del valor. Con una regla de tono cubierta por tests: mientras la medicion no sea significativa, la aplicacion dice "no hay ventaja demostrada" y **no** "va peor que el azar" — exagerar en la direccion contraria seria repetir el error que el aviso viene a corregir.
+
+Lo siguiente es analisis, no codigo: seguir rellenando universos (`--all-universes --skip-existing --max-tickers=80`, ~80 tickers al dia con el plan gratuito) y repetir la medicion en 5 o 6 universos independientes. Si el hallazgo se repite ahi, entonces si habra base para tocar los pesos.
+
+Verificado en ddev: `vendor/bin/phpunit` de 265 a **291 tests / 899 assertions**; `vendor/bin/phpstan analyse` sin errores; historico cargado tambien en la Raspberry (36.025 filas, 80 tickers) con cobertura 100% comprobada por HTTPS.
+
+Detalle tecnico completo en `versions.md` (`v2.93`, `v2.94`).

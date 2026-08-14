@@ -62,6 +62,7 @@ $options = getopt('', [
     'top::',
     'cross-sectional',
     'persist',
+    'no-point-in-time',
 ]);
 $universeKey = is_string($options['universe'] ?? null) ? (string) $options['universe'] : 'default';
 $horizon = max(5, min(120, (int) ($options['horizon'] ?? 20)));
@@ -69,6 +70,11 @@ $mode = is_string($options['mode'] ?? null) ? (string) $options['mode'] : 'full'
 $historyRange = is_string($options['history'] ?? null) ? (string) $options['history'] : '2y';
 $topN = max(1, min(100, (int) ($options['top'] ?? 10)));
 $crossSectional = array_key_exists('cross-sectional', $options);
+// Herramienta de investigacion, mismo espiritu que --mode=technical
+// (v2.32): fuerza el comportamiento anterior a v2.91 (fundamentales de HOY
+// en toda fecha pasada) para poder aislar, con todo lo demas identico, que
+// aportaba de verdad el sesgo de anticipacion. No afecta a la aplicacion.
+$noPointInTime = array_key_exists('no-point-in-time', $options);
 $persist = array_key_exists('persist', $options);
 $defaultStep = $crossSectional ? $horizon : 5;
 $step = max(1, min(120, (int) ($options['step'] ?? $defaultStep)));
@@ -121,7 +127,7 @@ $service = new BacktestingService(
     // `fundamentals_point_in_time_pct` en la salida antes de sacar
     // conclusiones: con la serie recien empezada la mayoria de las muestras
     // siguen usando los fundamentales de hoy, igual que antes.
-    new FundamentalsHistoryRepository($connection)
+    $noPointInTime ? null : new FundamentalsHistoryRepository($connection)
 );
 
 if ($persist) {
