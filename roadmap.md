@@ -50,11 +50,13 @@ Tests: la suite ha pasado de 26 tests limitados a `BacktestingService`/Bollinger
 
 Pendiente aparte, no bloqueante:
 
-- Configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad; de momento `LogMailer` solo deja constancia en `storage/mails/` (y en Mailpit en local, ver `v2.11.1`).
-- ~~`historyTtl` `P1D` para todos los rangos~~ **Hecho en `v2.79`**: los rangos largos (`5y`/`10y`/`max`, que solo pide `bin/backtest.php`) cachean 7 dias; la web (`2y`) sigue en `P1D`.
-- **Programar `bin/analyze.php` en el cron de la Raspberry. Es ahora el mayor bloqueo del proyecto, y el unico que no se puede resolver desde el repositorio.** Desde `v2.79` cada ejecucion siembra las DOS series irrecuperables (fundamentales, `v2.74`, y score, `v2.63`), y de ellas dependen las dos ideas de mas valor que quedan: fundamentales point-in-time (el 56% del peso del score, hoy no backtesteable) y la tendencia del score / re-rating. Sin cron, ese arreglo no produce ninguna serie: a 2026-08-10 hay 3 fechas en `score_history` y 1 en `fundamentals_history`.
+- ~~Configurar un mailer SMTP real (o un MTA en la Raspberry Pi) para que `v2.11` envie correos de verificacion de verdad~~ **Hecho el 2026-08-14, sin tocar una linea de codigo.** `msmtp` + `msmtp-mta` en la Pi retransmitiendo por `smtp.gmail.com:587` con una contrasena de aplicacion: `/usr/sbin/sendmail` apunta a msmtp y `LogMailer` ya usaba `mail()` de PHP, asi que el camino entero funciona sin cambiar la implementacion (justo lo que anticipaba el docblock de la clase). Se retransmite y no se entrega directo porque la Pi esta en IP residencial sin PTR ni dominio: entregar de tu a tu acabaria en spam o rechazado. La contrasena vive en `/etc/msmtp-password` (`640 root:msmtp`) y no dentro de `/etc/msmtprc`, y `set_from_header on` reescribe el `From:` de `no-reply@stockanalyzer.local` —dominio inexistente— por la cuenta autenticada, unico remitente que Gmail acepta. Verificado el circuito completo por HTTPS: alta, correo entregado (`250 OK`), enlace de verificacion pulsado, cuenta activada y login correcto; la cuenta de prueba se borro al terminar.
 
-    **Comprometido para la proxima sesion (peticion del usuario, 2026-08-13):** poner el codigo en la Raspberry Pi "para ir solventando las ideas que faltan". Es el orden correcto: desbloquea el backlog entero, mientras que el resto de lo que queda abierto depende de un proveedor externo. En la misma sesion el usuario pidio ademas dos cosas de entorno, sin relacion con el codigo: como instalar los drivers PDO en el host (hoy PHPUnit solo arranca dentro de `ddev exec`, ver `v2.90`) y como habilitar el conector de Google Drive.
+    Dos cosas que costaron un rato y conviene no reaprender: php-fpm fija sus grupos suplementarios **al arrancar**, asi que tras `usermod -aG msmtp www-data` hace falta `restart` y no `reload` o los envios fallan en silencio; y `storage/mails/` sigue recibiendo copia de cada correo, que es lo que permitio ver el cuerpo generado sin depender de la bandeja de entrada.
+- ~~`historyTtl` `P1D` para todos los rangos~~ **Hecho en `v2.79`**: los rangos largos (`5y`/`10y`/`max`, que solo pide `bin/backtest.php`) cachean 7 dias; la web (`2y`) sigue en `P1D`.
+- ~~**Programar `bin/analyze.php` en el cron de la Raspberry.**~~ **HECHO el 2026-08-14.** Era el mayor bloqueo del proyecto y el unico que no se podia resolver desde el repositorio. La Pi (`192.168.1.156`, Debian 12 ARM64, PHP 8.4, MariaDB 10.11) sirve la aplicacion en `/var/www/StockAnalyzer` via nginx + php8.4-fpm, con esquema propio `stock_analyzer`, usuario propio (ni root ni contrasena en blanco) y las 18 migraciones aplicadas. El cron corre `--universe=largecap60` a las 23:00 de lunes a viernes (el mercado de EEUU cierra a las 22:00 peninsular, asi que el cierre ya es definitivo; fin de semana no, para no sembrar una fecha nueva con datos del viernes). Comprobado que siembra **las dos** series (`score_history` y `fundamentals_history`) y que funciona con el entorno pelado que usa cron.
+
+    **A partir de aqui el reloj corre solo**: las dos ideas de mas valor que quedan —fundamentales point-in-time (el 56% del peso del score) y la tendencia del score / re-rating— dejan de estar bloqueadas por codigo y pasan a estarlo solo por profundidad de serie, que ahora crece sin que nadie haga nada. Revisar en unas semanas cuantas fechas hay acumuladas antes de intentar cualquiera de las dos.
 - Sesgo de supervivencia de `config/universes.php`: son listas de hoy, y con ventana de 10 años el problema se agrava (un universo de 2016 no contenia estos 60 tickers).
 - ~~Un test de integracion contra MySQL para el `AND user_id` de las alertas (`v2.69`)~~ **Hecho en `v2.90`**: 11 casos contra MySQL real, comprobados ademas por mutacion (quitando el `AND user_id` fallan exactamente 3, restaurandolo vuelven a pasar los 11).
 - Decision del usuario: si traducir la descripcion de empresa al español via un servicio externo de pago (DeepL u otro), investigado y documentado en `v2.44` pero no implementado.
@@ -762,3 +764,25 @@ Tres cosas de esta sesion que conviene no olvidar:
 Verificado en ddev: `vendor/bin/phpunit` **246 tests / 766 assertions**; `vendor/bin/phpstan analyse` sin errores; los 32 casos de integracion se saltan solos (no fallan) cuando no hay base de datos alcanzable.
 
 Detalle tecnico completo en `versions.md` (`v2.90`).
+
+---
+
+## 2026-08-14 (la Raspberry Pi en produccion: base de datos, cron, HTTPS y correo)
+
+El usuario instala la aplicacion en la Raspberry Pi y pide revisar por SSH que no falte nada. Estaba mas avanzado de lo que parecia: Debian 12 ARM64 con PHP 8.4 y **todas** las extensiones necesarias, nginx apuntando ya al docroot correcto, Composer y `vendor/` puestos, MariaDB arrancada y la web devolviendo 200. Faltaba lo de debajo: no habia `.env`, la base de datos estaba vacia y no habia cron.
+
+En la misma sesion queda todo en produccion:
+
+- **Base de datos**: esquema `stock_analyzer` con usuario propio y contrasena generada en la propia Pi (ni `root` ni contrasena en blanco), las 18 migraciones aplicadas y verificada la clave `(ticker, history_range)` de `v2.79`.
+- **Cron**: `--universe=largecap60` a las 23:00 de lunes a viernes, comprobado con `env -i` (el entorno pelado que usa cron de verdad, no el del shell interactivo). **Cae asi el que llevaba meses siendo el mayor bloqueo del proyecto**: las series historicas empiezan a acumularse solas.
+- **HTTPS**: certificado autofirmado con SAN para `IP:192.168.1.156` (sin SAN los navegadores modernos no lo aceptan ni aunque el usuario apruebe el aviso), 10 anios, puerto 80 redirigiendo con 301, TLS 1.3.
+- **Correo**: ver "Pendiente aparte".
+
+Cuatro problemas encontrados y resueltos por el camino, ninguno previsto:
+
+1. **504 en la primera visita**: con la cache vacia se analizan 60 tickers contra Yahoo y se pasaba del `fastcgi_read_timeout` de 60s de nginx. Subido a 300s, mas `request_terminate_timeout` en php-fpm para que una peticion colgada no se acumule. Con el cron precalentando a diario, en la practica ya no deberia darse.
+2. **`http2 on;` no existe en nginx < 1.25**: hay que declararlo en la propia linea `listen`.
+3. **`sed -i` sobre `.env` le quito el grupo `www-data`** (crea un fichero nuevo y lo renombra), asi que la web se quedo sin poder leerlo y volvio al DSN por defecto. Se manifestaba como home a 59s (sin cache, tirando de Yahoo en cada visita) y 500 en la ficha de detalle. Cualquier edicion futura de `.env` con `sed -i` volvera a romperlo.
+4. **php-fpm no recogia el grupo `msmtp` nuevo** hasta reiniciarlo, y los correos fallaban sin dar la cara.
+
+Estado al cerrar: home 4,2s, detalle 0,14s, backtesting 0,01s, API 0,78s, todo por HTTPS. Sin usuarios (el de prueba se borro), a la espera de que el usuario registre el suyo.
