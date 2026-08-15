@@ -4613,6 +4613,68 @@ La mitad fundamental del score se mide por primera vez sin hacer trampa, y el re
 
 ---
 
+## 2026-08-15 - El plan gratuito de FMP no bloquea por mercado ni por tamaño: bloquea por lista fija
+
+No es una version, es un hallazgo que corrige lo que `v2.93` daba por sentado. Al intentar ampliar el relleno a `healthcare`, `energy`, `consumer_staples`, `industrials` y `financials` (152 tickers unicos, ninguno repetido de `largecap60`), el resultado fue **2 de 60 intentados** (HCA y MRNA, ambos de `healthcare`). El resto, 402 sistematico.
+
+`v2.93` documento el patron como "28 de los 60 de `largecap60` bloqueados" y lo leyo como algo relacionado con tamaño o composicion del indice. No lo es. Con esta segunda tanda, el patron real es una **lista fija de simbolos permitidos, no un criterio** (ni "solo EEUU", ni "solo mega-cap", ni "solo Dow 30"): en la lista permitida hay valores grandes (AAPL, JPM, XOM) y menos grandes (HCA, MRNA); fuera de ella hay valores tan grandes o mas (AVGO, BRK-B, LLY, HON). No hay forma de predecir desde fuera si un simbolo esta dentro o fuera sin probarlo.
+
+**Simbolos confirmados en la lista permitida (34 en total)**, tras dos tandas:
+
+AAPL, ABBV, ADBE, AMD, AMZN, BA, BAC, COST, CSCO, CVX, DIS, GE, GOOGL, GS, **HCA**, JNJ, JPM, KO, META, **MRNA**, MSFT, NFLX, NKE, NVDA, PEP, PFE, SBUX, TSLA, UNH, V, VZ, WFC, WMT, XOM.
+
+**Consecuencia practica para el plan de "4-5 dias rellenando universos":** no sirve. Casi cualquier ticker nuevo que se intente va a fallar con 402, y cada intento cuesta 3 llamadas del cupo diario sin producir ni una fila. De las 60 llamadas de hoy sobre los 5 universos objetivo, 52 fueron 402 y solo 8 utiles (2 simbolos x 3 llamadas + 2 ya cubiertos que se saltaron). El cupo gratuito no crece con paciencia: crece solo si se prueban simbolos nuevos, y la mayoria fallara.
+
+Estado tras esta sesion: **34 tickers con historico completo** (de los 305 del proyecto), 38.201 filas en local y 38.321 en la Raspberry (ya trasvasadas y verificadas: cobertura point-in-time confirmada al 94,83%-100% en los nuevos). `healthcare` pasa de 0 a 2 de 40 cubiertos; `energy`, `consumer_staples`, `industrials` y `financials` siguen en 0.
+
+Esto cambia la decision de los $69: **no es ya "grano trimestral vs anual"**, es la unica via para salir del universo de 34 simbolos. Con Premium se desbloquean los ~270 restantes de una vez (sin necesidad de adivinar cuales prueban), ademas de 10 años y trimestral. Sin pagar, el proyecto se queda con esos 34 simbolos indefinidamente: no es un problema de dias de espera, es un techo del plan.
+
+No se ha tocado codigo: el hallazgo es de datos, no de mecanica. `bin/backfill-fundamentals.php` sigue funcionando exactamente como en `v2.93`, y `--skip-existing` sigue siendo correcto para cuando se pruebe con otro plan o con simbolos nuevos.
+
+---
+
+## 2026-08-15 (segunda entrada) - ¿Hay que replantear el motor de analisis? Investigado, y todavia no
+
+El usuario pide usar los 34 tickers con historico point-in-time (ver entrada anterior) para decidir si el motor de analisis necesita un replanteamiento y, si procede, ajustarlo. Se investiga en tres niveles, cada uno mas riguroso que el anterior, sin tocar `config/weights.php` en ningun momento (todas las variantes usan overrides en memoria de `ScoreWeights`, que ya acepta un array explicito por constructor).
+
+### Nivel 1: por categoria
+
+Quitando cada categoria del bloque fundamental una a una (34 tickers, `--horizon=20` y `--horizon=60`, `--step` = horizonte): quitar **FUNDAMENTAL** (ROE + Deuda/Patrimonio + FCF yield) mejora la alpha del top-10 en los dos horizontes (-0,46 -> -0,30 a 20 dias; -0,54 -> +0,58 a 60 dias). VALUATION, QUALITY y DIVIDEND no se mueven o empeoran ligeramente. El arrastre parece concentrado, no repartido.
+
+### Nivel 2: por señal, dentro de FUNDAMENTAL
+
+Se aislaron las tres señales de `FundamentalAnalyzer::fundamentalHealth()` (ROE 12pts, Deuda/Patrimonio 10pts, FCF yield 8pts) con un decorador de `FundamentalsHistoryRepository` que borra una clave del payload antes de reconstruir el `Fundamentals` (la señal cae en su fallback neutro ya existente, el mismo camino que toma un ticker real sin ese dato). **La atribucion no fue estable entre horizontes**: a 20 dias ninguna señal suelta reproducia la mejora de quitar la categoria entera; a 60 dias el FCF yield parecia explicarlo casi todo, pero ROE y Deuda/Patrimonio salian *peor* al quitarlos. Ni el tamaño ni la direccion del efecto de cada señal se sostenian entre horizontes: la primera señal de que el nivel 1 podia ser ruido.
+
+### Nivel 3: cinco horizontes y test pareado
+
+Se amplio a 5, 10, 20, 40 y 60 dias, y ademas del alpha promedio se calculo **la diferencia fecha a fecha** entre "con FUNDAMENTAL" y "sin FUNDAMENTAL" sobre las mismas fechas y los mismos tickers (test pareado, con mucha mas potencia que comparar dos medias sueltas cuando las series estan tan correlacionadas como aqui):
+
+| Horizonte | Fechas | Media de la diferencia | t pareado | % fechas donde mejora |
+|---|---|---|---|---|
+| 5 | 234 | +0,08 pp | 1,24 | 51% |
+| 10 | 117 | +0,01 pp | 0,07 | 51% |
+| 20 | 58 | +0,16 pp | 0,64 | 57% |
+| 40 | 29 | +0,82 pp | 1,58 | 48% |
+| 60 | 19 | +1,12 pp | 1,64 | 53% |
+
+**Ningun horizonte llega a t=1,96.** Y el dato mas revelador esta en la ultima columna: a 40 y 60 dias, donde la diferencia media parecia mas grande, **menos de la mitad de las fechas individuales mejoran** (48% y 53%). La media alta no viene de una ventaja constante dia a dia, viene de un puñado de fechas extremas que arrastran el promedio — el patron clasico de un falso positivo por outliers, no de una señal real.
+
+### Veredicto: no se toca `config/weights.php`
+
+Mismo criterio que `v2.78` (cruce SMA20>SMA50, significativo en 6/6 universos pero neutralizarlo no ayudaba de forma consistente) y `v2.88` (peso de RISK, claro en 3 universos y disuelto al ampliar a 6): un indicio que no aguanta un segundo angulo de medida no es una conclusion. Aqui el indicio no aguanto ni el segundo nivel (atribucion por señal) ni el tercero (test pareado con mas potencia).
+
+Motivos concretos para esperar:
+
+1. Ningun t pareado supera 1,4 salvo a horizontes largos, donde el efecto esta concentrado en menos de la mitad de las fechas.
+2. La muestra son 34 valores grandes de EEUU correlacionados entre si (la mayoria del `largecap60`), no varios universos independientes.
+3. La atribucion por señal cambia de sentido entre horizontes: no hay una historia mecanica ("este calculo esta mal") que sostenga el numero agregado.
+
+Verificado: toda la investigacion se hizo con las clases de produccion reales (`BacktestingService`, `ScoreCalculator`, `FundamentalAnalyzer`, `FundamentalsHistoryRepository`) desde scripts de un solo uso fuera del repositorio, sin tocar ningun fichero de `src/` ni `config/`. `ddev exec vendor/bin/phpunit` y `phpstan` no aplican (no hay cambio de codigo que verificar).
+
+Que haria falta para actuar: repetir esto mismo cuando `fundamentals_history` cubra mas de un universo independiente (hoy el plan gratuito de FMP limita a los 34 simbolos de la entrada anterior), y ver si el patron de "FUNDAMENTAL resta" se repite fuera de los grandes valores de EEUU.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

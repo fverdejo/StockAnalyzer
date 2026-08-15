@@ -41,7 +41,7 @@ Recalibrar los cortes ahora solo conseguiria que la app dijera "compra" con mas 
 2. ~~**Revisar el bloque `TECHNICAL` entero.**~~ **Medido, sin cambio de codigo.** Señal por señal sobre 22.727 muestras: el cruce `SMA20>SMA50` (4 puntos) ordena **invertido en 6 de 6 universos y significativo en 6 de 6** (t entre -2,06 y -4,93), y `precio > SMA50` (6 puntos) igual en 6 de 6. Pero neutralizarlos mejora dos universos y empeora el tercero, sin mover la media: mismo desenlace que el momentum en `v2.76`.
 3. ~~**Revisar el horizonte.**~~ **Descartada.** A 120 dias es peor, no mejor: en `largecap60` el top-10 se queda 4,76 pp por debajo del universo (t=-3,94), el unico resultado significativo de la ronda.
 4. **Recalibrar la escala**, ya con sentido, cuando el score ordene bien. Sigue bloqueado, y ahora con mas motivo. Ojo al alcance: los cortes afectan al ranking, al backtesting y a las alertas de cambio de recomendacion (`v2.15`).
-5. ~~**Fundamentales point-in-time**~~ **Mecanica en `v2.91`, historico rellenado en `v2.93`.** `stockAt()` usa el snapshot de la fecha de cada muestra, y `bin/backfill-fundamentals.php` reconstruye el pasado cruzando las cuentas anuales de FMP (con su `filingDate`) contra los precios diarios ya cacheados. **La cobertura real paso de 0% a 86-100%** en los tickers rellenados. Falta: solo cubre 32 de los 60 de `largecap60` (el plan gratuito bloquea 28 simbolos), con grano anual y 5 años. **Ya se pueden empezar a rehacer las calibraciones de `v2.51`, `v2.64` y `v2.88`**, que hasta ahora solo midieron el bloque tecnico.
+5. ~~**Fundamentales point-in-time**~~ **Mecanica en `v2.91`, historico rellenado en `v2.93`, techo del plan gratuito confirmado el 2026-08-15.** `stockAt()` usa el snapshot de la fecha de cada muestra. **La cobertura real paso de 0% a 86-100%** en los tickers rellenados, pero el relleno tiene un techo duro: el plan gratuito de FMP cubre una **lista fija de 34 simbolos** sin patron detectable. Con esos 34 se investigo si "replantear el motor" tenia base (ver `versions.md`, entrada del 2026-08-15): un indicio de que la categoria FUNDAMENTAL resta no aguanto ni la atribucion por señal ni un test pareado en 5 horizontes (ningun t pareado > 1,64, y el efecto mas grande viene de un puñado de fechas extremas, no de una ventaja consistente). **No se toca `config/weights.php`.** Repetir cuando haya mas de un universo independiente cubierto.
 6. Proveedor oficial de noticias o datos fundamentales; universos mantenidos automaticamente.
 
 ~~**Decision pendiente del usuario, salida de `v2.78`:** neutralizar o rebajar el peso del bloque `RISK`...~~ **Decidida y cerrada en `v2.88`.** El usuario opto por bajarlo a la mitad, condicionado a medirlo antes y despues. Se midio sobre **6 universos** (no 3), 10 años y ~121 fechas independientes por universo: bajar `risk` de 10 a 5 mejora 3 universos de 6 y mueve la alpha media de -0,043 a -0,025; bajarlo a 1 la deja en -0,012. Con el error tipico por universo en 0,19-0,23 pp y ningun t-stat por encima de |1,61|, **toda la curva cabe dentro del ruido**: el "unico lastre consistente" de `v2.78` no reproduce al ampliar la muestra. El peso se queda en 10 y la razon queda escrita en `config/weights.php`. Tabla completa en `versions.md` (`v2.88`).
@@ -69,7 +69,7 @@ Pendiente aparte, no bloqueante:
 
 ## Prioridad alta
 
-- ~~Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`)~~ **Hecho en `v2.91` y rellenado en `v2.93`.** Cobertura point-in-time real de 0% a **86-100%** en los tickers cubiertos, con 5 años de profundidad y grano anual. **La prioridad alta queda vacia.** Lo que sigue es analisis, no codigo: rehacer con fundamentales honestos las calibraciones de `v2.51`, `v2.64` y `v2.88`. Y una decision de producto pendiente: pagar un mes de FMP Premium (~$69) subiria el grano a trimestral, la profundidad a 10+ años y desbloquearia los 28 simbolos de `largecap60` que el plan gratuito no cubre.
+- ~~Que `BacktestingService::stockAt()` use `fundamentals_history` (`v2.74`)~~ **Hecho en `v2.91`, rellenado en `v2.93`, y ya investigado con ello en `v2.94`+ (2026-08-15).** Cobertura point-in-time real de 0% a **86-100%**. Con los 34 tickers cubiertos se peino el motor buscando algo que ajustar: por categoria, por señal y con test pareado en 5 horizontes. **Ningun angulo sostuvo un hallazgo accionable** (t pareado maximo 1,64, efecto concentrado en fechas extremas). **La prioridad alta queda vacia y no se toca `config/weights.php`.** Repetir el mismo analisis servira de verdad cuando haya mas de un universo independiente cubierto — hoy el plan gratuito de FMP limita a esos 34 simbolos, sin relacion aparente con mercado o tamaño. Pagar un mes de Premium (~$69) desbloquea el resto de una vez, ademas de grano trimestral y 10+ años, y es lo que dejaria hacer esta misma pregunta con una muestra que de verdad pueda responderla.
 - ~~Decidir que hacer con el bloque `RISK`~~ **Cerrado en `v2.88`**: decidido por el usuario, medido sobre 6 universos, y el efecto resulta estar dentro del ruido. Se queda en 10.
 
 ---
@@ -824,3 +824,29 @@ Lo siguiente es analisis, no codigo: seguir rellenando universos (`--all-univers
 Verificado en ddev: `vendor/bin/phpunit` de 265 a **291 tests / 899 assertions**; `vendor/bin/phpstan analyse` sin errores; historico cargado tambien en la Raspberry (36.025 filas, 80 tickers) con cobertura 100% comprobada por HTTPS.
 
 Detalle tecnico completo en `versions.md` (`v2.93`, `v2.94`).
+
+---
+
+## 2026-08-15 (continuacion del relleno: el plan gratuito tiene techo, no ritmo)
+
+El usuario pide seguir alimentando el historico con la Pi y el local ya encendidos. `--all-universes --max-tickers=80` desperdicia el cupo del dia porque el orden de `config/universes.php` pone primero `largecap60` (ya cubierto o bloqueado) e `ibex35` (bloqueado entero). Redirigido a los 5 universos que hacian falta para repetir la medicion de `v2.94` en mas de un universo (`healthcare`, `energy`, `consumer_staples`, `industrials`, `financials`: 152 tickers unicos, ninguno ya visto): **2 exitos, 52 bloqueos de plan.**
+
+Eso deja claro algo que `v2.93` no vio: el plan gratuito de FMP no bloquea por "no ser EEUU" ni por tamaño, bloquea una **lista fija de 34 simbolos**, sin patron identificable. El plan de "4-5 dias rellenando poco a poco" que se habia acordado no aplica: no es un problema de tiempo, es un techo del plan. Detalle completo, con los 34 tickers confirmados, en `versions.md` (entrada del 2026-08-15).
+
+Se transfirieron a la Raspberry las 2 filas nuevas (HCA, MRNA; 2.236 filas), con el mismo proceso con salvaguardas de `v2.93` (copia previa, tabla intermedia, fusion por `UNIQUE(ticker, snapshot_date)`). Verificado por HTTPS en ambos entornos que la cobertura point-in-time de los tickers nuevos es real (94,83%-100%). Suite en verde (**291 tests**), sin cambios de codigo: es un hallazgo de datos, no de mecanica.
+
+**Consecuencia para lo que sigue**: la decision de pagar $69 a FMP deja de ser "¿merece la pena subir de anual a trimestral?" y pasa a ser "¿se sale alguna vez de 34 simbolos sin pagar?" — no. Mientras tanto, la medicion de `v2.94` se puede repetir dentro de `largecap60` (34 tickers ya cubiertos) para ver si el hallazgo se sostiene con mas fechas, pero no se puede extender a otros universos.
+
+---
+
+## 2026-08-15 (tercera entrada: ¿hay que replantear el motor de analisis? Investigado, todavia no)
+
+Con los 34 tickers point-in-time ya disponibles, el usuario pide comprobar si el motor de analisis funciona bien o hay que replantearlo, aceptando que 34 no es la muestra ideal pero "vale para ajustar". Se investiga en tres niveles crecientes de rigor, sin tocar codigo en ningun momento:
+
+1. **Por categoria** (quitar FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND una a una, horizontes 20 y 60 dias): quitar FUNDAMENTAL mejora la alpha en los dos horizontes. Parecia un hallazgo real.
+2. **Por señal, dentro de FUNDAMENTAL** (ROE, Deuda/Patrimonio, FCF yield, aisladas con un decorador que borra un campo del historico y deja que la señal caiga en su propio fallback neutro): la atribucion **no fue estable entre horizontes** — a 60 dias el FCF yield parecia explicarlo casi todo, a 20 dias ROE y Deuda/Patrimonio salian peor al quitarlas. Primera señal de ruido.
+3. **Test pareado en 5 horizontes** (5, 10, 20, 40, 60 dias; diferencia fecha a fecha entre "con" y "sin" FUNDAMENTAL, no solo comparar dos medias sueltas): **ningun horizonte llega a t=1,96**, y en los dos horizontes donde la diferencia media parecia mas grande (40 y 60 dias), **menos de la mitad de las fechas individuales mejoraban** — la media alta la arrastraba un puñado de fechas extremas, no una ventaja constante.
+
+**No se toca `config/weights.php`.** Mismo criterio que `v2.78` y `v2.88`: un indicio que no aguanta un segundo angulo de medida no es una conclusion, y aqui no aguanto ni el segundo (atribucion por señal) ni el tercero (test pareado). La muestra ademas son 34 valores grandes de EEUU correlacionados, no varios universos independientes — la unica manera de que esta pregunta tenga una respuesta real es repetirla con mas de un universo, que es justo lo que el techo del plan gratuito de FMP impide hoy.
+
+Toda la investigacion se hizo con las clases de produccion reales desde scripts de un solo uso, sin tocar `src/` ni `config/`. Detalle completo con las tres tablas en `versions.md` (entrada del 2026-08-15, segunda de la fecha).
