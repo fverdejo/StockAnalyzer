@@ -20,8 +20,14 @@ declare(strict_types=1);
  */
 return [
     'technical' => 30,
-    'fundamental' => 30,
-    'valuation' => 20,
+    // 'fundamental', 'valuation', 'quality' y 'dividend' deliberadamente
+    // ausentes en la rama feature/solo-tecnico: sus maximos se dejaron a 0
+    // en ScoreCategory::maxScore() (ver el comentario alli, y versions.md,
+    // investigacion del 2026-08-15). No los reactives aqui con un valor > 0
+    // mientras siga esa rama: ScoreWeights::loadFile() lo tomaria como
+    // override y anularia el cambio del enum, exactamente igual que con
+    // 'news' de aqui abajo.
+    //
     // 'news' deliberadamente ausente: sin señal real detras (news_items
     // vacia en produccion), su maximo se dejo a 0 en ScoreCategory::maxScore().
     // No la reactives aqui con un valor > 0: ScoreWeights::loadFile() lo
@@ -38,6 +44,4 @@ return [
     // rebajar una penalizacion de volatilidad que es intencionada y que
     // sostiene el stop-loss de `v2.19` y la cantidad sugerida de `v2.50`.
     'risk' => 10,
-    'quality' => 10,
-    'dividend' => 5,
 ];

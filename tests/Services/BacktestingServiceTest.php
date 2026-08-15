@@ -32,24 +32,47 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  * esperado, no solo una version simplificada). Para conseguir una
  * recomendacion BUY de forma determinista se usa:
  *
- * - Fundamentales excelentes y fijos (ver SyntheticStock), que por
- *   si solos ya cubren FUNDAMENTAL/VALUATION/QUALITY al maximo.
- * - Un historico con una tendencia alcista suave y constante antes del dia
- *   de entrada (ver baselineQuotes()): rango diario (high-low) constante
- *   R=1.0 y un incremento de cierre diario constante d=0.05 (d <= R/2, para
- *   que el true range de cada dia sea exactamente R y por tanto el ATR14 de
- *   Wilder converja a R desde el primer valor: ver
- *   Analyzer\TechnicalAnalyzer::atr()). Con esos parametros, en el dia de
- *   entrada (indice 80, el minimo que exige BacktestingService) el precio
- *   de cierre es exactamente 104.0 y el ATR14 exactamente 1.0, verificado
- *   tanto por calculo manual como ejecutando TechnicalAnalyzer::analyze()
- *   y ScoreCalculator::calculate() directamente sobre baselineQuotes()
- *   (recomendacion BUY al 83,71%).
+ * - Un historico con una tendencia alcista antes del dia de entrada (ver
+ *   baselineQuotes()), en dos tramos:
+ *     1. Dias 0-65: rango diario (high-low) constante R=1.0 e incremento de
+ *        cierre diario constante d=+0.05 (d <= R/2, para que el true range
+ *        de cada dia sea exactamente R y por tanto el ATR14 de Wilder
+ *        converja a R: ver Analyzer\TechnicalAnalyzer::atr()).
+ *     2. Dias 66-73 (8 dias): retroceso d=-0.125. Dias 74-80 (7 dias,
+ *        incluido el de entrada): recuperacion d=+0.25. Ambos deltas caen
+ *        dentro de (-0.5, +0.5), el rango donde el true range de cada dia
+ *        SIGUE dominado por R=1.0 (demostracion: TR = max(1.0, |0.5+d|,
+ *        |d-0.5|), y ambos terminos alternativos son <1.0 mientras
+ *        |d|<0.5), asi que el ATR14 en el dia de entrada sigue siendo
+ *        exactamente 1.0 pese al retroceso.
+ *   En el dia de entrada (indice 80, el minimo que exige BacktestingService)
+ *   el precio de cierre sigue siendo exactamente 104.0 (100 + 65*0.05 -
+ *   8*0.125 + 7*0.25 = 103.25 - 1.0 + 1.75 = 104.0) con ATR14 exactamente
+ *   1.0, verificado tanto por calculo manual como ejecutando
+ *   TechnicalAnalyzer::analyze() y ScoreCalculator::calculate()
+ *   directamente sobre baselineQuotes() (recomendacion BUY al 82,12%).
  *
- * Con esos valores fijos, RiskLevels::compute(104.0, 1.0, 2.5, 2.0) da
- * stop=101.5 y objetivo=109.0 (multiplicador/ratio por defecto de
- * RiskLevelsConfig, pasados explicitamente al construir el calculador para
- * no depender del contenido de config/risk_levels.php).
+ *   **Por que el retroceso y no la linea recta que habia hasta `v2.94`**:
+ *   con FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND a 0 (rama
+ *   feature/solo-tecnico, ver ScoreCategory::maxScore()), la recomendacion
+ *   depende solo de TECHNICAL+MOMENTUM+RISK. Una recta perfectamente
+ *   monotona (ganancia identica cada dia, sin ninguna bajada) satura el
+ *   RSI(14) a 100 exacto, que el codigo de produccion puntua MAL (zona de
+ *   sobrecompra marcada, 1/3 de MOMENTUM) en vez de bien: sin el
+ *   colchon de 65 puntos que antes aportaban los fundamentales, esa recta
+ *   se queda en 72,46%, por debajo del 75% de corte. El retroceso rompe la
+ *   racha y deja el RSI en una zona saludable (66,7, el maximo de puntos),
+ *   ademas de darle a MACD un cruce alcista real que antes no existia (el
+ *   histograma de una recta perfecta converge a 0 exacto). El volumen del
+ *   dia de entrada tambien sube a 3.000.000 (el resto se queda en
+ *   1.000.000) para que el ratio de volumen puntue al maximo.
+ *
+ * Con ATR14=1.0 y ENTRY_PRICE=104.0 sin cambios, RiskLevels::compute(104.0,
+ * 1.0, 2.5, 2.0) sigue dando stop=101.5 y objetivo=109.0 (multiplicador/
+ * ratio por defecto de RiskLevelsConfig, pasados explicitamente al
+ * construir el calculador para no depender del contenido de
+ * config/risk_levels.php): ningun test de niveles de riesgo necesita
+ * cambiar sus expectativas.
  */
 final class BacktestingServiceTest extends TestCase
 {
@@ -97,9 +120,13 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
-     * 81 velas (indice 0..80): rango diario constante R=1.0, incremento de
-     * cierre diario constante d=0.05 (d <= R/2). El dia de entrada
-     * (indice 80) cierra exactamente en 104.0 con ATR14 exactamente 1.0.
+     * 81 velas (indice 0..80). Ver el docblock de la clase para la
+     * justificacion completa de los dos tramos y sus deltas: dias 0-65
+     * suben +0.05/dia, dias 66-73 retroceden -0.125/dia, dias 74-80
+     * recuperan +0.25/dia. El dia de entrada (indice 80) cierra
+     * exactamente en 104.0 con ATR14 exactamente 1.0, y el volumen de ese
+     * dia se triplica (3.000.000 frente a 1.000.000 el resto) para que la
+     * señal de volumen puntue al maximo.
      *
      * @return list<HistoricalQuote>
      */
@@ -110,9 +137,15 @@ final class BacktestingServiceTest extends TestCase
         $date = new DateTimeImmutable('2024-01-01');
 
         for ($i = 0; $i <= self::ENTRY_INDEX; $i++) {
-            $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
+            $volume = $i === self::ENTRY_INDEX ? 3_000_000 : 1_000_000;
+            $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, $volume);
             $date = $date->modify('+1 day');
-            $close += 0.05;
+
+            $close += match (true) {
+                $i < 65 => 0.05,
+                $i < 73 => -0.125,
+                default => 0.25,
+            };
         }
 
         return $quotes;
@@ -405,6 +438,32 @@ final class BacktestingServiceTest extends TestCase
      * a partir de ahi, aun con recomendacion BUY, no hay niveles de riesgo
      * calculables.
      *
+     * Con FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND a 0 (feature/solo-tecnico)
+     * un tramo monotono deja el RSI saturado a 100 (la peor lectura
+     * posible), asi que este fixture necesita dos ajustes que no tenia
+     * antes de esa rama, uno por indice que se comprueba:
+     *
+     * - **Indices 0-80: el mismo retroceso que baselineQuotes()**
+     *   (65 dias a +0.05, 8 a -0.125, 7 a +0.25), para que el indice 80
+     *   —dentro del primer regimen, con ATR14 significativo— sea BUY con
+     *   niveles de riesgo calculables. A partir del indice 80 continua
+     *   monotono (+0.05) hasta el limite del primer regimen (120): un
+     *   retroceso ahi disparia el true range justo donde el fixture
+     *   necesita que decaiga, asi que solo se aplica una vez.
+     * - **Volumen en los indices 80 y 200** (3.000.000 frente a 1.000.000
+     *   el resto): el indice 200 (segundo regimen, ATR ya decaido) no
+     *   admite el mismo retroceso que el 80 —necesita rango diario casi
+     *   nulo (R=0.001) para que el ATR14 decaiga por debajo del umbral, y
+     *   un retroceso de precio ahi rompería justo eso—, asi que el
+     *   volumen es la unica palanca que no toca el precio ni el ATR: sube
+     *   el indice 200 de 73,92% a 75,92%.
+     *
+     * Verificado ejecutando TechnicalAnalyzer::analyze() y
+     * ScoreCalculator::calculate() directamente sobre este fixture antes
+     * de escribir el test: indice 80 BUY al 82,12% (identico a
+     * baselineQuotes(), es la misma construccion), indice 200 BUY al
+     * 75,92% sin niveles de riesgo calculables.
+     *
      * (El otro guardarraya de RiskLevelsCalculator, historial < 40 sesiones,
      * es inalcanzable a traves de BacktestingService: su propio
      * minimumLookback interno vale 80, siempre por encima de las 40 que
@@ -422,9 +481,16 @@ final class BacktestingServiceTest extends TestCase
 
         for ($i = 0; $i < $totalDays; $i++) {
             $range = $i <= 120 ? 1.0 : 0.001;
-            $quotes[] = new HistoricalQuote($date, $close, $close + ($range / 2), $close - ($range / 2), $close, 1_000_000);
+            $volume = ($i === self::ENTRY_INDEX || $i === 200) ? 3_000_000 : 1_000_000;
+            $quotes[] = new HistoricalQuote($date, $close, $close + ($range / 2), $close - ($range / 2), $close, $volume);
             $date = $date->modify('+1 day');
-            $close += 0.05;
+
+            $close += match (true) {
+                $i < 65 => 0.05,
+                $i < 73 => -0.125,
+                $i < self::ENTRY_INDEX => 0.25,
+                default => 0.05,
+            };
         }
 
         return $quotes;

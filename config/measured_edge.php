@@ -28,18 +28,24 @@ declare(strict_types=1);
  * algun dia el score demuestra ventaja, no borrar el fichero.
  */
 return [
-    // Medicion del 2026-08-14, la primera con fundamentales point-in-time
-    // reales (v2.93): antes de eso el 56% del peso del score entraba en
-    // todo backtest con sesgo de anticipacion, que lo favorecia.
-    'measured_at' => '2026-08-14',
-    'sample' => '32 grandes valores de EEUU, 5 años, 58 fechas independientes',
+    // Medicion del 2026-08-15, en la rama feature/solo-tecnico: el score
+    // ya no lleva FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND (maxScore 0), asi
+    // que esta cifra describe TECHNICAL+MOMENTUM+RISK solo. Sustituye a la
+    // del 2026-08-14 (-0,62 pp con fundamentales), que ya no es lo que el
+    // usuario ve en pantalla. Mismos 34 tickers usados en la investigacion
+    // del mismo dia (32 de v2.94 mas HCA/MRNA, incorporados hoy al techo
+    // del plan gratuito de FMP), mismo horizonte y top-N, para que la
+    // comparacion con la cifra anterior sea de verdad como-con-como.
+    'measured_at' => '2026-08-15',
+    'sample' => '34 grandes valores de EEUU (whitelist gratuita de FMP), 5 años, 58 fechas independientes',
     'horizon_days' => 20,
     'top_n' => 10,
-    'alpha' => -0.62,
-    'stderr' => 0.41,
-    // Sin significancia estadistica (|t| = 1,51 < 1,96): no se puede
+    'alpha' => -0.33,
+    'stderr' => 0.38,
+    // Sin significancia estadistica (|t| = 0,88 < 1,96): no se puede
     // afirmar que el ranking sea peor que el azar, solo que NO hay
-    // evidencia de que sea mejor. La diferencia importa y el aviso la
-    // respeta.
+    // evidencia de que sea mejor. Mejora frente al score completo (-0,62,
+    // t=-1,51) pero sigue dentro del ruido: no es una victoria, es "no se
+    // puede distinguir de comprar al azar en este universo".
     'significant' => false,
 ];
