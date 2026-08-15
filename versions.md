@@ -4761,6 +4761,21 @@ Verificado:
 
 ---
 
+## 2026-08-15 (cuarta entrada) - Segunda opinion: se crea `inversor-fundamental` para debatir la decision de solo-tecnico
+
+Con `feature/solo-tecnico` ya fusionada, desplegada y confirmada en produccion, el usuario pide una comprobacion adicional antes de cerrar el tema: crear un agente con mentalidad opuesta a `analista-mercado` (inversor value/fundamental, escuela Graham/Buffett/Piotroski, ver `.claude/agents/inversor-fundamental.md`) para que ambos den veredicto independiente sobre si la decision fue correcta, con Claude como juez.
+
+**Los dos coinciden en el veredicto operativo: mantener solo-tecnico.** Pero cada uno aporta algo que el otro no tenia:
+
+- **`analista-mercado`** valido la conclusion **fuera** de los 34 tickers de la whitelist gratuita de FMP, en `largecap60` (60 tickers), `ibex35` y `financials`: los tres dan alpha indistinguible de cero (-0,17/t=-0,42, -0,14/t=-0,99, -0,25/t=-0,76), igual que el -0,33/t=-0,88 de la whitelist. Y encontro la comparacion que faltaba: el score **completo** media en `largecap60` un alpha **-1,32 pp con t=-2,75 (significativo y negativo)** — con solo-tecnico ese mismo universo pasa a -0,17/t=-0,42. No es que solo-tecnico gane; es que deja de perder de forma demostrable donde antes perdia de forma demostrable.
+- **`inversor-fundamental`** no nego los datos, los ataco por alcance: 34 mega-caps correlacionados, un unico ciclo de mercado (2020-2025, sin bajista completo salvo 2022), horizontes de 5-60 dias cortos para una tesis value que tipicamente tarda 1-3 años. Verifico con WebSearch (Loughran 1997, factor value en small vs large caps) que esa tension es real en la literatura, no una excusa inventada. Probo `--horizon=120` sobre los mismos 34 tickers: **+2,33 pp, t=0,7, pero solo 9 fechas independientes** — un indicio, no una prueba, y lo reconocio el mismo como insuficiente.
+
+**Veredicto del juez:** se mantiene solo-tecnico, sin cambio de codigo — la validacion de `analista-mercado` en tres universos independientes de la whitelist es la pieza que faltaba y refuerza la decision mas alla de lo medido hasta ahora. La objecion de `inversor-fundamental` no cambia la decision de hoy, pero fija correctamente el estado del conocimiento: "sin evidencia de ventaja" no es "demostrado que no aporta", y su prueba a 120 dias (n=9) queda anotada como pista a revisar cuando `fundamentals_history` acumule mas años, no como hallazgo accionable ahora — el mismo criterio que este proyecto ya aplico en `v2.76`/`v2.78`/`v2.88` contra si mismo.
+
+**El hallazgo mas accionable no fue sobre fundamentales**: `analista-mercado` señalo que el cruce `SMA20>SMA50` sigue invertido (t hasta -4,93 en 6/6 universos, documentado desde `v2.78`, nunca corregido) y que, al quitar los fundamentales, esa señal pasa de pesar el 26% del score al **60%** sin que nadie la haya arreglado. Es el hallazgo con el t mas alto de todo el proyecto y ahora importa el doble. Se eleva como candidato a proxima prioridad, por delante de seguir puliendo fundamentales.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
