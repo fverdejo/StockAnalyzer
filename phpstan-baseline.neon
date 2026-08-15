@@ -35,3 +35,13 @@ parameters:
 			identifier: arrayValues.list
 			count: 1
 			path: tests/Services/InMemoryAlertRepository.php
+
+		-
+			# feature/solo-tecnico: markTestSkipped() deja el resto del test
+			# muerto a proposito, para no borrar un caso cuya premisa (los
+			# fundamentales cambian el score) es falsa solo mientras dure
+			# esta rama. Ver el comentario junto a markTestSkipped().
+			message: '#^Unreachable statement - code above always terminates\.$#'
+			identifier: deadCode.unreachable
+			count: 1
+			path: tests/Integration/BacktestUsesPointInTimeFundamentalsTest.php

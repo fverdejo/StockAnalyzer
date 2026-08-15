@@ -4675,6 +4675,92 @@ Que haria falta para actuar: repetir esto mismo cuando `fundamentals_history` cu
 
 ---
 
+## Rama `feature/solo-tecnico` (2026-08-15) - El veredicto deja de usar fundamentales
+
+Estado: implementado en una rama independiente de `dev`, no fusionada. Requiere decision del usuario antes de fusionar.
+
+Objetivo:
+
+Tras la investigacion del mismo dia que no encontro un hallazgo accionable sobre el bloque fundamental (ver la entrada anterior), el usuario decide, con el matiz de que el bloque TECNICO tiene el problema mas demostrado del proyecto (SMA20>SMA50 invertido en 6/6 universos, t hasta -4,93, `v2.78`), retirar igualmente FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND del veredicto: **el BUY/SELL pasa a salir solo de TECHNICAL+MOMENTUM+RISK**, en una rama aparte para no comprometer `dev` mientras se decide.
+
+Dos condiciones explicitas: (1) la informacion fundamental (PER, ROE, "Sobre la empresa"...) sigue visible en la ficha de detalle, solo deja de contar para la recomendacion; (2) el codigo del analizador fundamental no se borra ni se comenta por bloques, para poder reactivarlo sin reescribirlo.
+
+### El mecanismo: no es config, es el enum
+
+La primera version del cambio intento poner `'fundamental' => 0` en `config/weights.php`, imitando el patron de NEWS (`v2.37`). **No funciona**: `ScoreWeights::loadFile()` descarta explicitamente cualquier valor `<= 0` como override invalido y cae al maximo del enum (30 para FUNDAMENTAL). El mecanismo real de NEWS no fue el fichero de config, fue `ScoreCategory::maxScore()` — el fichero de config simplemente no tiene esa clave, para no anularlo. Se replica exactamente: `ScoreCategory::FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND::maxScore()` pasan a 0, y las cuatro claves desaparecen de `config/weights.php` (documentado en su comentario, mismo criterio que 'news').
+
+`FundamentalAnalyzer::analyze()` sigue calculando las cuatro categorias sin cambios (0 coste: son formulas puras sobre datos ya cargados), pero ahora filtra las que tienen maximo 0 antes de devolverlas — mismo criterio que `v2.39` aplico a NEWS ("sin ningun rastro visible mientras la categoria este a 0"), generalizado a las cuatro en un solo `array_filter`. Sin este filtro, las señales seguirian apareciendo en "Indicadores determinantes" y en el resumen aunque puntuaran 0.
+
+Con esto, `TECHNICAL(30)+MOMENTUM(10)+RISK(10)=50` es el nuevo maximo total (antes 115), y **nada mas en la aplicacion necesito tocarse**: la barra de desglose de categorias ya tenia un guardarraya generico ("categoria sin puntos maximos, no pintar una fila 0/0") anadido para NEWS, y `RecommendationExplainer::buildSummary()` ya omite la frase "En el analisis fundamental" cuando no hay señales fundamentales que citar.
+
+### El coste real: 17 tests dependian de que los fundamentales excelentes empujaran a BUY
+
+`SyntheticStock::create()` (fundamentales fijos "excelentes") combinado con una tendencia tecnica suave llegaba a BUY al 83,71% SOLO gracias a los 65 puntos que aportaban los fundamentales. Sin ellos, la misma tendencia se queda en 72,46% (HOLD): una recta perfectamente monotona satura el RSI(14) a 100 exacto, que el codigo puntua MAL (zona de sobrecompra, 1/3 de MOMENTUM) en vez de bien, y sin el colchon fundamental eso ya no se compensa.
+
+**Arreglo, no parche**: se rediseño `baselineQuotes()` (y sus equivalentes en `BacktestingServiceStatisticsTest`) con un tramo de retroceso — 65 dias a +0,05, 8 dias a -0,125, 7 dias a +0,25 — que rompe la saturacion del RSI (queda en 66,7, el maximo de puntos) y da a MACD un cruce alcista real (el histograma de una recta perfecta converge a 0 exacto). La eleccion de los deltas no es arbitraria: `|d| < 0,5` es la condicion exacta bajo la cual el true range de cada dia sigue dominado por el rango diario R=1,0 (demostrado: TR = max(1,0, |0,5+d|, |d-0,5|), y ambos terminos alternativos quedan por debajo de 1,0 mientras `|d|<0,5`), asi que **el ATR14 en el dia de entrada sigue siendo exactamente 1,0** pese al retroceso, y con el, `stop=101,5`/`objetivo=109,0` (`RiskLevels::compute(104,0, 1,0, 2,5, 2,0)`) — ningun test de niveles de riesgo necesito cambiar sus expectativas. El volumen del dia de entrada se triplica (3.000.000 frente a 1.000.000) para que la señal de volumen puntue al maximo; es la unica palanca adicional que no toca ni el precio ni el ATR.
+
+Tres fixtures necesitaron trabajo especifico, cada uno con su propio limite:
+
+- **`mixedRiskLevelsRegimeHistory()`** (dos regimenes de volatilidad): el mismo retroceso en el primer regimen (dias 0-80) mas volumen triplicado en los indices 80 y 200. El indice 200 (segundo regimen, ATR ya decaido a proposito) no admite el retroceso —romperia justo el decaimiento de ATR que el fixture necesita—, asi que ahi solo el volumen, que basta (73,92% -> 75,92%).
+- **`riseThenCrashHistory()`/`steadyRiseHistory()`** (comparten `history()`): el volumen se extiende a los indices 85, 90, 95, 100 y 105 (no solo el de entrada), porque el efecto del retroceso se diluye en pocos dias sin el.
+- **Limite real encontrado**: en `steadyRiseHistory()`, el indice 105 se queda en HOLD (74,48%, a 0,52 pp del corte) y **no se puede arreglar sin romper el fixture**: esa prueba exige que las 5 ventanas de 5 dias tengan el MISMO retorno (para forzar desviacion tipica exactamente 0), asi que el precio en cada punto muestreado no se puede tocar, y el volumen —la unica palanca que no toca el precio— ya esta en su tope de puntuacion. Se acepta: el test pasa a esperar 4 señales BUY identicas en vez de 5, que demuestra exactamente lo mismo (una desviacion tipica de un conjunto de valores identicos es 0 sea cual sea N). Los numeros derivados del test de agregado de dos tickers que comparten este fixture se recalcularon **ejecutando el servicio real**, no a mano.
+- **Un test de integracion se salta, no se borra ni se fuerza**: `testLosFundamentalesDelSnapshotCambianElResultadoDelBacktest` (de `v2.93`) verifica precisamente que los fundamentales cambian el resultado del backtest — una premisa que esta rama hace falsa a proposito. `markTestSkipped()` con el motivo explicito, mas una entrada en `phpstan-baseline.neon` para el codigo muerto que deja detras (el cuerpo original del test, intacto, listo para volver a ejecutarse si la rama se abandona).
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **291 tests, 897 assertions, OK (1 skipped a proposito)**.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- HTML real de AAPL: recomendacion **SELL al 44,16%** (antes con fundamentales daba otro veredicto), resumen citando solo señales tecnicas ("En el analisis tecnico: ..."), sin ninguna frase "En el analisis fundamental". Panel "Fundamentales" con PER/ROE/Deuda-Patrimonio **sigue visible**, igual que "Sobre la empresa". Desglose de categorias del score solo muestra Analisis tecnico/Momentum/Riesgo.
+- Home con `magnificent7`: HTTP 200, mezcla de HOLD/SELL/STRONG SELL. Backtesting: HTTP 200.
+
+Limitaciones conocidas:
+
+- ~~El aviso de ventaja medida (`v2.94`) sigue mostrando la cifra del score COMPLETO~~ **Remedido el 2026-08-15** tras confirmar que ni la version fija ni la relativa de los fundamentales aportan (ver la tercera entrada del 2026-08-15, mas abajo) y que el usuario decide seguir con solo-tecnico. `php bin/backtest.php --tickers="..." --cross-sectional --horizon=20 --history=5y --top=10` sobre los 34 tickers de la whitelist gratuita: **alpha -0,33 pp, stderr 0,38, t=-0,88** (58 fechas independientes). Mejora frente al score completo (-0,62, t=-1,51) pero sigue sin significancia: no hay evidencia de que el ranking bata al azar en este universo, tampoco de que vaya peor. `config/measured_edge.php` actualizado con esta cifra.
+- El resto de "Ideas adicionales sugeridas" mas abajo en este documento sigue describiendo el score completo (115 puntos); mientras esta rama este activa, esas cifras no aplican a lo que ve el usuario.
+
+---
+
+## 2026-08-15 (tercera entrada) - Fuerza relativa en fundamentales: prototipada y medida, tampoco da señal
+
+Estado: prototipo puro en `src/Services/RelativeFundamentalScorer.php` + tests, en la rama `feature/solo-tecnico`. No conectado a `FundamentalAnalyzer` ni a `ScoreCalculator`: la medicion no lo justifica.
+
+Segundo paso de "las dos cosas, en orden" (ver la entrada de la rama, arriba): con el bloque fundamental ya apagado, se prototipa la unica familia de idea que alguna vez dio positivo en este proyecto — la fuerza relativa que rescato el momentum en `v2.76` (percentiles contra el universo en la misma fecha, en vez de umbrales fijos) — aplicada esta vez a ROE, deuda/patrimonio y FCF yield, los tres ratios de `FundamentalAnalyzer::fundamentalHealth()` (12+10+8 = 30 puntos).
+
+### El componente puro
+
+`RelativeFundamentalScorer` tiene dos metodos sin estado ni dependencias:
+
+- `percentileRank(valor, peers, higherIsBetter)`: posicion 0-100 del valor dentro de sus peers ("cuantos son peores o iguales, como fraccion del total"). `null` con menos de 8 peers con dato: un percentil sobre una muestra tan pequeña no significa nada, y es preferible no puntuar por relatividad a inventar una posicion. Empatar con el peor de todos cuenta a favor (`<=`, no `<`), para que un empate no de percentil 0 de forma artificial.
+- `pointsFor(percentil, maxPoints)`: mapeo lineal (no escalonado, a diferencia de los umbrales Graham que sustituye) de percentil a puntos; `null` cae al punto medio, mismo criterio de neutralidad que ya usa `FundamentalAnalyzer` cuando falta el dato en si.
+
+11 tests cubren ambos metodos (mejor/peor que todos los peers, posicion intermedia, inversion de sentido para "menos es mejor", empate con el peor, ambos guardarrayas de `MIN_PEERS`, clamping y punto medio de `pointsFor`). El primer intento de test tenia un fallo propio: una expectativa de percentil mal calculada a mano (75 donde el algoritmo daba 50 correctamente) que al investigarla desenmascaro un bug real de nombres — la variable que contaba peers "mejores" en realidad contaba "peores o iguales" por como estaba escrita la comparacion, y el criterio de empate favorable al valor evaluado (documentado en el comentario) no se cumplia porque la comparacion era estricta (`<`) en vez de `<=`. Corregido antes de conectar nada.
+
+### La medicion: mismo diseño pareado que la investigacion del bloque fundamental
+
+Script de investigacion (no commiteado, vive en el scratchpad de la sesion): para las mismas 234/117/58/29/19 fechas por horizonte (5/10/20/40/60 dias) que ya uso la investigacion anterior sobre los 34 tickers de la whitelist gratuita de FMP, se calculan DOS rankings top-10 por fecha con los mismos tickers y retornos futuros — solo cambia la formula de puntuacion — y se compara la alpha fecha a fecha:
+
+- **Solo-tecnico** (el de produccion en esta rama): `TECHNICAL+MOMENTUM+RISK` sobre 50.
+- **Combinado**: lo mismo mas `RelativeFundamentalScorer` sobre ROE/deuda-patrimonio/FCF yield point-in-time (via `FundamentalsHistoryRepository::findAsOf()`, igual que el backtest de produccion), sobre 80 en total.
+
+| horizonte | fechas | media diff | stderr | t pareado | diff>0 |
+|---|---|---|---|---|---|
+| 5  | 234 | -0,068 | 0,073 | -0,93 | 113/234 |
+| 10 | 117 | +0,028 | 0,159 | +0,18 | 56/117 |
+| 20 | 58  | +0,085 | 0,269 | +0,32 | 27/58 |
+| 40 | 29  | +0,362 | 0,633 | +0,57 | 19/29 |
+| 60 | 19  | -0,702 | 0,837 | -0,84 | 6/19 |
+
+Ningun horizonte llega a |t|~2, y el signo ni siquiera es consistente (negativo en 5 y 60, positivo en 10/20/40) — el mismo patron de "no hay señal robusta" que la investigacion de umbrales fijos, no una mejora. **Veredicto: no se conecta.** Ni la version Graham ni la version percentil de los fundamentales muestran ventaja medible con esta muestra de 34 tickers; el problema no parece ser el umbral (fijo vs relativo), sino que no hay suficiente señal fundamental que extraer de este universo/periodo con cualquiera de las dos formulas.
+
+El componente y sus tests se conservan en la rama: son limpios, probados, y quedan listos para remedirse si el histórico de fundamentales crece mas alla del limite gratuito de 34 tickers (la muestra actual puede simplemente ser demasiado pequeña para que un efecto real, si existe, se distinga del ruido).
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **301 tests, 913 assertions, OK (1 skipped a proposito)**.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

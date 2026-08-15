@@ -34,16 +34,29 @@ class FundamentalAnalyzer
     }
 
     /**
+     * Con una categoria a maximo 0 (rama feature/solo-tecnico: FUNDAMENTAL,
+     * VALUATION, QUALITY, DIVIDEND, ver ScoreCategory::maxScore()) no basta
+     * con que aporte 0 puntos: scale() ya lo garantiza, pero el
+     * CategoryResult seguiria llevando sus Signal, y esas señales
+     * apareceria en "Indicadores determinantes", en el resumen de
+     * RecommendationExplainer y en cualquier otro sitio que liste señales,
+     * exactamente el problema que v2.39 corrigio para NEWS ("sin ningun
+     * rastro visible mientras la categoria este a 0"). Se filtran aqui, en
+     * el unico sitio que las genera, en vez de en cada consumidor.
+     *
      * @return list<CategoryResult>
      */
     public function analyze(Fundamentals $fundamentals): array
     {
-        return [
-            $this->scale($this->fundamentalHealth($fundamentals)),
-            $this->scale($this->valuation($fundamentals)),
-            $this->scale($this->quality($fundamentals)),
-            $this->scale($this->dividend($fundamentals)),
-        ];
+        return array_values(array_filter(
+            [
+                $this->scale($this->fundamentalHealth($fundamentals)),
+                $this->scale($this->valuation($fundamentals)),
+                $this->scale($this->quality($fundamentals)),
+                $this->scale($this->dividend($fundamentals)),
+            ],
+            fn (CategoryResult $result): bool => $this->weights->getMax($result->getCategory()) > 0
+        ));
     }
 
     /**
