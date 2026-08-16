@@ -47,6 +47,7 @@ class PortfolioConcentrationCalculator
         $byPosition = [];
         $bySector = [];
         $byCurrency = [];
+        $positionSectors = [];
         $total = 0.0;
 
         foreach ($holdings as $holding) {
@@ -64,6 +65,7 @@ class PortfolioConcentrationCalculator
             $byPosition[$ticker] = ($byPosition[$ticker] ?? 0.0) + $valueEur;
             $bySector[$sector] = ($bySector[$sector] ?? 0.0) + $valueEur;
             $byCurrency[$currency] = ($byCurrency[$currency] ?? 0.0) + $valueEur;
+            $positionSectors[$ticker] = $sector;
             $total += $valueEur;
         }
 
@@ -75,7 +77,8 @@ class PortfolioConcentrationCalculator
             $total,
             $this->toWeights($byPosition, $total),
             $this->toWeights($bySector, $total),
-            $this->toWeights($byCurrency, $total)
+            $this->toWeights($byCurrency, $total),
+            $positionSectors
         );
     }
 

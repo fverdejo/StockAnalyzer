@@ -173,6 +173,33 @@ final class PortfolioConcentrationCalculatorTest extends TestCase
     }
 
     /**
+     * `getPositionSectors()` (v2.95) es el mapa ticker => sector que
+     * `Web\PortfolioPage` usa para colorear cada barra de "Por posicion"
+     * como su sector: tiene que devolver el sector de CADA ticker, no solo
+     * el reparto ya agregado por sector.
+     */
+    public function testGetPositionSectorsDevuelveElSectorDeCadaTicker(): void
+    {
+        $portfolio = $this->portfolio([
+            ['AAA', 1.0, 300.0, 'EUR'],
+            ['BBB', 1.0, 100.0, 'EUR'],
+            ['CCC', 1.0, 100.0, 'EUR'],
+        ]);
+
+        $concentration = $this->calculator()->compute($portfolio, [
+            'AAA' => 'Technology',
+            'BBB' => 'Technology',
+            'CCC' => 'Energy',
+        ]);
+
+        self::assertNotNull($concentration);
+        self::assertSame(
+            ['AAA' => 'Technology', 'BBB' => 'Technology', 'CCC' => 'Energy'],
+            $concentration->getPositionSectors()
+        );
+    }
+
+    /**
      * Un ticker sin sector conocido no puede desaparecer del reparto: se
      * agrupa aparte para que los pesos por sector sigan sumando 100%.
      */

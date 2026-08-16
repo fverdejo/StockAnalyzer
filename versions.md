@@ -4793,6 +4793,26 @@ Con `feature/solo-tecnico` ya fusionada, desplegada y confirmada en produccion, 
 
 ---
 
+## v2.95 - Las barras de "Por posicion" llevan el color de su sector
+
+Estado: implementado.
+
+Pedido por el usuario viendo el panel "Concentracion de la cartera": las barras de "Por posicion" eran todas del mismo verde (`--accent`), sin forma de saber a que sector pertenecia cada una sin cruzar mentalmente con el anillo de "Por sector" de al lado.
+
+Cada barra de posicion pasa a llevar el mismo color que la porcion de su sector en el anillo — mismo indice/orden, no un color fijo por sector (`PortfolioPage::sectorColorMap()`, mismo criterio de `sectorDonut()`/`sectorSlices()`: la taxonomia tiene mas sectores que tonos validados, asi que el color identifica "que puesto ocupa este sector en ESTA cartera hoy", no una identidad permanente entre pantallas).
+
+Para saberlo, `PortfolioConcentrationCalculator::compute()` ahora tambien recoge `ticker => sector` (no solo el agregado por sector) y lo expone en `DTO\PortfolioConcentration::getPositionSectors()`.
+
+**Efecto colateral aceptado a proposito**: hasta ahora, una posicion que superaba el 20% pintaba su barra en `--warn` (rojo/naranja) ademas de llevar el chip de texto "> 20%". Con color de sector, el color ya no puede hacer las dos cosas a la vez sin confundir dos significados distintos en el mismo canal (identidad de sector vs. veredicto de concentracion) — se opta por dejar el color para la identidad del sector y el aviso solo en el chip de texto, que ya era donde vivia la cifra exacta. Sin sector conocido para una posicion (proveedor sin dato), el comportamiento anterior se conserva sin cambios: la barra sigue en `--warn` si supera el umbral, porque no hay color de sector con el que sustituirlo.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **303 tests, 919 assertions, OK (1 skipped a proposito)**. Dos casos nuevos: `PortfolioConcentrationCalculatorTest::testGetPositionSectorsDevuelveElSectorDeCadaTicker` y `PortfolioPageTest::testLasBarrasPorPosicionLlevanElColorDeSuSector`.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- Sin Chromium/Node disponibles en este entorno para una captura de pantalla real, la verificacion visual se hizo con un arnes standalone (mismo patron que otras paginas en este documento: `PortfolioPage::render()` + `Layout::render()` reales, sin mocks) sobre una cartera sintetica de 6 posiciones en 6 sectores distintos, comprobando **programaticamente** que el color de cada barra coincide caracter a caracter con el color del arco de su sector en el anillo — las seis coincidieron.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.

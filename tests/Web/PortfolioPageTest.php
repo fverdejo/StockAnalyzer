@@ -147,7 +147,11 @@ final class PortfolioPageTest extends TestCase
     /**
      * `v2.87`, bloque 3: los repartos de concentracion son barras y no
      * listas de etiqueta + porcentaje, y las que superan el umbral se
-     * pintan ademas en `--warn`.
+     * pintan ademas en `--warn`. Sigue siendo asi cuando no se conoce el
+     * sector de ninguna posicion (este fixture no lo pasa): sin color de
+     * sector con el que sustituirlo, `--warn` es el unico que queda. Ver
+     * `testLasBarrasPorPosicionLlevanElColorDeSuSector()` para el caso con
+     * sector conocido, desde `v2.95`.
      */
     public function testLaConcentracionSePintaConBarrasYMarcaLasQueSuperanElUmbral(): void
     {
@@ -165,6 +169,33 @@ final class PortfolioPageTest extends TestCase
         // "Posiciones efectivas".
         self::assertStringNotContainsString('>Indice HHI<', $html);
         self::assertStringContainsString('HHI actual:', $html);
+    }
+
+    /**
+     * `v2.95`, pedido por el usuario ("identificarlas con el mismo color
+     * que sale en el diagrama de sectores"): con el sector de cada
+     * posicion conocido, su barra lleva el mismo color que su porcion en
+     * el anillo (mismo indice: Technology es el primer sector por peso,
+     * mismo tono que la primera porcion del anillo; Energy el segundo).
+     * El aviso de superar el umbral se sigue viendo, pero solo en el chip
+     * de texto: el color de la barra ya no compite con el color de aviso
+     * porque ahora codifica el sector, no un veredicto.
+     */
+    public function testLasBarrasPorPosicionLlevanElColorDeSuSector(): void
+    {
+        $html = $this->renderWithConcentration(null, null, ['ADBE' => 'Technology', 'REP.MC' => 'Energy']);
+
+        self::assertStringContainsString('background:#2a78d6', $html);
+        self::assertStringContainsString('background:#eb6834', $html);
+        // Ni ADBE ni REP.MC llevan ya la clase de aviso en la barra: ambas
+        // superan el 20% por posicion, pero con color de sector conocido
+        // el aviso vive solo en el chip de texto.
+        self::assertStringNotContainsString('score-bar-fill score-bar-fill-warn', $html);
+        // El umbral de posicion (20%) y no el de sector (40%, que tambien
+        // aparece en este fixture porque Technology supera el 40%): se
+        // cuenta el chip especifico para no depender de cuantos avisos de
+        // sector caigan de rebote en el mismo HTML.
+        self::assertSame(2, substr_count($html, '<span class="concentration-warning">&gt; 20%</span>'));
     }
 
     /**
@@ -279,7 +310,7 @@ final class PortfolioPageTest extends TestCase
      * @param ?array<string,float> $currencyWeights
      * @param ?array<string,float> $sectorWeights
      */
-    private function renderWithConcentration(?array $currencyWeights = null, ?array $sectorWeights = null): string
+    private function renderWithConcentration(?array $currencyWeights = null, ?array $sectorWeights = null, ?array $positionSectors = null): string
     {
         $holdings = [
             new Holding('ADBE', 5.0, 250.41, 265.21, null, 1082.0, 1146.0),
@@ -302,7 +333,8 @@ final class PortfolioPageTest extends TestCase
             1922.0,
             ['ADBE' => 62.0, 'REP.MC' => 38.0],
             $sectorWeights ?? ['Technology' => 62.0, 'Energy' => 38.0],
-            $currencyWeights ?? ['EUR' => 55.0, 'USD' => 45.0]
+            $currencyWeights ?? ['EUR' => 55.0, 'USD' => 45.0],
+            $positionSectors ?? []
         );
 
         return PortfolioPage::render(

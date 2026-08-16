@@ -49,12 +49,14 @@ class PortfolioConcentration
      * @param array<string,float> $positionWeights ticker => % del total, orden descendente
      * @param array<string,float> $sectorWeights sector => % del total, orden descendente
      * @param array<string,float> $currencyWeights divisa nativa => % del total, orden descendente
+     * @param array<string,string> $positionSectors ticker => sector (misma clave que $sectorWeights), para poder colorear cada posicion como su sector (v2.95)
      */
     public function __construct(
         private readonly float $totalValueEur,
         private readonly array $positionWeights,
         private readonly array $sectorWeights,
-        private readonly array $currencyWeights
+        private readonly array $currencyWeights,
+        private readonly array $positionSectors = []
     ) {
     }
 
@@ -85,6 +87,14 @@ class PortfolioConcentration
     public function getCurrencyWeights(): array
     {
         return $this->currencyWeights;
+    }
+
+    /**
+     * @return array<string,string> ticker => sector, misma clave que devuelve getSectorWeights()
+     */
+    public function getPositionSectors(): array
+    {
+        return $this->positionSectors;
     }
 
     public function getPositionCount(): int

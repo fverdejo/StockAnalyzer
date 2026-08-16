@@ -856,3 +856,15 @@ Con los 34 tickers point-in-time ya disponibles, el usuario pide comprobar si el
 **No se toca `config/weights.php`.** Mismo criterio que `v2.78` y `v2.88`: un indicio que no aguanta un segundo angulo de medida no es una conclusion, y aqui no aguanto ni el segundo (atribucion por señal) ni el tercero (test pareado). La muestra ademas son 34 valores grandes de EEUU correlacionados, no varios universos independientes — la unica manera de que esta pregunta tenga una respuesta real es repetirla con mas de un universo, que es justo lo que el techo del plan gratuito de FMP impide hoy.
 
 Toda la investigacion se hizo con las clases de produccion reales desde scripts de un solo uso, sin tocar `src/` ni `config/`. Detalle completo con las tres tablas en `versions.md` (entrada del 2026-08-15, segunda de la fecha).
+
+---
+
+## 2026-08-16 (acceso DBeaver a la Pi, INTC desbloqueado, y color por sector en "Mi cartera")
+
+Tres hilos sueltos, cada uno con su detalle completo en `versions.md`:
+
+- **Acceso de solo lectura desde DBeaver** a la base de datos de la Pi, pedido por el usuario. Se creo un usuario MySQL dedicado (`dbeaver`, restringido a la subred domestica `192.168.1.0/24`, sin tocar el usuario `stock_analyzer` de la aplicacion) con permisos `SELECT` unicamente; ampliado despues a `INSERT`/`UPDATE`/`DELETE` a peticion explicita del usuario. Verificado desde otra maquina de la red que la lectura funciona y que los intentos de escritura fallan hasta ampliar el permiso.
+- **`INTC` desbloqueado en el plan gratuito de FMP (35º ticker)**, con un error propio de por medio: `bin/backfill-fundamentals.php` no tiene `--help`, y comprobarlo gasto 180/250 llamadas diarias sin necesidad. Detalle en `versions.md`, entrada del 2026-08-16.
+- **`v2.95`: las barras de "Por posicion" en "Concentracion de la cartera" llevan el color de su sector**, pedido por el usuario viendo el panel (hasta entonces todas verdes). Mismo indice de color que el anillo de "Por sector", via `DTO\PortfolioConcentration::getPositionSectors()` (nuevo). Efecto colateral aceptado: las posiciones sobreponderadas ya no cambian de color, el aviso queda solo en el chip de texto — color e identidad de sector por un lado, veredicto de concentracion por otro, sin que compitan en el mismo canal.
+
+Suite en verde (**303 tests / 919 assertions**), PHPStan limpio. Todo commiteado, empujado y sincronizado en la Pi: desde el 2026-08-15 el flujo completo, incluido el `git pull` en la Pi, lo hace Claude directamente.

@@ -156,7 +156,8 @@ HTML;
             self::weightBars(
                 $concentration->getPositionWeights(),
                 $concentration->getOverweightPositions(),
-                PortfolioConcentration::POSITION_WARNING_PERCENT
+                PortfolioConcentration::POSITION_WARNING_PERCENT,
+                self::positionColors($concentration)
             ),
             self::sectorDonut(
                 $concentration->getSectorWeights(),
@@ -304,6 +305,35 @@ HTML;
     }
 
     /**
+     * Color de cada sector por su nombre, con el mismo indice/orden que usa
+     * el anillo (`sectorDonut()`/`sectorSlices()`): los `SECTOR_DONUT_MAX`
+     * primeros sectores por peso llevan un tono propio de `SECTOR_COLORS`,
+     * el resto `SECTOR_COLOR_OTHER`. Se calcula aparte de `sectorSlices()`
+     * (que trabaja sobre "porciones" ya agrupadas en un unico "Otros")
+     * porque aqui hace falta lo contrario: saber el color de UN sector
+     * conocido su nombre, sin agrupar nada. Las dos reglas de color deben
+     * quedar identicas o la barra de una posicion y su porcion en el
+     * anillo dejarian de coincidir.
+     *
+     * @param array<string,float> $sectorWeights sector => % del total, ya en orden descendente
+     * @return array<string,string> sector => color hexadecimal
+     */
+    private static function sectorColorMap(array $sectorWeights): array
+    {
+        $colors = [];
+        $index = 0;
+
+        foreach (array_keys($sectorWeights) as $sector) {
+            $colors[(string) $sector] = $index < self::SECTOR_DONUT_MAX
+                ? self::SECTOR_COLORS[$index]
+                : self::SECTOR_COLOR_OTHER;
+            $index++;
+        }
+
+        return $colors;
+    }
+
+    /**
      * Los sectores que llevan color propio, mas un "Otros" con la suma del
      * resto si sobran. Se agrupa por peso y no por nombre: si hay que
      * esconder sectores, los que menos duelen son los mas pequeños.
@@ -344,6 +374,30 @@ HTML;
     }
 
     /**
+     * Color de cada posicion = color de su sector en el anillo de al lado
+     * (`sectorColorMap()`, mismo indice), para poder identificar de un
+     * vistazo a que sector pertenece cada posicion sin cruzar los dos
+     * paneles a mano. Pedido por el usuario el 2026-08-16: hasta entonces
+     * las barras de "Por posicion" eran todas del mismo verde y no decian
+     * nada sobre a que sector pertenecia cada una.
+     *
+     * @return array<string,string> ticker => color hexadecimal
+     */
+    private static function positionColors(PortfolioConcentration $concentration): array
+    {
+        $sectorColors = self::sectorColorMap($concentration->getSectorWeights());
+        $colors = [];
+
+        foreach ($concentration->getPositionSectors() as $ticker => $sector) {
+            if (isset($sectorColors[$sector])) {
+                $colors[$ticker] = $sectorColors[$sector];
+            }
+        }
+
+        return $colors;
+    }
+
+    /**
      * Reparto de pesos de un criterio (posicion o sector) como barras
      * horizontales, reutilizando `.score-bars` de la ficha de detalle (ya
      * en la hoja de estilos, sin JavaScript) en vez de la lista
@@ -351,13 +405,21 @@ HTML;
      *
      * El motivo es que un peso es una proporcion y la lista obligaba a
      * comparar numeros de dos en dos para verlo; la barra lo enseña sin
-     * leer. Las que superan el umbral se pintan en `--warn` ademas de
-     * llevar el chip, porque ahi el color si codifica un veredicto.
+     * leer.
+     *
+     * Cuando se pasa `$colors` (posiciones, coloreadas por sector desde
+     * `v2.95`), el color de cada barra deja de codificar "supera el
+     * umbral" —eso ya lo dice el chip de texto— y pasa a codificar "a que
+     * sector pertenece", para que no compitan dos significados distintos
+     * en el mismo canal de color. Sin `$colors` (sectores, divisas...) el
+     * comportamiento no cambia: las que superan el umbral se siguen
+     * pintando en `--warn`.
      *
      * @param array<string,float> $weights etiqueta => % del total, ya en orden descendente
      * @param array<string,float> $overweight subconjunto de $weights que supera el umbral de aviso
+     * @param array<string,string> $colors etiqueta => color hexadecimal (vacio = usa el color de aviso/accent de siempre)
      */
-    private static function weightBars(array $weights, array $overweight, float $warningPercent): string
+    private static function weightBars(array $weights, array $overweight, float $warningPercent, array $colors = []): string
     {
         if ($weights === []) {
             return '<div class="muted">Sin datos suficientes.</div>';
@@ -367,18 +429,20 @@ HTML;
 
         foreach ($weights as $label => $weight) {
             $isOverweight = isset($overweight[$label]);
+            $color = $colors[$label] ?? null;
             $rows[] = sprintf(
-                '<div class="score-bar-row"><div class="score-bar-head"><span>%s%s</span><span class="muted">%s</span></div><div class="score-bar-track"><div class="score-bar-fill%s" style="width:%s%%"></div></div></div>',
+                '<div class="score-bar-row"><div class="score-bar-head"><span>%s%s</span><span class="muted">%s</span></div><div class="score-bar-track"><div class="score-bar-fill%s" style="width:%s%%%s"></div></div></div>',
                 Layout::escape((string) $label),
                 $isOverweight
                     ? sprintf('<span class="concentration-warning">&gt; %s</span>', self::thresholdPercent($warningPercent))
                     : '',
                 self::percent($weight),
-                $isOverweight ? ' score-bar-fill-warn' : '',
+                ($isOverweight && $color === null) ? ' score-bar-fill-warn' : '',
                 // Un peso ya viene en 0-100 y acotado por el calculador,
                 // pero el ancho de una barra no puede depender de eso: un
                 // redondeo por encima de 100 desbordaria el carril.
-                Layout::escape(number_format(max(0.0, min(100.0, $weight)), 2, '.', ''))
+                Layout::escape(number_format(max(0.0, min(100.0, $weight)), 2, '.', '')),
+                $color !== null ? sprintf(';background:%s', Layout::escape($color)) : ''
             );
         }
 
