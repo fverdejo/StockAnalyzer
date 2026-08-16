@@ -4776,6 +4776,23 @@ Con `feature/solo-tecnico` ya fusionada, desplegada y confirmada en produccion, 
 
 ---
 
+## 2026-08-16 - INTC se desbloquea (35º ticker), y un error propio gasta media cuota diaria de FMP
+
+**El error primero, sin maquillarlo**: al comprobar las opciones de `bin/backfill-fundamentals.php` se intento `--help`, que el script no reconoce (no hay ese flag) — en vez de fallar, `getopt()` lo ignora en silencio y el script cae al comportamiento por defecto (universo `largecap60` completo, sin `--skip-existing`), y se ejecuto de verdad. Gasto **180 de las 250 llamadas diarias del plan gratuito** re-consultando 32 tickers que ya estaban cubiertos al 100% desde el `2026-08-15`. `ON DUPLICATE KEY UPDATE` evito duplicar filas (los recuentos por ticker no cambiaron), asi que no hubo daño de datos, solo cuota diaria desperdiciada sin ganancia.
+
+**Con la cuota restante (~70 llamadas), en vez de repetir tickers conocidos**, se calcularon los candidatos de `config/universes.php` **todavia no probados** en la investigacion del `2026-08-15` (que cubrio `healthcare`, `energy`, `consumer_staples`, `industrials`, `financials` y el `largecap60` por defecto): 123 tickers nuevos entre `dow30`, `tech40`, los tres universos de `financials_*`, `consumer`/`consumer_discretionary`, los tres ADR (`china_adr`, `asia_pacific_adr`, `latam_adr`), `semiconductors_global` e `ibex35`. Se probaron 52 (una muestra diversa, acotada al presupuesto restante):
+
+- **`INTC` se desbloqueo** — 5 ejercicios fiscales reales, 1.141 filas, cobertura `2022-01-27` a `2026-08-14`. Es el **35º ticker** confirmado del plan gratuito (antes 34, ver la entrada del `2026-08-15`). No hay explicacion clara de por que este si y los demas no — sigue sin patron detectable por mercado/tamaño/sector.
+- **Desde el ticker #7 del lote, todo empezo a fallar con HTTP 429** ("too many requests") en vez de 402 ("no cubierto por el plan"): la cuota diaria real ya estaba agotada por el error de arriba mas este mismo lote. **Quedan 71 candidatos de los 123 sin probar** — se retoma cuando la cuota se reinicie (dia siguiente).
+
+**Sincronizado con la Pi**: mismo procedimiento seguro de `v2.93` (backup primero con `stockanalyzer-backup.sh`, tabla `fh_staging`, `INSERT ... ON DUPLICATE KEY UPDATE` por `UNIQUE(ticker, snapshot_date)`, sin tocar `id`). Verificado en ambos entornos: `INTC` con 1.141 filas, `2022-01-27` a `2026-08-14`.
+
+**Aviso aparte, no relacionado con lo anterior**: el backup de hoy en la Pi informo `"sin remoto 'drive' configurado: solo copia local"` — el remoto `rclone` de Google Drive documentado en `roadmap.md` (`2026-08-14`) no aparecio disponible en esta ejecucion via `sudo`. Puede ser que la configuracion de `rclone` viva en el `HOME` de `admin` y `sudo` este mirando el de `root`. Sigue pendiente en la agenda ("conector Google Drive"); no se investigo hoy a fondo, solo se deja anotado.
+
+**Leccion para no repetir el error**: `bin/backfill-fundamentals.php` no tiene `--help`; sus opciones estan documentadas en el docblock de cabecera del propio fichero, hay que leerlo con `Read`/`grep`, no ejecutar el script para "ver que hace".
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
