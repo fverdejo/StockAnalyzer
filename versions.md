@@ -4631,6 +4631,8 @@ Esto cambia la decision de los $69: **no es ya "grano trimestral vs anual"**, es
 
 No se ha tocado codigo: el hallazgo es de datos, no de mecanica. `bin/backfill-fundamentals.php` sigue funcionando exactamente como en `v2.93`, y `--skip-existing` sigue siendo correcto para cuando se pruebe con otro plan o con simbolos nuevos.
 
+> **Correccion (2026-08-17):** "lista fija" era la conclusion equivocada. Al reintentar los mismos candidatos bloqueados en dias distintos, algunos que fallaban con 402 en una tanda pasaron a estar disponibles en otra (`SHOP`, `TSM`, `BABA`, `BIDU`, `NIO`, `SONY`, `BILI`, mas `INTC` el 2026-08-16: 42 confirmados en total a esa fecha). Sigue sin haber patron por mercado/tamaño/sector, pero tampoco es estatico — rota o crece con el tiempo, no se sabe cual de las dos. Detalle completo en `versions.md`, entrada del 2026-08-17. La lista de 34 de arriba queda como **foto del 2026-08-15**, no como techo definitivo.
+
 ---
 
 ## 2026-08-15 (segunda entrada) - ¿Hay que replantear el motor de analisis? Investigado, y todavia no
@@ -4810,6 +4812,23 @@ Verificado:
 - `ddev exec vendor/bin/phpunit`: **303 tests, 919 assertions, OK (1 skipped a proposito)**. Dos casos nuevos: `PortfolioConcentrationCalculatorTest::testGetPositionSectorsDevuelveElSectorDeCadaTicker` y `PortfolioPageTest::testLasBarrasPorPosicionLlevanElColorDeSuSector`.
 - `ddev exec vendor/bin/phpstan analyse`: **No errors**.
 - Sin Chromium/Node disponibles en este entorno para una captura de pantalla real, la verificacion visual se hizo con un arnes standalone (mismo patron que otras paginas en este documento: `PortfolioPage::render()` + `Layout::render()` reales, sin mocks) sobre una cartera sintetica de 6 posiciones en 6 sectores distintos, comprobando **programaticamente** que el color de cada barra coincide caracter a caracter con el color del arco de su sector en el anillo — las seis coincidieron.
+
+---
+
+## 2026-08-17 - La "lista fija de 34 tickers" no era fija: 7 mas se desbloquean probando los mismos candidatos otro dia
+
+Corrige lo que la entrada del 2026-08-15 daba por sentado ("una lista fija de 34 simbolos, sin patron detectable"). Siguiendo la leccion del 2026-08-16 (leer el docblock de `bin/backfill-fundamentals.php`, no ejecutar `--help`), se repite el relleno con dos lotes:
+
+1. **Los 45 candidatos que ayer se quedaron en HTTP 429** (cuota agotada, no 402 de "no cubierto") — su estado real nunca se supo. Al reintentarlos hoy con la cuota diaria fresca: **6 se desbloquean** — `SHOP`, `TSM`, `BABA`, `BIDU`, `NIO`, `SONY` — con cobertura completa (5 ejercicios, ~1.000-1.130 filas cada uno). El resto (39) confirma 402 real.
+2. **Los 71 candidatos nunca probados** del lote de universos del 2026-08-15 (`dow30`, `financials_*`, ADRs, `ibex35`...): **1 mas se desbloquea**, `BILI`. El resto, 402.
+
+**Total de hoy: 7 tickers nuevos** (`SHOP`, `TSM`, `BABA`, `BIDU`, `NIO`, `SONY`, `BILI`), que se suman a los 34 del `2026-08-15` y `INTC` del `2026-08-16`: **42 tickers confirmados** en total, hoy.
+
+Lo importante no es el numero, es lo que implica: **los mismos tickers que ayer no se pudieron probar (429) hoy han dado resultados mixtos** (algunos 402 reales, otros disponibles). Esto **no es compatible con una lista fija e inmutable** tal y como se documento el 2026-08-15 — o el plan gratuito de FMP rota el subconjunto de simbolos accesibles, o lo esta ampliando con el tiempo, o hay algun otro factor no identificado (hora del dia, carga del servicio...). No hay datos suficientes para distinguir cual de las tres es, pero la consecuencia practica es la misma: **merece la pena volver a probar los tickers ya marcados como 402 en dias distintos**, en vez de darlos por descartados para siempre. Se revisa la entrada del `2026-08-15` en consecuencia (nota añadida, no se borra el hallazgo original).
+
+Sincronizado con la Pi con el mismo procedimiento seguro de siempre (backup, `fh_staging`, `ON DUPLICATE KEY UPDATE` por `UNIQUE(ticker, snapshot_date)`). Verificado en ambos entornos: los 7 tickers con su recuento de filas correcto.
+
+**Mismo aviso que ayer, sigue sin investigarse a fondo**: el backup de hoy en la Pi volvio a informar `"sin remoto 'drive' configurado: solo copia local"` — no es un fallo puntual, se repite. Sigue en la agenda.
 
 ---
 
