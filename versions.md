@@ -4832,6 +4832,20 @@ Sincronizado con la Pi con el mismo procedimiento seguro de siempre (backup, `fh
 
 ---
 
+## 2026-08-17 (segunda entrada) - El aviso de Google Drive era una falsa alarma propia, no un fallo real
+
+El usuario avisa: el ve las copias en Drive con normalidad, algo no cuadra con el aviso repetido de las dos entradas anteriores. Investigado a fondo esta vez, y confirmado: **la subida a Drive siempre ha funcionado correctamente**; el aviso lo causaba mi propio metodo de comprobacion, no el sistema real.
+
+`stockanalyzer-backup.sh` busca el remoto `rclone` llamado `drive` con `rclone listremotes`, sin especificar `--config`, asi que usa la configuracion del `$HOME` de quien ejecuta el comando. La unidad systemd (`stockanalyzer-backup.timer` -> `stockanalyzer-backup.service`) declara `User=admin`, y `/home/admin/.config/rclone/rclone.conf` **si tiene el remoto `drive` configurado** — por eso las ejecuciones automaticas (las que de verdad importan) suben la copia sin problema. Confirmado con `rclone lsl drive:StockAnalyzer/backups`: los ficheros de ayer y de hoy estan ahi, con marca de tiempo que coincide exactamente con la hora del timer (`stockanalyzer-2026-08-17.sql.gz` subido a las 11:00:09, timer disparado a las 11:00:03).
+
+El aviso salio en **mis dos comprobaciones manuales** (`2026-08-16` y `2026-08-17`, ambas entradas anteriores), porque las lance con `sudo /usr/local/bin/stockanalyzer-backup.sh`. `sudo` ejecuta como **root**, y `/root/.config/rclone/rclone.conf` no existe — asi que `rclone listremotes` no encontraba nada, y el script (correctamente, por diseño: "un fallo de subida no puede tumbar la copia local") se limitaba a avisar y seguir. No es que el conector estuviera roto: es que yo estaba mirando la configuracion de un usuario que nunca ha necesitado tener rclone configurado.
+
+**Leccion para no repetir el error**: en esta Pi, cualquier comprobacion manual de algo que dependa de la configuracion de usuario (rclone, y por extension cualquier otra cosa que viva en un `$HOME`) tiene que hacerse **sin `sudo`**, como `admin` — que es quien de verdad ejecuta los timers — salvo que la propia tarea requiera privilegios de root explicitamente (como leer la contraseña de la base de datos en `/etc/msmtp-password`, `v2.79`).
+
+No hay ningun cambio de codigo ni de configuracion: el sistema ya estaba bien montado desde el `2026-08-14`. Se corrigen las dos entradas anteriores con esta nota en vez de borrarlas, para que quede constancia de que el aviso fue una falsa alarma y por que.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
