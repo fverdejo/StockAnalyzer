@@ -4846,6 +4846,22 @@ No hay ningun cambio de codigo ni de configuracion: el sistema ya estaba bien mo
 
 ---
 
+## 2026-08-18 - `C` (Citigroup) desbloqueado, y dos mecanicas del relleno por fin entendidas
+
+Continuando la estrategia del `2026-08-17` (reintentar candidatos, no solo buscar universos nuevos), dos cosas se aclaran hoy:
+
+**1. `--tickers` heredaba sin querer el tope de 60 del buscador del Home.** Al pasar una lista de 91 candidatos con `--max-tickers=91`, el script solo proceso 60. Investigado: `bin/backfill-fundamentals.php` reutiliza `Utils\TickerNormalizer` (pensado para convertir el texto libre del buscador del Home en tickers, `v2.5`) para parsear `--tickers`, y esa clase tiene `private const MAX_TICKERS = 60` — un limite razonable para una caja de busqueda, sin sentido para un script de administracion por lotes, aplicado sin querer. Explica tambien el mismo corte observado el `2026-08-16` (70 candidatos, solo 60 procesados) que entonces no se investigo a fondo. **No se ha tocado codigo**: para hoy basta con pasar lotes de 60 o menos: es una limitacion a tener en cuenta, no necesariamente un bug a arreglar (subir el limite del buscador del Home a mano por un caso de uso de administracion tampoco seria lo correcto; si esto se vuelve a hacer a menudo, `bin/backfill-fundamentals.php` deberia tener su propio parseo de `--tickers` en vez de compartir clase con el buscador).
+
+**2. El coste real es fijo: 3 llamadas por ticker intentado, acierte o falle.** `FmpFiscalPeriodProvider::CALLS_PER_TICKER = 3` se suma igual en el camino de exito y en el de error — no es "~1 llamada si falla, ~5 si acierta" como se asumio el `2026-08-16`/`17`, es siempre 3. Con esto, `Llamadas a FMP gastadas` de cada tanda es exactamente `tickers_intentados × 3`, verificado en las dos tandas de hoy (60×3=180, 20×3=60).
+
+**Resultado de hoy**: de 80 candidatos probados (dos tandas de 60 y 20, del catalogo de 263 candidatos restantes tras excluir los 42 ya confirmados), **1 nuevo**: `C` (Citigroup), cobertura completa (1.120 filas, 2022-02-28 a 2026-08-14). Se para la sesion a 240/250 llamadas estimadas del dia, sin llegar a ver ningun 429, para no arriesgar cuota en vano. **Total acumulado: 43 tickers confirmados.**
+
+Quedan **183 candidatos sin probar hoy** (de los 263 restantes) para la proxima sesion — la lista completa es reproducible restando los tickers ya confirmados de `config/universes.php` (ver el script de un solo uso usado hoy, no commiteado).
+
+Sincronizado con la Pi con el procedimiento seguro de siempre.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
