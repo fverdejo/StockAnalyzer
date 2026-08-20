@@ -4862,6 +4862,14 @@ Sincronizado con la Pi con el procedimiento seguro de siempre.
 
 ---
 
+## 2026-08-20 - `FDX` y `LMT` desbloqueados, 45 en total
+
+Continuando desde donde se quedo el `2026-08-18` (candidatos ordenados alfabeticamente, siguiente tanda desde `ETN`). Dos tandas de 60 y 22 candidatos (82 en total, presupuesto ~246 de 250 llamadas estimadas, calculado con precision gracias a la regla fija de 3 llamadas/ticker aclarada el `2026-08-18`): **2 nuevos**, `FDX` (FedEx, 1.028 filas) y `LMT` (Lockheed Martin, 1.147 filas), ambos con cobertura completa hasta `2026-08-20`. El resto, 402.
+
+**Total: 45 tickers confirmados.** Quedan **180 candidatos sin probar** del catalogo de 262 restantes (todos los universos menos los confirmados). Sincronizado con la Pi con el procedimiento seguro de siempre.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
