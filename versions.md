@@ -4870,6 +4870,14 @@ Continuando desde donde se quedo el `2026-08-18` (candidatos ordenados alfabetic
 
 ---
 
+## 2026-08-21 - `PYPL` y `TGT` desbloqueados, 47 en total
+
+Continuando desde `NOC` (siguiente tanda alfabetica tras la del `2026-08-20`). Dos tandas de 60 y 22 candidatos (82 en total, ~246/250 llamadas estimadas): **2 nuevos**, `PYPL` (PayPal, 1.141 filas) y `TGT` (Target, 1.118 filas), ambos con cobertura completa hasta `2026-08-21`. El resto, 402.
+
+**Total: 47 tickers confirmados.** Quedan **178 candidatos sin probar** del catalogo de 260 restantes. Sincronizado con la Pi con el procedimiento seguro de siempre.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 Estas ideas no las ha pedido el usuario todavia; las anota `analista-mercado` tras revisar el motor de analisis/score/backtesting el 2026-08-03. No tienen version asignada ni estan comprometidas.
