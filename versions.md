@@ -5066,6 +5066,29 @@ Script de investigacion de un solo uso (no forma parte del repositorio, vive en 
 
 ---
 
+## v2.100 - El aviso de ventaja medida hablaba de "las 10 primeras del ranking" con un solo resultado
+
+Estado: implementado.
+
+Objetivo:
+
+Queja del usuario: buscando "amazon" a mano en el Home (un ticker, un resultado), el aviso de ventaja medida seguia diciendo *"la ultima medicion da 0,33 puntos porcentuales MENOS que la media del universo a 20 dias, **comprando las 10 primeras del ranking por puntuacion**"* — una frase sin sentido cuando solo hay un resultado que mostrar. `MeasuredEdgeNotice::render()` (version completa, la de la cabecera del ranking) se llamaba desde `DashboardPage` sin conocer cuantos resultados habia en la vista actual, asi que se mostraba igual con 60 tickers que con 1.
+
+### Que cambia
+
+- **`MeasuredEdgeNotice::render()`** gana un segundo parametro opcional, `?int $resultCount = null`. Si se indica y no supera `topN()` (10 en la configuracion real), el aviso no se muestra: "comprando las N primeras" solo tiene sentido si hay mas de N candidatos entre los que elegir. Con exactamente `topN` resultados tampoco se muestra (serian "todos los mostrados", no una seleccion sobre un conjunto mayor).
+- **`DashboardPage::render()`** pasa `count($results)` en la llamada. Aplica igual a una busqueda manual de pocos tickers que a un filtro de recomendacion que deje pocos resultados (p.ej. filtrar por SELL en un universo donde solo hay 3): en ambos casos no hay "top-N de un conjunto mayor" del que hablar.
+- **`renderInline()` (la ficha de un valor concreto) no cambia**: ahi la pregunta siempre es sobre UN valor, nunca hubo pretension de describir una seleccion entre varios.
+- Sin `$resultCount` (el valor por defecto, `null`), el comportamiento no cambia — los tests existentes de contenido/tono del aviso no necesitan conocer cuantos resultados hay en la vista que los motiva.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **326 tests, 968 assertions, OK (1 skipped a proposito)**. Casos nuevos: sin aviso con 1 o con exactamente `topN` resultados, con aviso normal por encima de `topN`, y sin `$resultCount` el comportamiento de siempre se conserva.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- Contra la app real: buscando `?tickers=amazon` (1 resultado) el aviso desaparece; con `?universe=largecap60` (60 resultados) sigue apareciendo igual que siempre.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.

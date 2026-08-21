@@ -92,6 +92,32 @@ final class MeasuredEdgeNoticeTest extends TestCase
     }
 
     /**
+     * v2.100, queja real del usuario: buscando "amazon" a mano y obteniendo
+     * UN solo resultado, el aviso seguia diciendo "las 10 primeras del
+     * ranking" — una frase sin sentido cuando no hay diez candidatos entre
+     * los que elegir. Con `topN() === 10` (el de la config de prueba), 1
+     * resultado no es un ranking real, 10 justos tampoco (serian "todas las
+     * mostradas", no una seleccion), 11 si.
+     */
+    public function testNoSeMuestraConMenosOIgualesResultadosQueElTopN(): void
+    {
+        self::assertSame('', MeasuredEdgeNotice::render($this->config(-0.62), 1));
+        self::assertSame('', MeasuredEdgeNotice::render($this->config(-0.62), 10));
+        self::assertNotSame('', MeasuredEdgeNotice::render($this->config(-0.62), 11));
+    }
+
+    /**
+     * Sin pasar `$resultCount` (el valor por defecto, `null`), el
+     * comportamiento no cambia: los tests de contenido/tono de este
+     * fichero no tienen que conocer ni les importa cuantos resultados hay
+     * en la vista que los motiva.
+     */
+    public function testSinResultCountNoAplicaElGuardarraya(): void
+    {
+        self::assertNotSame('', MeasuredEdgeNotice::render($this->config(-0.62)));
+    }
+
+    /**
      * Si algun dia la medicion negativa SI es significativa, el aviso
      * puede y debe ser mas rotundo.
      */

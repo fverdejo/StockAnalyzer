@@ -36,17 +36,35 @@ use StockAnalyzer\Config\MeasuredEdgeConfig;
  *    (`Score::recommendationFor()`, >=75% BUY). Son dos criterios de
  *    seleccion distintos que pueden coincidir o no segun el dia, y sin
  *    esta frase el aviso da a entender que coinciden siempre.
+ *
+ * 4. **No se muestra si no hay ranking del que hablar** (v2.100, queja del
+ *    usuario: buscando "amazon" a mano, con UN solo resultado, el aviso
+ *    seguia diciendo "las 10 primeras del ranking"). "Comprando las N
+ *    primeras" solo tiene sentido si hay mas de N candidatos entre los que
+ *    elegir; con una busqueda manual de un puñado de tickers, o un filtro
+ *    de recomendacion que deja menos de N resultados, no hay seleccion que
+ *    el aviso pueda describir. Se omite (version completa, la de la
+ *    cabecera del ranking) cuando el numero de resultados mostrados no
+ *    supera `topN`.
  */
 class MeasuredEdgeNotice
 {
     /**
-     * Version completa, para la cabecera del ranking.
+     * Version completa, para la cabecera del ranking. `$resultCount` es
+     * cuantos resultados hay en ESTA vista (tras aplicar busqueda manual o
+     * filtro de recomendacion); `null` (el valor por defecto, usado por
+     * quien no necesite esta comprobacion, como los tests de contenido del
+     * propio aviso) no aplica el guardarraya del punto 4 de arriba.
      */
-    public static function render(?MeasuredEdgeConfig $config = null): string
+    public static function render(?MeasuredEdgeConfig $config = null, ?int $resultCount = null): string
     {
         $config ??= new MeasuredEdgeConfig();
 
         if (!$config->hasMeasurement()) {
+            return '';
+        }
+
+        if ($resultCount !== null && $resultCount <= $config->topN()) {
             return '';
         }
 

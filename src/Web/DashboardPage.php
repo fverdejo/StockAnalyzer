@@ -85,8 +85,11 @@ class DashboardPage
         $sectorNote = self::renderSectorNote($sectorWeights, count($results));
         // El veredicto no sale solo: va acompañado de la ventaja que se le
         // ha medido (v2.94). Antes el ranking pintaba BUY en verde sin
-        // ninguna pista de que su respaldo medido es negativo.
-        $edgeNotice = MeasuredEdgeNotice::render();
+        // ninguna pista de que su respaldo medido es negativo. count($results)
+        // (v2.100) para que el aviso se calle cuando no hay ranking real del
+        // que hablar: una busqueda manual de un ticker, o un filtro de
+        // recomendacion que deja pocos resultados.
+        $edgeNotice = MeasuredEdgeNotice::render(null, count($results));
         $updatedAt = Layout::escape((new DateTimeImmutable())->format('Y-m-d H:i'));
 
         $body = <<<HTML
