@@ -893,3 +893,11 @@ Dos cosas de mecanica se aclaran por fin, ambas sin cambio de codigo:
 - **El coste real es fijo: 3 llamadas por ticker intentado, acierte o falle** (`FmpFiscalPeriodProvider::CALLS_PER_TICKER`), no variable como se asumio antes. Permite calcular el presupuesto de cada tanda con precision: `tickers × 3`.
 
 Se para la sesion a ~240/250 llamadas estimadas del dia, sin llegar a ver un 429, para no desperdiciar cuota. Quedan **183 candidatos sin probar**. Sincronizado con la Pi. Detalle completo en `versions.md`, entrada del 2026-08-18.
+
+---
+
+## 2026-08-21 (tercera sesion: `v2.96`, el importe de compra/venta se interpretaba en la divisa equivocada)
+
+Queja directa del usuario ("opero con euros, pero las compras se hacen en dolares si pongo 200 y la accion es de EEUU"), investigada antes de tocar codigo. Confirmado: el formulario de "Comprar o vender" no convertia el importe, un hueco que `v2.25` y `v2.68` ya habian diagnosticado pero dejado fuera de alcance a proposito. `PortfolioService::convertEurToNativeCurrency()` (nuevo) convierte el importe a la divisa nativa del ticker con el tipo de cambio de hoy, mismo mecanismo que `SuggestedPositionCalculator` desde `v2.66`. Verificado con una compra real de principio a fin (curl, cookie jar, CSRF real, usuario de prueba borrado al terminar): 200 € en AAPL compran un 14% mas de acciones que antes, la diferencia exacta que corresponde al tipo de cambio del dia. Detalle completo en `versions.md`, `v2.96`.
+
+De paso, `analista-mercado` propuso (a peticion del usuario) el ancho de Bandas de Bollinger como señal de RIESGO (sin medir todavia) y descarto dos ideas obvias de TECHNICAL tras medirlas (breakout de 52 semanas, filtrar el cruce de medias por fuerza de tendencia) — ver `versions.md`, entradas del mismo dia. Se limpio ademas "Ideas adicionales sugeridas": de 11 ideas historicas, 10 ya estaban cerradas y solo seguian listadas por no haberse retirado.

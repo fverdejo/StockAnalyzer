@@ -8,9 +8,14 @@ use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use Throwable;
 
 /**
- * Tipo de cambio de una divisa a euros, para mostrar (no para calcular
- * rentabilidad, ver versions.md v2.25) los precios de operaciones en
- * tickers que Yahoo devuelve en una divisa distinta del euro.
+ * Tipo de cambio de una divisa a euros. Dos usos, ambos de HOY, ninguno
+ * retroactivo: mostrar (no recalcular la rentabilidad ya registrada, ver
+ * versions.md v2.25) los precios de operaciones en tickers que Yahoo
+ * devuelve en una divisa distinta del euro; y convertir el importe en
+ * euros de una operacion NUEVA a la divisa nativa del ticker antes de
+ * calcular cuantas acciones compra (`PortfolioService::convertEurToNativeCurrency()`,
+ * v2.96) — eso no es recalcular nada ya guardado, es interpretar
+ * correctamente lo que el usuario escribe al entrar.
  *
  * Truco reutilizado sin proveedor nuevo: Yahoo Finance sirve los pares de
  * divisas por el mismo endpoint `v8/finance/chart` que ya usa

@@ -4895,6 +4895,32 @@ Ninguna de las dos entra en "Ideas adicionales sugeridas" porque no son propuest
 
 ---
 
+## v2.96 - El importe de "Comprar o vender" se interpretaba en la divisa nativa, no en euros
+
+Estado: implementado.
+
+Objetivo:
+
+Queja directa del usuario: **"yo opero con euros, pero las compras se hacen en dolares si pongo 200 y la accion es de EEUU"**. Investigado con `analista-mercado`/lectura de codigo antes de tocar nada: confirmado, y es un hueco documentado desde hace tiempo sin cerrar. El formulario de "Comprar o vender" (`StockDetailPage::renderTradePanel()`) tiene un campo "importe en dinero" sin ningun indicador de divisa; `Application::resolveTradeQuantity()` calculaba `cantidad = importe / precio`, donde `precio` esta en la divisa nativa del ticker (dolares para EEUU). Escribir "200" para una accion de EEUU se interpretaba como 200 $, no 200 €.
+
+**No era un descuido: era alcance dejado fuera a proposito, dos veces.** `v2.25` ya diagnostico el problema exacto ("el usuario opera siempre en euros, pero `Transaction::getPrice()` se guarda en la divisa nativa del ticker") pero limito la solucion a mostrar una columna "Precio (EUR)" en el historial, sin tocar el calculo: *"Solo visualizacion... mezclar esos calculos con una conversion habria sido un cambio mucho mayor y fuera de alcance."* `v2.68` extendio la conversion a EUR a las tarjetas y al panel de concentracion de "Mi cartera", pero dejo expresamente fuera el propio formulario de compra. El propio `v2.6` ya avisaba: *"Multidivisa real: se sigue asumiendo la divisa nativa del ticker."*
+
+### Que cambia
+
+- **`PortfolioService::convertEurToNativeCurrency($ticker, $amountEur)`** (nuevo): obtiene la divisa nativa del ticker y el tipo de cambio de HOY (`ExchangeRateService`, ya cacheado 15 min, mismo mecanismo que usa `SuggestedPositionCalculator` desde `v2.66` para convertir el presupuesto de riesgo) y devuelve el importe en esa divisa. `null` si el tipo de cambio no esta disponible — no se asume un valor por defecto, que seria simplemente incorrecto.
+- **`Application::resolveTradeQuantity()`** convierte el importe (siempre en euros ahora) a la divisa nativa antes de dividir por el precio. Si la conversion falla (proveedor caido), la operacion se cancela con un mensaje claro en vez de comprar con un importe mal interpretado en silencio.
+- **El precio manual (campo opcional) NO se toca**: sigue en divisa nativa, porque es el precio de ejecucion tal y como lo confirma el broker (en dolares para una accion de EEUU), no dinero que sale de una cuenta en euros.
+- **Etiqueta y texto de ayuda del formulario** pasan a decir explicitamente "importe en euros (€)" y explican la conversion, para que la ambiguedad no vuelva a aparecer.
+- Para un ticker que ya cotiza en euros (`.MC`), `ExchangeRateService::getRateToEur('EUR')` devuelve `1.0` y la conversion es un no-op: el comportamiento de siempre no cambia para esos tickers.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **306 tests, 922 assertions, OK (1 skipped a proposito)**. 3 casos nuevos en `PortfolioServiceCurrencyConversionTest`: conversion con tipo de cambio real, ticker en euros sin conversion, y `null` cuando no hay tipo de cambio disponible.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Compra real de principio a fin** contra ddev: usuario de prueba, login por `curl` con cookie jar y CSRF real, compra de AAPL con `amount=200`. Resultado: `0,755979 x AAPL (233,699568 invertidos)`, con `price=309,135` (nativo, dolares) guardado en la transaccion — `233,699568 / 309,135 = 0,755979` cuadra exactamente. Con el comportamiento anterior habrian sido `200 / 309,135 = 0,6469` acciones, un 14% menos: la correccion compra el 14% de acciones de mas que corresponde a que 200 € valen mas que 200 $ al cambio de ese dia. Usuario y transaccion de prueba borrados al terminar.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.

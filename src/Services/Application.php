@@ -595,7 +595,7 @@ class Application
             $ticker = $this->resolveTradeTicker($this->postString('ticker'));
             $manualPrice = $this->postFloat('price');
             $price = $manualPrice > 0 ? $manualPrice : $this->portfolioService->getCurrentMarketPrice($ticker);
-            $quantity = $this->resolveTradeQuantity($price);
+            $quantity = $this->resolveTradeQuantity($ticker, $price);
             $action = $this->postString('trade_action');
 
             if ($action === 'buy') {
@@ -1329,13 +1329,26 @@ class Application
      * acciones equivalente al precio actual (permite comprar fracciones,
      * ver versions.md v2.6). El importe tiene prioridad sobre la cantidad
      * si ambos campos llegan rellenos.
+     *
+     * El importe se interpreta siempre en euros (`Portfolio::BASE_CURRENCY`,
+     * mismo criterio que el resto de la aplicacion desde v2.66) y se
+     * convierte a la divisa nativa del ticker antes de dividir por el
+     * precio (ver versions.md v2.96): antes de este cambio, 200 escritos
+     * para una accion en dolares se interpretaban como 200 $ y no como
+     * 200 €, que es lo que el usuario quiso decir.
      */
-    private function resolveTradeQuantity(float $price): float
+    private function resolveTradeQuantity(string $ticker, float $price): float
     {
-        $amount = $this->postFloat('amount');
+        $amountEur = $this->postFloat('amount');
 
-        if ($amount > 0) {
-            return round($amount / $price, 6);
+        if ($amountEur > 0) {
+            $amountNative = $this->portfolioService->convertEurToNativeCurrency($ticker, $amountEur);
+
+            if ($amountNative === null) {
+                throw new \RuntimeException('No se pudo obtener el tipo de cambio de hoy para convertir el importe a la divisa de ' . strtoupper($ticker) . '. Intentalo de nuevo en unos minutos.');
+            }
+
+            return round($amountNative / $price, 6);
         }
 
         return $this->postFloat('quantity');

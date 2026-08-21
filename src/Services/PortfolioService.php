@@ -254,6 +254,33 @@ class PortfolioService
     }
 
     /**
+     * Convierte un importe en euros a la divisa nativa del ticker, con el
+     * tipo de cambio de HOY (ver versions.md v2.96). El usuario siempre
+     * piensa en euros (`Portfolio::BASE_CURRENCY`, v2.66), pero el precio
+     * contra el que se calcula la cantidad de acciones al comprar/vender
+     * esta en la divisa nativa del valor: hasta ahora el formulario de
+     * "Comprar o vender" dividia el importe tal cual por ese precio, asi
+     * que 200 escritos para una accion en dolares se interpretaban como
+     * 200 $, no 200 €.
+     *
+     * Null si la divisa es desconocida o si no se pudo obtener el tipo de
+     * cambio (`ExchangeRateService`, cacheado 15 min): quien llama decide
+     * si eso bloquea la operacion, aqui no se asume un valor por defecto
+     * que seria simplemente incorrecto.
+     */
+    public function convertEurToNativeCurrency(string $ticker, float $amountEur): ?float
+    {
+        $currency = $this->marketDataProvider->getStock($this->normalizeTicker($ticker))->getCompany()->getCurrency();
+        $rate = $this->exchangeRates->getRateToEur($currency);
+
+        if ($rate === null || $rate <= 0.0) {
+            return null;
+        }
+
+        return $amountEur / $rate;
+    }
+
+    /**
      * Tipo de cambio de HOY a euros para cada divisa extranjera presente en
      * la cartera (rentabilidad en EUR con efecto de cambio de divisa,
      * junto a las metricas ya existentes en divisa nativa que no se
