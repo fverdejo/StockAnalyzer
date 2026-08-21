@@ -4982,6 +4982,42 @@ Verificado:
 
 ---
 
+## v2.98 - Paginacion en el Ranking del Home y en Backtesting
+
+Estado: implementado.
+
+Objetivo:
+
+Queja del usuario: "Todos los listados estan sin paginar y cuando son pocos no hay problemas, pero en listados grandes hay que hacer mucho scroll." `diseno-usabilidad` audito los listados reales de la aplicacion (con datos de produccion de la Pi, no supuestos) antes de tocar nada:
+
+| Listado | Tamaño real hoy | Techo real |
+|---|---|---|
+| Ranking Home | hasta 60 filas | `largecap60`/`general`, los universos mas grandes de `config/universes.php` |
+| Backtesting | hasta 60 filas, **12 columnas** | mismo universo, tabla mas ancha de la app (scroll vertical Y horizontal en movil) |
+| Historial de operaciones (cartera) | **14 filas** (medido en la Pi) | crece con el uso, sin techo en codigo |
+| Watchlist | **11 filas** (medido en la Pi) | crece con el uso, sin techo en codigo |
+| Alertas | **5 filas** | **ya limitado a 30** por `AlertRepository::RECENT_LIMIT` desde antes de esta auditoria |
+
+**Decision del usuario**: paginar ahora Ranking del Home y Backtesting (el problema real hoy); cartera/watchlist quedan sin tocar (11-14 filas no duelen todavia, es prevencion para cuando el usuario lleve meses operando, no urge).
+
+### Que cambia
+
+- **`Layout::renderPagination()`** (nuevo, compartido): enlaces GET con `page_num` añadido a los filtros ya activos, recargando la pagina entera — no "cargar mas" con JavaScript. Coherente con el resto de la aplicacion, que ya es toda `?parametro=valor` recargando (los filtros del Home, los de Alertas desde `v2.72`), y sin JavaScript nuevo que mantener en una Raspberry Pi que ya evita dependencias. Reutiliza `.alert-filter`/`.alert-filter-active` en vez de una clase visual nueva.
+- **20 filas por pagina** en ambas pantallas: con el maximo de 60 tickers de hoy da 3 paginas, cabe en una pantalla de movil sin scroll dentro de la tabla.
+- **Solo se pagina la tabla larga**, nunca los resumenes agregados: en el Home, las tarjetas, "Top compras"/"Mantener"/"Riesgo-ventas" y el aviso de concentracion sectorial siguen viendo el universo completo (se calculan antes de cortar la tabla). En Backtesting, el resumen "Alpha del universo" usa `aggregate`, que ya viene calculado sobre todos los tickers.
+- **La columna "#" del Home conserva el puesto real**: `array_slice(..., preserve_keys: true)` en vez de reindexar, para que la pagina 2 empiece en "21" y no vuelva a contar desde "1".
+- **Los enlaces de paginacion conservan universo/tickers/recomendacion (Home) o universo/tickers/horizonte (Backtesting)**: cambiar de pagina no pierde el filtro elegido. Sin `page_num` en la URL, pagina 1 por defecto — igual que cualquier otro filtro ausente en esta app.
+- **Una pagina fuera de rango** (URL manipulada a mano, o quedarse en la pagina 3 de un filtro que ahora tiene menos resultados) cae en la ultima pagina valida, no en una tabla vacia.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **323 tests, 963 assertions, OK (1 skipped a proposito)**. `LayoutPaginationTest` (controles: sin paginas de mas no pinta nada, pagina activa, separador `?`/`&amp;` correcto, escapado de la base) y `BacktestPagePaginationTest` (solo la tabla se pagina, el resumen agregado no depende de la pagina, filtros conservados, pagina fuera de rango). Sin tests nuevos de `DashboardPage` (nunca los tuvo: construir un `StockAnalysis` de fixture es una inversion aparte de esta tarea) — verificado en su lugar contra la app real, ver mas abajo.
+  - **Leccion de la propia sesion de tests**: la primera version de `BacktestPagePaginationTest` comprobaba la cadena `alert-filter` para "no hay paginacion", y fallaba siempre — esa clase tambien aparece en la regla CSS del `<style>` global de cualquier pagina, asi que buscarla sin mas "aparece" pagine o no. Corregido buscando `aria-label="Paginacion"`, el `<nav>` real de los controles.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Contra la app real** (`largecap60`, 60 tickers): Home pagina 1 muestra puestos 1-20, pagina 2 puestos 21-40 (no reinicia en 1), pagina 3 puestos 41-60 sin enlace "Siguiente". Backtesting igual (20 filas por pagina, `horizon=20` conservado en los enlaces, tickers distintos en cada pagina).
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.

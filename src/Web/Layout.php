@@ -1716,4 +1716,57 @@ HTML;
             default => 'sell',
         };
     }
+
+    /**
+     * Controles de paginacion server-side (v2.98), compartidos entre las
+     * tablas que pueden pasar de una pantalla (Ranking del Home,
+     * Backtesting): enlaces GET que recargan la pagina con `page_num`
+     * añadido a los filtros ya activos, no un "cargar mas" con JavaScript.
+     * Coherente con el resto de la aplicacion (todo ya es `?parametro=
+     * valor` recargando, ver los filtros del Home o de Alertas) y sin
+     * estado que sincronizar entre cliente y servidor.
+     *
+     * Reutiliza `.alert-filter`/`.alert-filter-active` (v2.72) en vez de
+     * una clase nueva: visualmente es la misma idea, un conjunto de
+     * enlaces donde uno esta activo.
+     *
+     * Vacio si cabe todo en una pagina: no hay nada que paginar ni que
+     * decidir.
+     *
+     * @param string $baseHref filtros ya activos, SIN escapar y SIN
+     *     `page_num` (p.ej. "?universe=largecap60&recommendation=BUY"):
+     *     el propio metodo decide si empieza por `?` o por `&` y escapa el
+     *     resultado una unica vez.
+     */
+    public static function renderPagination(int $pageNum, int $totalPages, string $baseHref): string
+    {
+        if ($totalPages <= 1) {
+            return '';
+        }
+
+        $separator = str_contains($baseHref, '?') ? '&amp;' : '?';
+        $safeBase = self::escape($baseHref);
+        $links = [];
+
+        if ($pageNum > 1) {
+            $links[] = sprintf('<a class="alert-filter" href="%s%spage_num=%d">&laquo; Anterior</a>', $safeBase, $separator, $pageNum - 1);
+        }
+
+        for ($page = 1; $page <= $totalPages; $page++) {
+            $links[] = sprintf(
+                '<a class="alert-filter%s" href="%s%spage_num=%d">%d</a>',
+                $page === $pageNum ? ' alert-filter-active' : '',
+                $safeBase,
+                $separator,
+                $page,
+                $page
+            );
+        }
+
+        if ($pageNum < $totalPages) {
+            $links[] = sprintf('<a class="alert-filter" href="%s%spage_num=%d">Siguiente &raquo;</a>', $safeBase, $separator, $pageNum + 1);
+        }
+
+        return sprintf('<nav class="alert-toolbar" aria-label="Paginacion">%s</nav>', implode('', $links));
+    }
 }

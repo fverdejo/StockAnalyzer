@@ -9,6 +9,15 @@ use StockAnalyzer\Models\User;
 class BacktestPage
 {
     /**
+     * Filas por pagina de la tabla de resultados (v2.98): mismo tamaño que
+     * el Ranking del Home, por el mismo motivo (60 tickers como maximo
+     * hoy, 3 paginas). Aqui pesa mas todavia: son 12 columnas, la tabla
+     * mas ancha de la aplicacion, asi que con 60 filas el scroll era
+     * vertical Y horizontal a la vez en movil.
+     */
+    private const PAGE_SIZE = 20;
+
+    /**
      * @param array<string,mixed>|null $result
      * @param array<string,array{label: string, tickers: list<string>}> $universes
      */
@@ -18,12 +27,18 @@ class BacktestPage
         string $universe,
         array $universes,
         ?array $result,
-        ?string $error
+        ?string $error,
+        int $horizon = 20,
+        int $pageNum = 1
     ): string {
         $tickerValue = Layout::escape($rawTickers);
         $options = self::renderUniverseOptions($universes, $universe);
         $errorHtml = $error !== null ? sprintf('<section class="panel errors">%s</section>', Layout::escape($error)) : '';
-        $resultHtml = $result !== null ? self::renderResult($result) : '';
+        // Base de los enlaces de paginacion: los mismos filtros que ya
+        // manda el formulario GET de arriba, para que cambiar de pagina no
+        // pierda el universo/tickers/horizonte elegidos.
+        $paginationBase = '?page=backtest&universe=' . urlencode($universe) . '&tickers=' . urlencode($rawTickers) . '&horizon=' . urlencode((string) $horizon);
+        $resultHtml = $result !== null ? self::renderResult($result, $pageNum, $paginationBase) : '';
 
         $body = <<<HTML
         <section class="panel">
@@ -85,11 +100,15 @@ HTML;
     /**
      * @param array<string,mixed> $result
      */
-    private static function renderResult(array $result): string
+    private static function renderResult(array $result, int $pageNum, string $paginationBase): string
     {
+        $allResults = is_array($result['results'] ?? null) ? $result['results'] : [];
+        $totalPages = max(1, (int) ceil(count($allResults) / self::PAGE_SIZE));
+        $pageNum = max(1, min($pageNum, $totalPages));
+        $pagedResults = array_slice($allResults, ($pageNum - 1) * self::PAGE_SIZE, self::PAGE_SIZE);
         $rows = [];
 
-        foreach (($result['results'] ?? []) as $item) {
+        foreach ($pagedResults as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -135,8 +154,10 @@ HTML;
             . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estandar (Welch). |t| mayor o igual que 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.', true)
             . '</tr></thead><tbody>'
             . implode('', $rows)
-            . '</tbody></table></div><p class="muted panel-note">t de la alpha: alpha dividida entre su error estandar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los dias no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
-            . self::renderPointInTimeNote(is_array($result['results'] ?? null) ? $result['results'] : [])
+            . '</tbody></table></div>'
+            . Layout::renderPagination($pageNum, $totalPages, $paginationBase)
+            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estandar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los dias no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
+            . self::renderPointInTimeNote($allResults)
             . '</section>';
     }
 

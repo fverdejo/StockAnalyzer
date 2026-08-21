@@ -911,3 +911,11 @@ El usuario reafirma (segunda vez) que la prioridad del proyecto es que el motor 
 El usuario reporta ademas un bug real viendo "Historial de operaciones": una venta reciente mostraba siempre "0,00 (0,00%)" de beneficio, comparara con perdidas o ganancias reales. Causa: se comparaba el precio de venta contra el precio de mercado de HOY (casi identico para una venta reciente) en vez de contra el coste medio de esas acciones. `v2.97` corrige esto reutilizando un calculo que ya existia (`accumulatePositions()` ya sabia el coste medio en el momento de cada venta para el beneficio realizado agregado, solo faltaba exponerlo por operacion). Verificado con una venta real a mitad de precio de coste: sale "500,00 $ (50,00%)" en vez de 0. Detalle en `versions.md`, `v2.97`.
 
 El usuario confirma tambien que el plan sigue siendo reintroducir fundamentales cuando la cobertura crezca a mas de un universo independiente — no una tarea de hoy, ver punto 5 de "Proxima tarea".
+
+---
+
+## 2026-08-21 (quinta sesion: `v2.98`, paginacion en Ranking del Home y Backtesting)
+
+Queja del usuario: listados grandes sin paginar obligan a mucho scroll. `diseno-usabilidad` audito los listados reales con datos de la Pi antes de proponer nada: Ranking del Home y Backtesting (hasta 60 filas, y Backtesting con 12 columnas) son el problema real hoy; cartera (14 filas) y watchlist (11 filas) no lo son todavia, y alertas ya estaba limitada a 30. El usuario decide paginar solo las dos primeras por ahora.
+
+`Layout::renderPagination()` (nuevo, compartido): enlaces `?page_num=N` que recargan la pagina, mismo idioma que el resto de la app, sin JavaScript nuevo. 20 filas por pagina, solo se pagina la tabla — los resumenes agregados siguen viendo el universo completo — y los enlaces conservan universo/tickers/recomendacion u horizonte. Verificado contra la app real con `largecap60` (60 tickers): puestos 1-20/21-40/41-60 en las tres paginas del Home, sin reiniciar la numeracion; igual en Backtesting con `horizon=20` conservado. Detalle completo en `versions.md`, `v2.98`.

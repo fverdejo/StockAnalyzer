@@ -318,7 +318,11 @@ class Application
             // calcula de los resultados ya analizados, sin ninguna llamada
             // nueva, porque el sector viene en el Company que ya sirve
             // YahooParser para cada ticker del ranking.
-            (new RankingSectorConcentrationCalculator())->compute($results)
+            (new RankingSectorConcentrationCalculator())->compute($results),
+            // Paginacion de la tabla larga (v2.98): sin `page_num` en la
+            // URL cae en la pagina 1, igual que cualquier otro filtro
+            // ausente de esta pantalla.
+            max(1, (int) $this->queryString('page_num'))
         );
     }
 
@@ -1094,7 +1098,11 @@ class Application
             $universe,
             $this->universeConfig->all(),
             $result,
-            $error
+            $error,
+            $horizon,
+            // Paginacion de la tabla de resultados (v2.98), mismo criterio
+            // que el Ranking del Home: sin `page_num` cae en la pagina 1.
+            max(1, (int) $this->queryString('page_num'))
         );
     }
 

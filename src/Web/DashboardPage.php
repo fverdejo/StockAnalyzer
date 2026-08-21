@@ -25,6 +25,16 @@ class DashboardPage
     private const APP_VERSION = 'v2.94';
 
     /**
+     * Filas por pagina del ranking completo (v2.98): con el universo mas
+     * grande de la aplicacion (60 tickers, `largecap60`/`general`) da 3
+     * paginas, un numero que cabe en una pantalla de movil sin scroll
+     * dentro de la tabla. Las tarjetas resumen, "Top compras"/"Mantener"/
+     * "Riesgo-ventas" y el aviso de concentracion sectorial siguen viendo
+     * SIEMPRE el universo completo: solo la tabla larga se pagina.
+     */
+    private const PAGE_SIZE = 20;
+
+    /**
      * @param list<StockAnalysis> $results
      * @param array<string,string> $errors
      * @param array<string,array{label: string, tickers: list<string>}> $universes
@@ -41,7 +51,8 @@ class DashboardPage
         bool $moversUniverseIsLive = false,
         string $csrfToken = '',
         array $watchedTickers = [],
-        ?array $sectorWeights = null
+        ?array $sectorWeights = null,
+        int $pageNum = 1
     ): string
     {
         // El campo de busqueda se muestra siempre vacio (ver versions.md v2.5.1):
@@ -60,7 +71,17 @@ class DashboardPage
         $topSells = self::renderRecommendationList($results, ['SELL', 'STRONG SELL'], $rawTickers);
         $watched = array_fill_keys($watchedTickers, true);
         $starHeader = $currentUser instanceof User ? '<th class="star-cell">&#9733;</th>' : '';
-        $rows = self::renderRows($results, $rawTickers, $currentUser, $csrfToken, $watched, $redirectTo);
+        // Solo la tabla larga se pagina (v2.98): las tarjetas, "Top
+        // compras"/"Mantener"/"Riesgo-ventas" y el aviso sectorial de
+        // arriba siguen viendo el universo completo, calculado antes de
+        // este punto. array_slice(..., preserve_keys: true) conserva la
+        // posicion original de cada fila (columna "#"): la pagina 2 tiene
+        // que empezar en "21", no volver a contar desde "1".
+        $totalPages = max(1, (int) ceil(count($results) / self::PAGE_SIZE));
+        $pageNum = max(1, min($pageNum, $totalPages));
+        $pagedResults = array_slice($results, ($pageNum - 1) * self::PAGE_SIZE, self::PAGE_SIZE, true);
+        $rows = self::renderRows($pagedResults, $rawTickers, $currentUser, $csrfToken, $watched, $redirectTo);
+        $pagination = Layout::renderPagination($pageNum, $totalPages, $redirectTo);
         $sectorNote = self::renderSectorNote($sectorWeights, count($results));
         // El veredicto no sale solo: va acompañado de la ventaja que se le
         // ha medido (v2.94). Antes el ranking pintaba BUY en verde sin
@@ -128,6 +149,7 @@ class DashboardPage
                     </tbody>
                 </table>
             </div>
+            {$pagination}
         </section>
 HTML;
 
