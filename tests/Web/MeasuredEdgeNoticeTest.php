@@ -140,6 +140,21 @@ final class MeasuredEdgeNoticeTest extends TestCase
     }
 
     /**
+     * v2.99, queja real del usuario viendo el ranking: en una vista real
+     * solo 2 de las 10 primeras llevaban BUY, el resto HOLD, y el aviso no
+     * dejaba claro que el top-N medido no es lo mismo que "las BUY". La
+     * version completa (la que va junto a la tabla del ranking) tiene que
+     * decirlo; la version de una linea de la ficha de un valor no lo
+     * necesita porque ahi no hay una tabla de varias filas que confundir.
+     */
+    public function testLaVersionCompletaAclaraQueElTopNNoEsLoMismoQueLasBuy(): void
+    {
+        $html = MeasuredEdgeNotice::render($this->config(-0.62));
+
+        self::assertStringContainsString('no equivale a seguir solo las señales BUY', $html);
+    }
+
+    /**
      * La version de la ficha es una linea sobria: no puede llevar el
      * `.panel-notice` destacado, que ahi competiria con la propia
      * recomendacion que ya sale en grande.

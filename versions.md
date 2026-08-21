@@ -5018,6 +5018,36 @@ Verificado:
 
 ---
 
+## v2.99 - El aviso de ventaja medida no dejaba claro que "top-N" no es lo mismo que "BUY"
+
+Estado: implementado.
+
+Objetivo:
+
+Queja del usuario viendo el ranking paginado de `v2.98`: el aviso de ventaja medida dice *"comprando las 10 primeras del ranking"*, pero en esa misma vista solo 2 de esas 10 llevaban la etiqueta BUY — el resto eran HOLD. El texto no dejaba claro que son dos criterios de seleccion distintos:
+
+- **El top-N que mide el aviso** (`MeasuredEdgeConfig::topN()`, `BacktestingService::runCrossSectional()`) es por **PUESTO**: las N mejores puntuaciones del dia, haya lo que haya debajo.
+- **La etiqueta BUY/HOLD/SELL de cada fila** (`Score::recommendationFor()`) es por **UMBRAL fijo**: >=75% BUY, independientemente de en que puesto quede.
+
+Los dos coinciden solo si hay al menos N valores por encima del 75% ese dia — no es el caso general, y desde luego no lo era en la vista que motivo la queja (`LLY` 75,90%, `XOM` 75,20%, y a partir de ahi todo HOLD hasta el puesto 10). Sin aclararlo, el aviso da a entender que "las 10 primeras" y "las que la app recomienda comprar" son la misma cosa, y no lo son.
+
+### Que cambia
+
+- **`MeasuredEdgeNotice::body()`** (version completa, la que acompaña a la tabla del ranking) añade una frase: *"Esto no equivale a seguir solo las señales BUY: el top-N son las mejores puntuaciones por puesto, y puede incluir HOLD si ese dia no hay suficientes BUY para llenarlo."* Es una aclaracion, no un cambio de medicion: la cifra de alpha sigue siendo la misma, solo se explica mejor que mide.
+- **La version de una linea (`renderInline()`, la de la ficha de un valor concreto) no cambia**: ahi no hay una tabla de varias filas que confundir con "las BUY", asi que la frase no aporta.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **324 tests, 964 assertions, OK (1 skipped a proposito)**. Caso nuevo: la version completa incluye la aclaracion, la version de la ficha no la necesita.
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- Contra la app real (`largecap60`): la frase aparece en el Home tal cual.
+
+### Lo que esto no resuelve (candidato a investigar aparte)
+
+Esta correccion es de comunicacion, no de medicion: el `-0,33 pp` medido sigue siendo sobre "comprar el top-10 por puesto", que es una estrategia distinta de "comprar lo que la app etiqueta BUY cada dia" (poblacion de tamaño variable, no fija en 10). Nadie ha medido todavia la alpha de **seguir solo las señales BUY** de forma transversal (cuantas haya cada dia, contra la media del universo ese dia) — seria una medicion mas fiel a lo que de verdad hace un usuario que sigue los badges de la app. No implementado ni medido: requeriria una variante de `BacktestingService::runCrossSectional()` que seleccione por umbral en vez de por puesto fijo, y medirla con el mismo rigor de siempre antes de fiarse del resultado.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.
@@ -5029,3 +5059,5 @@ Quedaba una sola idea abierta de las 11 originales, la unica genuinamente bloque
 - **Ancho de Bandas de Bollinger (squeeze de volatilidad) como señal de RISK — propuesta, sin medir todavia.** `TechnicalAnalyzer::bollingerSeries()` ya calcula banda superior/inferior a diario, pero `TechnicalScoreAnalyzer::technical()` solo usa DONDE esta el precio dentro de las bandas, nunca su ANCHO. Un ancho `(upper-lower)/middle` en minimo de varios meses ("squeeze") suele preceder a un movimiento fuerte en cualquier direccion — informacion que hoy no se usa en ningun punto del motor. Encajaria en `RISK` (`TechnicalScoreAnalyzer::risk()`), no en `TECHNICAL` (ya el bloque mas discutido del proyecto, con el hallazgo de `t=-4,93` del cruce de medias todavia sin resolver), como aviso de "volatilidad a punto de expandirse", sin sentido direccional — igual que el resto de `RISK`. **Antes de conectarlo** habria que medirlo con el mismo metodo que el resto de umbrales del proyecto: agrupar volatilidad realizada siguiente (no retorno con signo) por percentil de ancho de banda, sobre varios universos y horizontes.
 
 - **Cruce SMA20/SMA50 como señal continua (spread en % del precio) en vez del flag binario actual — propuesta, sin medir todavia.** Surge de investigar (2026-08-21, ver mas arriba) si invertir la polaridad del cruce arreglaba su inversion documentada desde `v2.78`: invertir el flag binario no llego a significancia en 18 combinaciones universo×horizonte, pero la investigacion del mismo dia sobre TECHNICAL encontro que segmentando por MAGNITUD del spread, el death cross "ancho" (spread < -2% del precio) es el mejor de los cuatro buckets — mejor señal que un simple flag 0/4 en cualquiera de sus dos polaridades. Sustituir el flag binario de `TechnicalScoreAnalyzer::technical()` por una escala continua sobre `(sma20-sma50)/precio` podria capturar esa relacion que un umbral binario deja fuera. **Antes de tocar codigo**, medir con el mismo rigor que el resto del proyecto (test pareado, varios universos y horizontes) si una escala continua sostiene lo que ni el binario ni su inversion sostuvieron.
+
+- **Medir la alpha de seguir solo las señales BUY (seleccion por umbral, no por puesto fijo) — propuesta, sin medir todavia.** Surge de la correccion de `v2.99`: el aviso de ventaja mide "las N primeras del ranking por puesto" (`runCrossSectional()`, top-N fijo), que no es la misma poblacion que "lo que la app etiqueta BUY" (umbral fijo >=75%, tamaño variable segun el dia — en la vista que motivo `v2.99`, solo 2 de las 10 primeras eran BUY). Medir la alpha transversal de "comprar todo lo que sea BUY ese dia, sea cual sea el numero, contra la media del universo" seria una prueba mas fiel a lo que de verdad hace un usuario que sigue los badges de la app, distinta de la que ya existe. Requeriria una variante de `BacktestingService::runCrossSectional()` que seleccione por umbral de score en vez de por puesto fijo (hoy `topN` es siempre un entero fijo); con dias de muy pocos BUY el tamaño de muestra por fecha seria pequeño y variable, algo a tener en cuenta al diseñar el test de significancia. **Antes de mostrar nada nuevo en pantalla**, medir con el mismo rigor de siempre (test pareado, varios universos y horizontes) si esta vision es mejor, peor o igual que la ya medida.

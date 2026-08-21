@@ -17,7 +17,7 @@ use StockAnalyzer\Config\MeasuredEdgeConfig;
  * en `v2.80` (una columna que mentia en su titulo) y en `v2.91` (el aviso
  * de cobertura del backtesting), pero en el sitio donde mas importa.
  *
- * Dos decisiones de tono, deliberadas:
+ * Tres decisiones de tono, deliberadas:
  *
  * 1. **No dice "el ranking va peor que el azar"** salvo que la medicion sea
  *    significativa. Con |t| = 1,51 lo unico sostenible es que NO hay
@@ -28,6 +28,14 @@ use StockAnalyzer\Config\MeasuredEdgeConfig;
  *    conocimiento sobre una herramienta que sigue siendo util para cribar
  *    y para ver indicadores. Usa `.panel-notice`, el mismo tono
  *    informativo que el aviso de concentracion sectorial.
+ * 3. **Deja claro que "las N primeras del ranking" no es lo mismo que "las
+ *    BUY"** (v2.99, queja del usuario: en una vista real, de las 10
+ *    primeras solo 2 llevaban BUY, el resto HOLD). El top-N que mide este
+ *    aviso es por PUESTO (`BacktestingService::runCrossSectional()`); la
+ *    etiqueta BUY/HOLD/SELL de cada fila es por UMBRAL fijo
+ *    (`Score::recommendationFor()`, >=75% BUY). Son dos criterios de
+ *    seleccion distintos que pueden coincidir o no segun el dia, y sin
+ *    esta frase el aviso da a entender que coinciden siempre.
  */
 class MeasuredEdgeNotice
 {
@@ -98,14 +106,22 @@ class MeasuredEdgeNotice
     private static function body(float $alpha, MeasuredEdgeConfig $config): string
     {
         return sprintf(
-            'La ultima medicion da %s puntos porcentuales %s que la media del universo a %d dias, comprando las %d primeras del ranking. %s',
+            'La ultima medicion da %s puntos porcentuales %s que la media del universo a %d dias, comprando las %d primeras del ranking por puntuacion. %s %s',
             Layout::formatNumber(abs($alpha)),
             $alpha < 0 ? 'MENOS' : 'MAS',
             $config->horizonDays(),
             $config->topN(),
             $config->isSignificant()
                 ? 'La diferencia es estadisticamente significativa.'
-                : 'La diferencia no alcanza significancia estadistica, asi que lo que se puede afirmar es que no hay evidencia de ventaja, no que la haya en contra.'
+                : 'La diferencia no alcanza significancia estadistica, asi que lo que se puede afirmar es que no hay evidencia de ventaja, no que la haya en contra.',
+            // v2.99: sin esto, "las N primeras del ranking" se lee como si
+            // fuera lo mismo que "las que llevan BUY" — no lo es. El top-N
+            // es por PUESTO (las N mejores puntuaciones haya lo que haya
+            // debajo), la etiqueta BUY/HOLD/SELL es por UMBRAL (Score::
+            // recommendationFor(), independiente de en que puesto quede
+            // cada una). En un dia flojo, el top-N puede tener menos BUY
+            // que N -- el resto son HOLD que igual entran por puesto.
+            'Esto no equivale a seguir solo las señales BUY: el top-N son las mejores puntuaciones por puesto, y puede incluir HOLD si ese dia no hay suficientes BUY para llenarlo.'
         );
     }
 

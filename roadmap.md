@@ -919,3 +919,11 @@ El usuario confirma tambien que el plan sigue siendo reintroducir fundamentales 
 Queja del usuario: listados grandes sin paginar obligan a mucho scroll. `diseno-usabilidad` audito los listados reales con datos de la Pi antes de proponer nada: Ranking del Home y Backtesting (hasta 60 filas, y Backtesting con 12 columnas) son el problema real hoy; cartera (14 filas) y watchlist (11 filas) no lo son todavia, y alertas ya estaba limitada a 30. El usuario decide paginar solo las dos primeras por ahora.
 
 `Layout::renderPagination()` (nuevo, compartido): enlaces `?page_num=N` que recargan la pagina, mismo idioma que el resto de la app, sin JavaScript nuevo. 20 filas por pagina, solo se pagina la tabla — los resumenes agregados siguen viendo el universo completo — y los enlaces conservan universo/tickers/recomendacion u horizonte. Verificado contra la app real con `largecap60` (60 tickers): puestos 1-20/21-40/41-60 en las tres paginas del Home, sin reiniciar la numeracion; igual en Backtesting con `horizon=20` conservado. Detalle completo en `versions.md`, `v2.98`.
+
+---
+
+## 2026-08-21 (sexta sesion: `v2.99`, "las N primeras del ranking" no es lo mismo que "las BUY")
+
+Viendo el ranking paginado, el usuario nota que el aviso de ventaja medida dice "comprando las 10 primeras del ranking" pero en esa vista solo 2 de esas 10 llevaban BUY, el resto HOLD. Motivo: el top-N del aviso es por PUESTO (`runCrossSectional()`), la etiqueta BUY/HOLD/SELL es por UMBRAL fijo (`Score::recommendationFor()`, >=75%) — dos criterios de seleccion distintos que el texto no distinguia. `v2.99` añade una frase aclaratoria a la version completa del aviso; la cifra de alpha no cambia, solo se explica mejor que mide. Detalle en `versions.md`, `v2.99`.
+
+Queda anotada en "Ideas adicionales sugeridas" una medicion mas de fondo, sin hacer todavia: la alpha de seguir solo las señales BUY (seleccion por umbral, tamaño variable cada dia) en vez del top-N fijo — seria una prueba mas fiel a lo que de verdad hace un usuario que sigue los badges de la app.
