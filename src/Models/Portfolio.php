@@ -32,6 +32,11 @@ class Portfolio
      *     deducir de $holdings: habla tambien de posiciones ya cerradas, que ya no son una posicion abierta.
      * @param ?float $totalBoughtAmountEur importe total comprado en toda la historia, en euros, con el mismo
      *     criterio de tipo de cambio y de nulabilidad que $realizedProfitEur
+     * @param array<int,float> $costBasisByTransactionId id de Transaction (solo ventas) => coste medio en el
+     *     momento exacto de esa venta (ver versions.md v2.97); lo calcula PortfolioService::accumulatePositions()
+     *     replayando el historial en orden cronologico, porque el coste medio de una venta pasada no se puede
+     *     deducir de las posiciones abiertas de hoy (pueden estar cerradas, o el coste medio puede haber cambiado
+     *     con compras/ventas posteriores)
      */
     public function __construct(
         private readonly array $holdings,
@@ -42,7 +47,8 @@ class Portfolio
         private readonly ?float $usdToEurRate = null,
         private readonly array $ratesToEur = [],
         private readonly ?float $realizedProfitEur = null,
-        private readonly ?float $totalBoughtAmountEur = null
+        private readonly ?float $totalBoughtAmountEur = null,
+        private readonly array $costBasisByTransactionId = []
     ) {
     }
 
@@ -52,13 +58,31 @@ class Portfolio
     }
 
     /**
-     * Beneficio o perdida de una operacion concreta frente al precio de
-     * mercado actual: (precio_actual - precio_operacion) * cantidad. Se usa
-     * igual para compras y ventas (ver versions.md v2.6): siempre compara
-     * el precio al que se ejecuto la operacion contra el precio de hoy.
+     * Beneficio o perdida de una operacion concreta. Compras y ventas
+     * responden a preguntas distintas, asi que se calculan distinto desde
+     * `v2.97` (antes las dos comparaban contra el precio de mercado de
+     * HOY, ver versions.md v2.6):
+     *
+     * - **Compra**: (precio_actual - precio_de_compra) * cantidad — como
+     *   le habria ido a ESTA compra concreta si se sigue el precio hasta
+     *   hoy, se haya vendido ya o no.
+     * - **Venta**: (precio_de_venta - coste_medio_en_ese_momento) *
+     *   cantidad — el beneficio REALIZADO de verdad al vender, contra lo
+     *   que costaron esas acciones, no contra el precio de hoy. Comparar
+     *   una venta con el precio actual no dice si se gano dinero, dice si
+     *   se vendio antes o despues del mejor momento — una pregunta
+     *   distinta, y la causa de que toda venta reciente mostrara
+     *   "0,00 (0,00%)" sin serlo: el precio de hoy y el precio de venta de
+     *   hace un minuto son practicamente el mismo numero.
      */
     public function getTransactionProfit(Transaction $transaction): ?float
     {
+        if ($transaction->getType() === TransactionType::SELL) {
+            $costBasis = $this->costBasisByTransactionId[$transaction->getId()] ?? null;
+
+            return $costBasis === null ? null : $transaction->getQuantity() * ($transaction->getPrice() - $costBasis);
+        }
+
         $currentPrice = $this->getCurrentPriceFor($transaction->getTicker());
 
         if ($currentPrice === null) {
@@ -70,6 +94,12 @@ class Portfolio
 
     public function getTransactionProfitPercent(Transaction $transaction): ?float
     {
+        if ($transaction->getType() === TransactionType::SELL) {
+            $costBasis = $this->costBasisByTransactionId[$transaction->getId()] ?? null;
+
+            return ($costBasis === null || $costBasis <= 0) ? null : (($transaction->getPrice() / $costBasis) - 1) * 100;
+        }
+
         $currentPrice = $this->getCurrentPriceFor($transaction->getTicker());
 
         if ($currentPrice === null || $transaction->getPrice() <= 0) {

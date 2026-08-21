@@ -109,13 +109,21 @@ class PortfolioService
      * duplicada seria la via rapida a que la cartera y la ficha de un valor
      * dijeran cantidades distintas del mismo ticker.
      *
+     * Ademas de la cifra agregada, se guarda el coste medio en el momento
+     * EXACTO de cada venta (`$costBasisByTransactionId`, v2.97): es lo que
+     * necesita `Portfolio::getTransactionProfit()` para poder decir si una
+     * venta concreta gano o perdio dinero, en vez de compararla contra el
+     * precio de mercado de HOY (que para una venta no dice si se gano
+     * dinero, dice si se vendio antes o despues del mejor momento).
+     *
      * @param list<Transaction> $transactions en orden cronologico
-     * @return array{0: array<string,array{quantity: float, cost: float}>, 1: float}
+     * @return array{0: array<string,array{quantity: float, cost: float}>, 1: float, 2: array<int,float>}
      */
     private static function accumulatePositions(array $transactions): array
     {
         $positions = [];
         $realizedProfit = 0.0;
+        $costBasisByTransactionId = [];
 
         foreach ($transactions as $transaction) {
             $ticker = $transaction->getTicker();
@@ -133,6 +141,7 @@ class PortfolioService
 
             $quantity = (float) $positions[$ticker]['quantity'];
             $averagePrice = $quantity > 0 ? ((float) $positions[$ticker]['cost'] / $quantity) : 0.0;
+            $costBasisByTransactionId[$transaction->getId()] = $averagePrice;
             $realizedProfit += $transaction->getQuantity() * ($transaction->getPrice() - $averagePrice);
             $positions[$ticker]['quantity'] -= $transaction->getQuantity();
             $positions[$ticker]['cost'] -= $transaction->getQuantity() * $averagePrice;
@@ -143,13 +152,13 @@ class PortfolioService
             }
         }
 
-        return [$positions, $realizedProfit];
+        return [$positions, $realizedProfit, $costBasisByTransactionId];
     }
 
     public function getPortfolio(User $user): Portfolio
     {
         $transactions = $this->transactions->findByUser($user);
-        [$positions, $realizedProfit] = self::accumulatePositions($transactions);
+        [$positions, $realizedProfit, $costBasisByTransactionId] = self::accumulatePositions($transactions);
 
         $currentPrices = [];
         $currencies = [];
@@ -244,7 +253,8 @@ class PortfolioService
             // donde vive el tipo de cambio historico, asi que aqui se
             // calculan.
             $this->sumEur($accountingEur, 'realizedEur'),
-            $this->sumEur($accountingEur, 'boughtEur')
+            $this->sumEur($accountingEur, 'boughtEur'),
+            $costBasisByTransactionId
         );
     }
 

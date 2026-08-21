@@ -4958,6 +4958,30 @@ Verificado: `ddev exec vendor/bin/phpunit --filter TechnicalScoreAnalyzer` en ve
 
 ---
 
+## v2.97 - El beneficio de una venta se comparaba con el precio de hoy, no con lo que costo
+
+Estado: implementado.
+
+Objetivo:
+
+Queja directa del usuario viendo "Historial de operaciones": una venta reciente mostraba **"Beneficio vs. precio actual: 0,00 $ (0,00%)"** sin importar si la venta habia sido rentable o no. Motivo: `Portfolio::getTransactionProfit()` comparaba el precio de CUALQUIER operacion (compra o venta) contra el precio de mercado de HOY (decision explicita de `v2.6`). Para una venta hecha hace un minuto, el precio de venta y "el precio de hoy" son practicamente el mismo numero, asi que la resta siempre salia ~0 — independientemente de si esas acciones se habian comprado mas baratas (beneficio real) o mas caras (perdida real).
+
+**El problema de fondo no es solo visual, es conceptual**: para una compra, "precio actual vs precio de compra" responde una pregunta razonable (como le va a esta compra desde entonces). Para una venta, esa misma comparacion responde una pregunta distinta y casi irrelevante (¿deberia haber esperado para vender?), no la que el usuario quiere ver (¿gane o perdi dinero con esta venta?).
+
+### Que cambia
+
+- **`PortfolioService::accumulatePositions()`** ya calculaba el coste medio en el momento exacto de cada venta para sumar el beneficio realizado agregado (`$realizedProfit`, usado en la tarjeta "Rendimiento general" desde `v2.6`) — ese calculo replaya el historial en orden cronologico y ya existia, solo faltaba exponerlo por operacion. Ahora tambien devuelve `$costBasisByTransactionId` (id de la venta => coste medio de esas acciones en ese momento).
+- **`Portfolio` recibe ese mapa** (nuevo parametro opcional, por defecto `[]`, no rompe ninguna construccion existente) y `getTransactionProfit()`/`getTransactionProfitPercent()` distinguen tipo de operacion: **compra** sigue comparando contra el precio de mercado de hoy (sin cambios); **venta** compara contra el coste medio de esas acciones en el momento de venderse — el beneficio REALIZADO de verdad.
+- Cabecera y nota de "Historial de operaciones" (`PortfolioPage.php`) y del CSV (`PortfolioCsvExporter.php`) pasan de "Beneficio vs. precio actual" a "Beneficio", con la nota explicando que compra y venta comparan cosas distintas.
+
+Verificado:
+
+- `ddev exec vendor/bin/phpunit`: **311 tests, 932 assertions, OK (1 skipped a proposito)**. Casos nuevos: `PortfolioTransactionProfitTest` (compra sigue usando precio de hoy; venta usa coste medio; venta reciente con precio de venta = precio de hoy NO sale en 0; venta en perdidas sale negativa; sin coste medio conocido, `null` en vez de inventar un numero) y `PortfolioServiceRealizedProfitTest` (cableado de punta a punta desde `getPortfolio()`).
+- `ddev exec vendor/bin/phpstan analyse`: **No errors**.
+- **Compra y venta reales de principio a fin** contra ddev: usuario de prueba, compra de 10 ADBE a 100 (precio manual) y venta de las 10 a 150 (precio manual) el mismo minuto. Antes de la correccion habria salido "0,00 (0,00%)" en la venta (precio de venta = precio "de hoy"); con la correccion sale **"500,00 $ (50,00%)"** — exactamente `(150-100)×10` y `(150/100-1)×100`. Usuario y transacciones de prueba borrados al terminar.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.

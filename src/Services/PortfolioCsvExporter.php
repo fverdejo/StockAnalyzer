@@ -42,7 +42,7 @@ class PortfolioCsvExporter
 
     public static function transactions(Portfolio $portfolio): string
     {
-        $rows = [['Fecha', 'Tipo', 'Ticker', 'Cantidad', 'Precio (EUR)', 'Precio (USD)', 'Beneficio vs precio actual', 'Beneficio %']];
+        $rows = [['Fecha', 'Tipo', 'Ticker', 'Cantidad', 'Precio (EUR)', 'Precio (USD)', 'Beneficio', 'Beneficio %']];
 
         foreach ($portfolio->getTransactions() as $transaction) {
             $currency = $portfolio->getCurrencyFor($transaction->getTicker());

@@ -126,7 +126,7 @@ final class PortfolioCsvExporterTest extends TestCase
 
         self::assertCount(3, $filas);
         self::assertSame(
-            ['Fecha', 'Tipo', 'Ticker', 'Cantidad', 'Precio (EUR)', 'Precio (USD)', 'Beneficio vs precio actual', 'Beneficio %'],
+            ['Fecha', 'Tipo', 'Ticker', 'Cantidad', 'Precio (EUR)', 'Precio (USD)', 'Beneficio', 'Beneficio %'],
             $filas[0]
         );
         self::assertSame('2026-02-14 10:32', $filas[1][0]);
