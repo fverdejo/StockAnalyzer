@@ -4921,6 +4921,43 @@ Verificado:
 
 ---
 
+## 2026-08-21 (cuarta entrada) - Invertir el cruce SMA20/SMA50 en vez de neutralizarlo: tampoco funciona
+
+El usuario reafirma la prioridad del proyecto (dos veces ya: "lo importante es que el codigo que recomienda sea efectivo, el metodo actual no es intocable"). Se retoma el hallazgo mas solido y sin resolver del historial: el cruce `SMA20>SMA50` (`TechnicalScoreAnalyzer.php:104-117`, 4 puntos) ordena **invertido y significativo en 6 de 6 universos desde `v2.78`** (t entre -2,06 y -4,93), y desde que se retiraron los fundamentales pesa el doble (8% del score solo-tecnico frente al 3,5% de antes). `v2.78` ya probo **neutralizarlo** (quitarle los puntos) y el resultado fue mixto (mejoraba 2 universos, empeoraba `healthcare` de forma significativa, t=-2,22): nunca se habia probado **invertirlo** (premiar el death cross en vez del golden cross), la misma operacion que si funciono con el momentum de 30 dias en `v2.76`.
+
+### Paso 1: confirmar que la inversion sigue viva hoy
+
+Replica exacta del metodo de `v2.78` sobre el score actual (solo-tecnico), 4 universos, horizonte 20 dias, `--history=10y`:
+
+| Universo | `cruce SMA20>SMA50` (t) | `v2.78` (t) |
+|---|---|---|
+| largecap60 | -1,07 (**t -4,90**) | t -4,93 |
+| ibex35 | -0,55 (**t -1,99**) | t -2,06 |
+| healthcare | -1,10 (**t -3,99**) | t -3,53 |
+| industrials | -0,81 (**t -2,75**) | t -2,42 |
+
+Practicamente identico a `v2.78` pese a ~8 meses mas de historia y al cambio a score solo-tecnico. **El hallazgo se reproduce, 4 de 4.**
+
+### Paso 2: invertir la señal, test pareado en 18 combinaciones universo×horizonte
+
+Parche temporal en `TechnicalScoreAnalyzer.php` (revertido con `git checkout` tras cada tanda, verificado byte a byte y con `git status` limpio al terminar), comparando `runCrossSectional()` fecha a fecha entre el score actual y el invertido, 6 universos (`largecap60`, `ibex35`, `healthcare`, `industrials`, `energy`, `consumer`) y horizontes de 5 a 60 dias:
+
+**0 de 18 combinaciones llega a |t| >= 1,96.** El maximo es `industrials` a 20 dias, t=1,64 (121 fechas). 15 de 18 combinaciones mejoran en direccion (invertir ayuda de media), pero en la mayoria de ellas **menos del 50% de las fechas individuales mejoran** — el mismo patron de falso positivo por fechas extremas que la investigacion de fundamentales del `2026-08-15` ya identifico y que este proyecto trata como señal de alarma, no de confirmacion.
+
+Se probo tambien invertir **a la vez** `precio>SMA50` (el otro input con el mismo problema, 6 puntos): peor y mas mixto (4 de 8 combos cambian de signo) — las dos señales estan muy correlacionadas (un cruce alcista casi siempre coincide con precio sobre la SMA50), asi que invertir ambas duplica ruido en vez de sumar informacion independiente.
+
+### Veredicto: no se invierte la señal
+
+No por falta de indicio (la direccion es consistentemente favorable, y a diferencia de neutralizar, invertir nunca empeora de forma significativa ningun universo/horizonte), sino porque **ninguna combinacion cruza la barra de significancia que este proyecto exige antes de tocar `src/`** (mismo criterio que `v2.76`, `v2.78`, `v2.87`, la investigacion de fundamentales). "Mas seguro que neutralizar" no es lo mismo que "demostrablemente mejor que el estado actual". **No se toca `TechnicalScoreAnalyzer.php`.**
+
+### La via mas prometedora, sin medir todavia
+
+La investigacion del `2026-08-21` (segunda entrada, mas arriba) encontro que segmentando por magnitud del spread SMA20-SMA50, el **death cross "ancho"** (spread < -2% del precio) es el mejor de los cuatro buckets, mejor que un simple death cross binario. Una señal **continua** sobre `(sma20-sma50)/precio` en vez del flag binario 0/4 actual podria capturar mas de la inversion real de lo que dejan fuera tanto la version actual como la invertida — es una hipotesis distinta de "invertir el signo", no medida todavia. Se anota en "Ideas adicionales sugeridas" para no perderla.
+
+Verificado: `ddev exec vendor/bin/phpunit --filter TechnicalScoreAnalyzer` en verde tras revertir cada parche; `git status` limpio al terminar. Ningun cambio de codigo en produccion: es una investigacion, no una implementacion.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.
@@ -4930,3 +4967,5 @@ Quedaba una sola idea abierta de las 11 originales, la unica genuinamente bloque
 - **Tendencia del propio score en el tiempo (re-rating) — captura implementada desde `v2.63`, todavia sin suficiente profundidad real para diseñar la lectura/UI.** Se podria comparar la puntuacion (o una categoria como FUNDAMENTAL/TECHNICAL) de un ticker hoy contra hace N dias, para distinguir una accion cuyo score mejora progresivamente de otra con el mismo score absoluto pero deteriorandose. `score_history` lleva sembrando desde el `2026-08-14` (organicamente, en cada visita real a la ficha de detalle, sin depender de un cron) y medido hoy (`2026-08-21`) tiene **7 dias distintos, 431 filas, 69 tickers distintos** — una media de 6,25 observaciones por ticker, y ninguno con series diarias completas. Es la primera semana, no las "semanas" de profundidad que el propio bloqueo original pedia, y con una cobertura tan desigual por ticker cualquier lectura de tendencia hoy confundiria "cuantas veces se ha visitado la ficha" con "como esta evolucionando el score". Se mantiene bloqueada: **revisar cuando la mayoria de tickers de un universo curado (`largecap60`) tengan varias semanas de observaciones cada uno**, no solo cuando pase el tiempo — la cifra a vigilar es la cobertura por ticker, no la fecha mas antigua de la tabla.
 
 - **Ancho de Bandas de Bollinger (squeeze de volatilidad) como señal de RISK — propuesta, sin medir todavia.** `TechnicalAnalyzer::bollingerSeries()` ya calcula banda superior/inferior a diario, pero `TechnicalScoreAnalyzer::technical()` solo usa DONDE esta el precio dentro de las bandas, nunca su ANCHO. Un ancho `(upper-lower)/middle` en minimo de varios meses ("squeeze") suele preceder a un movimiento fuerte en cualquier direccion — informacion que hoy no se usa en ningun punto del motor. Encajaria en `RISK` (`TechnicalScoreAnalyzer::risk()`), no en `TECHNICAL` (ya el bloque mas discutido del proyecto, con el hallazgo de `t=-4,93` del cruce de medias todavia sin resolver), como aviso de "volatilidad a punto de expandirse", sin sentido direccional — igual que el resto de `RISK`. **Antes de conectarlo** habria que medirlo con el mismo metodo que el resto de umbrales del proyecto: agrupar volatilidad realizada siguiente (no retorno con signo) por percentil de ancho de banda, sobre varios universos y horizontes.
+
+- **Cruce SMA20/SMA50 como señal continua (spread en % del precio) en vez del flag binario actual — propuesta, sin medir todavia.** Surge de investigar (2026-08-21, ver mas arriba) si invertir la polaridad del cruce arreglaba su inversion documentada desde `v2.78`: invertir el flag binario no llego a significancia en 18 combinaciones universo×horizonte, pero la investigacion del mismo dia sobre TECHNICAL encontro que segmentando por MAGNITUD del spread, el death cross "ancho" (spread < -2% del precio) es el mejor de los cuatro buckets — mejor señal que un simple flag 0/4 en cualquiera de sus dos polaridades. Sustituir el flag binario de `TechnicalScoreAnalyzer::technical()` por una escala continua sobre `(sma20-sma50)/precio` podria capturar esa relacion que un umbral binario deja fuera. **Antes de tocar codigo**, medir con el mismo rigor que el resto del proyecto (test pareado, varios universos y horizontes) si una escala continua sostiene lo que ni el binario ni su inversion sostuvieron.
