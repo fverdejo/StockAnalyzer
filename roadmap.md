@@ -955,3 +955,17 @@ Con el equipo ampliado ya creado, el usuario pide que intenten dar una solucion 
 - **`trader-tendencia` — señal continua sobre el spread SMA20/SMA50**: la via que quedaba pendiente desde el `2026-08-21`. 0 de 20 combinaciones significativas, y ademas empeora `healthcare`/`ibex35` en 6 de 20 — se retira de "Ideas adicionales sugeridas" con resultado nulo.
 
 Confirmado aparte por la auditoria (no una investigacion nueva): `healthcare` sigue arrastrando la anomalia SMA20/50 sin resolver desde `v2.78`, ahora confirmada una tercera vez con tres formas distintas de medir la misma variable — sigue siendo el hallazgo mas solido y menos atendido del proyecto, sin corregir. Detalle completo en `versions.md`, 2026-08-22 (tercera entrada).
+
+---
+
+## 2026-08-22 (cuarta sesion: ¿analizar por sector? el equipo completo investiga, veredicto: no todavia)
+
+El usuario pregunta si tiene sentido analizar acciones de forma distinta segun el sector, motivado por la anomalia de `healthcare`, y pide que "lo tenga en cuenta el equipo completo". Los cinco agentes investigan en paralelo su propio terreno:
+
+- **`auditor-estadistico`** aporta el giro clave: el "t hasta -4,93" citado hasta ahora viene de un diseño de medicion sin parear por fecha (el mismo tipo que el propio equipo ya señalo como sospechoso para Bollinger); el diseño correcto da t=-2,07/-2,87, y **no sobrevive** la correccion por las ~38 comparaciones ya gastadas en este hilo desde el `2026-08-21`.
+- **`trader-tendencia`** prueba el piloto concreto (tratar el cruce SMA20/50 distinto solo en `healthcare`): ni excluirlo ni invertirlo solo ahi llega a significancia (t maximo 0,75); la mejora de invertir esta arrastrada por un puñado de fechas extremas, mediana 0,000 en 4 de 5 horizontes.
+- **`inversor-fundamental`** confirma que la critica de diseño (mismos umbrales fundamentales para banca que para biotech) es real, pero sin muestra suficiente para medirlo ahora (~4 tickers/sector de media).
+- **`gestor-riesgo`** descarta recalibrar el stop-loss por sector (el ATR ya se autoajusta por ticker), pero identifica un problema real distinto: el presupuesto de riesgo del 1,5% asume ejecucion limpia del stop, y eso falla con gaps por catalizador binario — propone un aviso en la interfaz, no un recalculo. Encontro tambien (colateral, territorio de `fiabilidad-datos-mercado`) que `CachedMarketDataProvider` traga en silencio errores de conexion PDO y cae a Yahoo en vivo sin avisar, lo que agoto el rate-limit hoy.
+- **`analista-mercado`** confirma que el sector ya es un dato real disponible al puntuar, pero recomienda no bifurcar codigo todavia: el cruce sale invertido en 6/6 universos (no es especifico de `healthcare`), y es ya el cuarto intento sobre la misma variable.
+
+**Veredicto (Claude como juez): no se toca `src/`.** Analizar por sector es tecnicamente posible, pero ningun hallazgo de hoy lo justifica — la anomalia de `healthcare` es mas debil de lo que parecia una vez corregida por diseño y comparaciones multiples. Detalle completo en `versions.md`, 2026-08-22 (cuarta entrada).
