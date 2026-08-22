@@ -931,3 +931,15 @@ Queda anotada en "Ideas adicionales sugeridas" una medicion mas de fondo, sin ha
 **Investigado el mismo dia, a peticion directa del usuario ("Investigalo ya")**: 30 combinaciones universo×horizonte (10 años, walk-forward), test pareado solo en fechas con al menos 1 BUY. **Ninguna llega a significancia** (salvo un caso aislado esperable por azar entre 30 pruebas) — BUY por umbral y top-10 por puesto son estadisticamente indistinguibles. Hallazgo mas util: la anecdota que motivo la pregunta (2 BUY de 10) no generaliza — el tamaño medio del conjunto BUY es 15-16 en `largecap60` (mayor que el top-10) y 6-9 en universos sectoriales, con cobertura alta (87-96% de los dias) salvo en `energy`. BUY es casi un superconjunto del top-10, por eso no se distinguen. No se toca codigo; la idea se retira de "Ideas adicionales sugeridas" con resultado nulo. Detalle en `versions.md`, 2026-08-21 (septima entrada).
 
 **`v2.100`, mismo dia**: siguiendo con el ranking, el usuario busca "amazon" a mano (1 resultado) y el aviso de ventaja medida seguia diciendo "las 10 primeras del ranking" sin sentido con un solo resultado. `MeasuredEdgeNotice::render()` gana un `$resultCount` opcional: si no supera `topN`, el aviso no se muestra (no hay seleccion de la que hablar). Aplica igual a busquedas manuales pequeñas que a filtros de recomendacion que dejen pocos resultados. Verificado contra la app real: desaparece con 1 resultado, sigue apareciendo con `largecap60` (60). Detalle en `versions.md`, `v2.100`.
+
+---
+
+## 2026-08-22 (segunda sesion: el equipo de mercado pasa de dos voces a cinco)
+
+El usuario pide mas agentes especialistas de analisis (tecnico o fundamental, con un rol distinto a los dos que ya habia) que ayuden junto a `analista-mercado`/`inversor-fundamental` a mejorar el analisis. Tres nuevos, cada uno anclado en un hilo real y sin cerrar de esta sesion, no genericos:
+
+- **`trader-tendencia`**: momentum/tendencia, contrapunto filosofico de `inversor-fundamental`. Hereda el cruce SMA20/SMA50 invertido (t hasta -4,93, sin resolver pese a dos investigaciones el `2026-08-21`) como su tarea pendiente mas obvia.
+- **`gestor-riesgo`**: gestion de riesgo/dimensionamiento de posicion. Territorio: `RiskLevelsCalculator`, `SuggestedPositionCalculator`, la categoria `RISK` (sabe que `v2.88` ya cerro bajarle el peso), y el squeeze de Bollinger sin medir.
+- **`auditor-estadistico`**: sin vision de mercado propia, audita si un hallazgo aguanta comparaciones multiples antes de tocar codigo — con la investigacion del mismo dia sobre BUY-vs-topN (30 combinaciones, 1 "significativa", justo lo esperable por azar) como ejemplo de manual.
+
+`analista-mercado` e `inversor-fundamental` actualizados con referencias cruzadas al equipo ampliado. Mismo patron de herramientas que los dos agentes existentes (solo lectura, proponen sin implementar). Detalle completo en `versions.md`, 2026-08-22 (segunda entrada).

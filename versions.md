@@ -5099,6 +5099,20 @@ Con presupuesto de sobra (57/250 llamadas gastadas), se reinicia el reintento de
 
 ---
 
+## 2026-08-22 (segunda entrada) - El equipo de mercado pasa de dos voces a cinco
+
+El usuario pide crear mas agentes especialistas de analisis, con un rol distinto a los dos que ya existian (`analista-mercado`, generalista; `inversor-fundamental`, contrapunto de valor desde el `2026-08-15`), que ayuden junto a ellos a mejorar el analisis de la aplicacion. Elegidas tres especialidades, cada una anclada en un hilo real y sin cerrar de esta sesion (no genericas):
+
+- **`trader-tendencia`** (`.claude/agents/trader-tendencia.md`) — momentum y seguimiento de tendencia (Jegadeesh/Titman, Carhart). Contrapunto filosofico directo de `inversor-fundamental`: cree que el precio en si es la señal, no una aproximacion ruidosa a un valor intrinseco. Hereda el problema mas demostrado y sin resolver del proyecto — el cruce `SMA20>SMA50` invertido desde `v2.78` (t hasta -4,93), ya investigado dos veces mas el `2026-08-21` (neutralizar no ayudaba, invertir tampoco llego a significancia) — con la via sin probar (señal continua sobre el spread) como su investigacion pendiente mas obvia.
+- **`gestor-riesgo`** (`.claude/agents/gestor-riesgo.md`) — gestion de riesgo y dimensionamiento de posicion (Kelly/Thorp, Van Tharp). Le importa mas "cuanto se puede perder" que "cuanto se puede ganar". Territorio: `RiskLevelsCalculator`, `SuggestedPositionCalculator`, `PortfolioConcentrationCalculator`, la categoria `RISK` del score (sabe que `v2.88` ya cerro la pregunta de bajarle el peso, sin reabrirla sin muestra mayor) y el squeeze de Bandas de Bollinger sin medir todavia.
+- **`auditor-estadistico`** (`.claude/agents/auditor-estadistico.md`) — sin vision de mercado propia: audita si un hallazgo de cualquiera de los demas aguanta el escrutinio antes de tocar codigo, sobre todo comparaciones multiples sin corregir. Ejemplo de manual que conoce: la investigacion del mismo dia sobre BUY por umbral probo 30 combinaciones y encontro exactamente 1 "significativa" — lo esperable por puro azar con 30 pruebas al 5% (30×0,05=1,5 falsos positivos esperados), un motivo que esa investigacion no llego a nombrar explicitamente pese a acertar en el veredicto.
+
+`analista-mercado` se actualiza para reflejar el equipo ampliado (deja de reclamar en solitario "financiero/momentum/IA de scoring", cede terreno especifico a los nuevos) e `inversor-fundamental` gana una referencia cruzada a `trader-tendencia` como su contraparte natural para un debate a tres. Mismo patron de herramientas que los dos agentes existentes (`Read, Grep, Glob, Bash, WebSearch, WebFetch`, sin `Edit`/`Write`: proponen, no implementan).
+
+No se ha probado invocarlos todavia por nombre en esta sesion — segun quedo anotado el `2026-08-15`, el registro de un agente nuevo puede tardar hasta la siguiente sesion o activarse nada mas usarlo una vez como `general-purpose` con la persona incrustada.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.
