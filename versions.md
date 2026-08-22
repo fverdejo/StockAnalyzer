@@ -5089,6 +5089,16 @@ Verificado:
 
 ---
 
+## 2026-08-22 - Primera vuelta completa al catalogo de candidatos, sin ninguno nuevo
+
+Se prueban los ultimos 19 candidatos nunca probados (de `UPS` a `ZTS`, alfabetico) — **todos 402**, ninguno nuevo. Con eso, **el catalogo de 258 candidatos derivados de `config/universes.php` queda probado por primera vez de principio a fin** desde que empezo esta investigacion el `2026-08-15`. Se sigue en total con **47 tickers confirmados**.
+
+Con presupuesto de sobra (57/250 llamadas gastadas), se reinicia el reintento de los candidatos probados mas antiguos (los primeros 60 alfabeticos, en su mayoria del `2026-08-15`): **tambien todos 402**, sin sorpresas hoy. Total del dia: 237/250 llamadas estimadas.
+
+**Cambio de estrategia a partir de aqui**: ya no queda ningun candidato "nunca probado" — cualquier tanda futura es necesariamente un reintento de algo ya bloqueado alguna vez, apostando a que el subconjunto accesible siga cambiando (confirmado el `2026-08-17`: `SHOP`/`TSM`/`BABA`/`BIDU`/`NIO`/`SONY`/`BILI` se desbloquearon reintentando candidatos ya marcados 402 un dia antes). Sin datos que sincronizar hoy con la Pi.
+
+---
+
 ## Ideas adicionales sugeridas (no pedidas, no comprometidas)
 
 **Limpieza del 2026-08-21**: de las 11 ideas anotadas por `analista-mercado` entre el `2026-08-03` y el `2026-08-10`, 10 ya estaban implementadas o descartadas (cada una con su propia entrada de version mas arriba: `v2.64`, `v2.70` x2, `v2.73`, `v2.75`, `v2.76`/`v2.78`, `v2.86` x3, `v2.91`) y solo seguian listadas aqui por no haberse retirado de esta seccion al cerrarse. Se retiran todas menos una: mantenerlas aqui las hacia parecer pendientes de decision cuando ya no lo estaban. La investigacion de la unica descartada sin version propia (`undervalued_large_caps`) se conservo movida a la entrada de `v2.86`, que es donde se tomo esa decision.
