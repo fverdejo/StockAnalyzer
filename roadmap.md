@@ -943,3 +943,15 @@ El usuario pide mas agentes especialistas de analisis (tecnico o fundamental, co
 - **`auditor-estadistico`**: sin vision de mercado propia, audita si un hallazgo aguanta comparaciones multiples antes de tocar codigo — con la investigacion del mismo dia sobre BUY-vs-topN (30 combinaciones, 1 "significativa", justo lo esperable por azar) como ejemplo de manual.
 
 `analista-mercado` e `inversor-fundamental` actualizados con referencias cruzadas al equipo ampliado. Mismo patron de herramientas que los dos agentes existentes (solo lectura, proponen sin implementar). Detalle completo en `versions.md`, 2026-08-22 (segunda entrada).
+
+---
+
+## 2026-08-22 (tercera sesion: el equipo de cinco investiga, cero cambios en `src/`)
+
+Con el equipo ampliado ya creado, el usuario pide que intenten dar una solucion real al motor, y pregunta explicitamente si los fundamentales pueden reintroducirse con la cobertura ya en 47 tickers. Tres investigaciones en paralelo, despues auditadas en conjunto (re-ejecutando el codigo de medicion, no solo leyendo resumenes) por `auditor-estadistico`:
+
+- **`gestor-riesgo` — squeeze de Bollinger en RISK**: señal real y fuerte (t entre 4,40 y 16,20, direccion monotonica en las 8 combinaciones) pero redundante con `volatility20` ya existente (r=0,78) — no se implementa por duplicidad, no por falta de evidencia. Primer caso del proyecto donde "no implementar" no significa "no hay señal".
+- **`inversor-fundamental` — respuesta directa a la pregunta del usuario**: con 47 tickers (antes 34) la evidencia fundamental **no mejora, es mas plana** (t maximo 0,63 vs 1,64 antes). No se reintroducen fundamentales.
+- **`trader-tendencia` — señal continua sobre el spread SMA20/SMA50**: la via que quedaba pendiente desde el `2026-08-21`. 0 de 20 combinaciones significativas, y ademas empeora `healthcare`/`ibex35` en 6 de 20 — se retira de "Ideas adicionales sugeridas" con resultado nulo.
+
+Confirmado aparte por la auditoria (no una investigacion nueva): `healthcare` sigue arrastrando la anomalia SMA20/50 sin resolver desde `v2.78`, ahora confirmada una tercera vez con tres formas distintas de medir la misma variable — sigue siendo el hallazgo mas solido y menos atendido del proyecto, sin corregir. Detalle completo en `versions.md`, 2026-08-22 (tercera entrada).
