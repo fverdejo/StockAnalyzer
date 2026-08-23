@@ -731,7 +731,7 @@ HTML;
             return '-';
         }
 
-        return Layout::formatMoney($profit, $currency) . '<span> (' . Layout::formatNumber($percent) . '%)</span>';
+        return Layout::formatSignedMoney($profit, $currency) . '<span> (' . Layout::formatNumber($percent) . '%)</span>';
     }
 
     /**

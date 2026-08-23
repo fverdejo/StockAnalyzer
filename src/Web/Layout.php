@@ -1708,6 +1708,18 @@ HTML;
         return $value === null ? '-' : self::formatMoney($value, $currency);
     }
 
+    /**
+     * Igual que formatMoney(), pero antepone '+' a un valor positivo. Sin
+     * esto, una perdida se distingue de una ganancia solo por el color de
+     * .profit-negative/.profit-positive (WCAG 1.4.1: el color no puede ser
+     * el unico medio para transmitir informacion) — number_format() ya
+     * antepone '-' a los negativos, pero nunca '+' a los positivos.
+     */
+    public static function formatSignedMoney(float $value, string $currency): string
+    {
+        return ($value > 0 ? '+' : '') . self::formatMoney($value, $currency);
+    }
+
     public static function recommendationClass(string $recommendation): string
     {
         return match ($recommendation) {

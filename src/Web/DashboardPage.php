@@ -22,7 +22,7 @@ class DashboardPage
      * desactualizada mas de una vez porque es facil olvidarla al cerrar
      * una version nueva).
      */
-    private const APP_VERSION = 'v2.94';
+    private const APP_VERSION = 'v2.101';
 
     /**
      * Filas por pagina del ranking completo (v2.98): con el universo mas

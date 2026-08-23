@@ -226,6 +226,14 @@ return [
     // EEUU tambien en 'tech40', REP.MC/ITX.MC en varios universos geograficos),
     // este no era un solape deliberado, era una etiqueta incorrecta. Ver
     // versions.md v2.52.
+    // OJO al leer el historico de FDX: FedEx completo el spin-off de FedEx
+    // Freight (ticker nuevo FDXF en NYSE) el 2026-06-01, con reparto de 1
+    // accion de FDXF por cada 2 de FDX. A diferencia del caso HON de mas
+    // arriba, este spin-off NO vino acompañado de un contrasplit de FDX, asi
+    // que un salto de precio en la serie de FDX alrededor de esa fecha es un
+    // efecto real del reparto de valor (no splits, no un bug del parser) y
+    // no debe interpretarse como ruido de datos. FDX sigue cotizando con
+    // normalidad bajo el mismo ticker, no requiere cambio en esta lista.
     'industrials' => [
         'label' => 'Industria',
         'tickers' => [

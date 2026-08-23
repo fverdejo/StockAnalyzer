@@ -969,3 +969,9 @@ El usuario pregunta si tiene sentido analizar acciones de forma distinta segun e
 - **`analista-mercado`** confirma que el sector ya es un dato real disponible al puntuar, pero recomienda no bifurcar codigo todavia: el cruce sale invertido en 6/6 universos (no es especifico de `healthcare`), y es ya el cuarto intento sobre la misma variable.
 
 **Veredicto (Claude como juez): no se toca `src/`.** Analizar por sector es tecnicamente posible, pero ningun hallazgo de hoy lo justifica — la anomalia de `healthcare` es mas debil de lo que parecia una vez corregida por diseño y comparaciones multiples. Detalle completo en `versions.md`, 2026-08-22 (cuarta entrada).
+
+---
+
+## 2026-08-23 (segunda sesion: `v2.101`, el equipo completo cierra ideas pendientes y propone mejoras)
+
+El usuario pide finalizar "Ideas adicionales sugeridas" y que los distintos expertos (los cinco de mercado + `fiabilidad-datos-mercado` + `diseno-usabilidad` + `qa-tests`) valoren mejoras. Dos ideas pendientes se cierran: la tendencia del score sigue bloqueada (y `score_history` perdio cobertura por un reinicio de la BD local de `ddev`, no un bug de codigo); los subgrupos de `healthcare` para el cruce SMA20/50 dan resultado nulo, con la hipotesis de partida invertida (biotecnologia de catalizador binario es el UNICO subgrupo con signo positivo). `trader-tendencia` propone la idea de mayor prioridad para medir a continuacion: sustituir SMA20/50 por SMA50/SMA200 ("Golden Cross" clasico), que cae en la ventana de continuacion de momentum en vez de la de reversion a corto plazo que explica el fallo actual. `diseno-usabilidad` y `qa-tests` encontraron problemas reales, arreglados hoy: version desactualizada en cabecera (`v2.94`→`v2.101`) y el signo "+" ausente en ganancias (accesibilidad, WCAG 1.4.1) — nuevo `Layout::formatSignedMoney()`. Suite: 335 tests, 984 assertions. Detalle completo en `versions.md`, `v2.101`.

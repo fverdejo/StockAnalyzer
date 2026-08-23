@@ -363,7 +363,7 @@ class StockDetailPage
                 // es ademas como PortfolioPage marca ganancias y perdidas.
                 $boxes[] = self::valueBox(
                     'Beneficio latente',
-                    Layout::formatMoney($profit, $currency)
+                    Layout::formatSignedMoney($profit, $currency)
                         . ($percent !== null ? sprintf(' (%s%%)', Layout::formatNumber($percent)) : ''),
                     abs($profit) < 0.000001 ? '' : ($profit > 0 ? 'profit-positive' : 'profit-negative')
                 );
