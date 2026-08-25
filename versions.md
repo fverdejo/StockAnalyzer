@@ -5278,6 +5278,8 @@ Resultado esperado:
 
 Un fallo real de cache (PDO caido, JSON corrupto al guardar) deja rastro en STDERR en vez de desaparecer en silencio. Un 429 puntual de Yahoo se resuelve solo con un reintento corto, sin que el usuario vea un error. Las velas intradia dejan de pedirse a Yahoo en cada interaccion dentro de la misma ventana de 90 segundos, sin perder la semantica "casi en vivo". `bin/verify-universes.php` queda listo para detectar el proximo `DFS`/`HES`/`MRO` antes de que un usuario lo vea como error en produccion, en cuanto se instale la unidad systemd semanal en la Pi (pendiente de aprobacion del usuario). Sin cambios en `config/weights.php` ni en ninguna señal de puntuacion existente.
 
+**Actualizacion 2026-08-25**: el usuario aprueba instalar el cron en la Pi. `stockanalyzer-verify-universes.service`/`.timer` instalados exactamente con la unidad propuesta arriba (mismo patron que `stockanalyzer-analyze`/`stockanalyzer-backup`: `Group=admin`, log en `storage/logs/verify-universes.log`), habilitados con `systemctl enable --now`, y disparados una vez a mano para confirmar que funcionan de verdad antes de fiarse del cron semanal: **305/305 tickers OK, 0 delistings/errores**. Proximo disparo programado: sabado 08:00.
+
 ---
 
 ## 2026-08-25 - Relleno de fundamentales: dos tandas, sin ninguno nuevo, 47 confirmados se mantiene
