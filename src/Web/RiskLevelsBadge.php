@@ -29,12 +29,22 @@ class RiskLevelsBadge
         }
 
         return sprintf(
-            '<span class="risk-badge-compact"><span class="risk-badge-stop">SL %s</span><span class="risk-badge-target">Obj %s</span>%s</span>',
+            '<span class="risk-badge-compact"><span class="risk-badge-stop" title="%s">SL %s</span><span class="risk-badge-target">Obj %s</span>%s</span>',
+            Layout::escape(self::GAP_RISK_NOTE),
             Layout::escape(Layout::formatMoney($riskLevels->getStopLoss(), $currency)),
             Layout::escape(Layout::formatMoney($riskLevels->getTarget(), $currency)),
             self::renderSuggestedQuantity($suggestedPosition)
         );
     }
+
+    /**
+     * Texto fijo, sin variacion por sector/ticker: medido con
+     * `BacktestingService::simulateManagedExit()` sobre 10 años y 6
+     * sectores (`versions.md`, 2026-08-23), el riesgo de hueco de apertura
+     * es transversal, no concentrado en un sector concreto — no hay base
+     * para segmentar el aviso.
+     */
+    private const GAP_RISK_NOTE = 'El stop-loss es orientativo, no una orden real: en el historico de 10 años medido en la app, el 15,77% de las salidas por este tipo de stop abrieron el mercado ya por debajo del nivel calculado (hueco de apertura), con una perdida real un 22% peor que la teorica en esos casos.';
 
     /**
      * Cuando el que acota la cantidad es el peso maximo por posicion y no

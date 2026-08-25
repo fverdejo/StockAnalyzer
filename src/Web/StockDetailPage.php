@@ -86,11 +86,12 @@ class StockDetailPage
         // La version de una linea del aviso de ventaja medida (v2.94): aqui
         // la recomendacion ya sale destacada arriba, asi que el aviso
         // acompaña en vez de competir con ella.
-        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div>%s</section>',
+        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div>%s%s</section>',
             Layout::escape($company->getTicker()),
             Layout::escape($recommendation),
             Layout::escape($explanation->getSummary()),
-            MeasuredEdgeNotice::renderInline()
+            MeasuredEdgeNotice::renderInline(),
+            EarningsProximityNotice::renderInline($corporateEvents, $recommendation)
         );
 
         $signalSections = sprintf(
@@ -122,7 +123,7 @@ class StockDetailPage
         ] : [];
 
         $riskLevelsNote = $riskLevels !== null
-            ? '<p class="muted panel-note">Stop y objetivo sugeridos: referencia informativa de gestion de riesgo calculada a partir de la volatilidad historica (ATR14), no una recomendacion de inversion. No indican que el precio vaya a alcanzarlos.</p>'
+            ? '<p class="muted panel-note">Stop y objetivo sugeridos: referencia informativa de gestion de riesgo calculada a partir de la volatilidad historica (ATR14), no una recomendacion de inversion. No indican que el precio vaya a alcanzarlos. Ademas, un stop-loss no siempre se ejecuta al nivel calculado: en el historico de la app (10 años, 6 sectores) el 15,77% de las salidas por stop abrieron el mercado ya por debajo de ese nivel, con una perdida real un 22% peor que la teorica cuando ocurre.</p>'
             : '';
 
         $technicalValues = sprintf(

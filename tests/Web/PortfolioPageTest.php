@@ -7,6 +7,7 @@ namespace StockAnalyzer\Tests\Web;
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 use StockAnalyzer\DTO\PortfolioConcentration;
+use StockAnalyzer\DTO\PortfolioHeat;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
 use StockAnalyzer\Models\User;
@@ -153,6 +154,75 @@ final class PortfolioPageTest extends TestCase
      * `testLasBarrasPorPosicionLlevanElColorDeSuSector()` para el caso con
      * sector conocido, desde `v2.95`.
      */
+    public function testSinCalorNoSePintaElPanel(): void
+    {
+        self::assertStringNotContainsString('Calor de cartera', $this->render());
+    }
+
+    public function testConCalorPorDebajoDelUmbralNoAparecePanelNotice(): void
+    {
+        $heat = new PortfolioHeat(1000.0, ['AAA' => 5.0]);
+
+        $html = $this->renderWithHeat($heat);
+
+        self::assertStringContainsString('Calor de cartera', $html);
+        self::assertStringContainsString('5,00%', $html);
+        self::assertStringNotContainsString('perderias un', $html);
+    }
+
+    public function testConCalorPorEncimaDelUmbralAvisaConPanelNotice(): void
+    {
+        $heat = new PortfolioHeat(1000.0, ['AAA' => 20.0]);
+
+        $html = $this->renderWithHeat($heat);
+
+        self::assertStringContainsString('perderias un', $html);
+        self::assertStringContainsString('20,00%', $html);
+    }
+
+    public function testLasPosicionesExcluidasSeIndicanComoCotaInferior(): void
+    {
+        $heat = new PortfolioHeat(1000.0, ['AAA' => 5.0], ['BBB']);
+
+        $html = $this->renderWithHeat($heat);
+
+        self::assertStringContainsString('cota inferior', $html);
+        self::assertStringContainsString('BBB', $html);
+    }
+
+    private function renderWithHeat(PortfolioHeat $heat): string
+    {
+        $holding = new Holding('ADBE', 5.0, 250.41, 265.21, null, 1082.0, 1146.0);
+
+        $portfolio = new Portfolio(
+            [$holding],
+            [],
+            0.0,
+            ['ADBE' => 265.21],
+            ['ADBE' => 'USD'],
+            0.8649,
+            ['USD' => 0.8649],
+            0.0,
+            null
+        );
+
+        return PortfolioPage::render(
+            $this->user(),
+            $portfolio,
+            'token',
+            null,
+            null,
+            ['labels' => [], 'values' => []],
+            [],
+            0,
+            [],
+            [],
+            [],
+            null,
+            $heat
+        );
+    }
+
     public function testLaConcentracionSePintaConBarrasYMarcaLasQueSuperanElUmbral(): void
     {
         $html = $this->renderWithConcentration();

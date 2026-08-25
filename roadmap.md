@@ -975,3 +975,17 @@ El usuario pregunta si tiene sentido analizar acciones de forma distinta segun e
 ## 2026-08-23 (segunda sesion: `v2.101`, el equipo completo cierra ideas pendientes y propone mejoras)
 
 El usuario pide finalizar "Ideas adicionales sugeridas" y que los distintos expertos (los cinco de mercado + `fiabilidad-datos-mercado` + `diseno-usabilidad` + `qa-tests`) valoren mejoras. Dos ideas pendientes se cierran: la tendencia del score sigue bloqueada (y `score_history` perdio cobertura por un reinicio de la BD local de `ddev`, no un bug de codigo); los subgrupos de `healthcare` para el cruce SMA20/50 dan resultado nulo, con la hipotesis de partida invertida (biotecnologia de catalizador binario es el UNICO subgrupo con signo positivo). `trader-tendencia` propone la idea de mayor prioridad para medir a continuacion: sustituir SMA20/50 por SMA50/SMA200 ("Golden Cross" clasico), que cae en la ventana de continuacion de momentum en vez de la de reversion a corto plazo que explica el fallo actual. `diseno-usabilidad` y `qa-tests` encontraron problemas reales, arreglados hoy: version desactualizada en cabecera (`v2.94`→`v2.101`) y el signo "+" ausente en ganancias (accesibilidad, WCAG 1.4.1) — nuevo `Layout::formatSignedMoney()`. Suite: 335 tests, 984 assertions. Detalle completo en `versions.md`, `v2.101`.
+
+---
+
+## 2026-08-25 (`v2.102`/`v2.103`, "realizad las ideas adicionales sugeridas")
+
+El usuario pide "realizar" (no solo proponer) las ideas pendientes en `versions.md`. Manteniendo la disciplina de fondo del proyecto (medir antes de tocar el motor, ni siquiera con un "hacedlo ya" explicito): las ideas que afectarian a `ScoreWeights` se midieron primero, las informativas/de infraestructura se implementaron directo.
+
+**Cuatro mediciones, cuatro cierres con resultado nulo o inconcluso**: SMA50/SMA200 ("Golden Cross", la propuesta de mayor prioridad — 0/24 combinaciones sobreviven correccion, y ademas genera 3,8x menos señales que el cruce actual), Piotroski F-Score completo (`|t|` maximo 1,16 en la medicion mas favorable posible a la tesis, con el signo invertido a partir de 1 año), ratio de acumulaciones de Sloan (`|t|` maximo 0,76, sin direccion consistente), y distancia al maximo de 252 sesiones como momentum (0/28 combinaciones en la direccion predicha).
+
+**Tres ideas informativas implementadas** (ninguna toca puntuacion): aviso de resultados trimestrales cerca de una recomendacion BUY (`EarningsProximityNotice`, cobertura de datos verificada al 100% en `largecap60`), aviso de riesgo de gap en el stop-loss (texto fijo con la cifra ya medida: 15,77% de salidas por stop abren con hueco), y `PortfolioHeatCalculator` — nueva metrica que suma el riesgo abierto de TODA la cartera a la vez, umbral 15% recalibrado con datos reales de hoy (el 6% de Van Tharp habria disparado el aviso casi siempre).
+
+**`v2.102`** (`fiabilidad-datos-mercado`, con permiso de escritura): logging de excepciones reales de cache, backoff ante 429 de Yahoo, TTL corto para intradia — los tres implementados y verificados. Script de verificacion semanal de universos listo, sin instalar (pendiente de aprobacion para el cron en la Pi).
+
+Dos arreglos de diseño de `diseno-usabilidad` (`2026-08-23`) tambien implementados: el Score de las tablas deja de competir en peso visual con el ticker, y el formulario de compra/venta ya no arriesga desalinearse en tablets. Suite final: 362 tests, 1042 assertions. Detalle completo en `versions.md`, `v2.102` y `v2.103`.

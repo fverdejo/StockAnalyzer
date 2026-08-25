@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StockAnalyzer\Web;
 
 use StockAnalyzer\DTO\PortfolioConcentration;
+use StockAnalyzer\DTO\PortfolioHeat;
 use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\DTO\SuggestedPosition;
 use StockAnalyzer\Enums\TransactionType;
@@ -21,6 +22,7 @@ class PortfolioPage
      * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos, si hay datos suficientes
      * @param array<string,?SuggestedPosition> $suggestedPositions ticker => cantidad de acciones sugerida segun el riesgo por operacion y el peso maximo por posicion (position sizing, ver versions.md v2.50/v2.65)
      * @param ?PortfolioConcentration $concentration pesos por posicion/sector/divisa (null si no se pudo calcular en euros, ver versions.md)
+     * @param ?PortfolioHeat $heat riesgo abierto agregado si todos los stop-loss saltaran a la vez (null si no se pudo calcular, ver versions.md v2.103)
      */
     public static function render(
         User $user,
@@ -34,7 +36,8 @@ class PortfolioPage
         array $watchedTickers = [],
         array $riskLevels = [],
         array $suggestedPositions = [],
-        ?PortfolioConcentration $concentration = null
+        ?PortfolioConcentration $concentration = null,
+        ?PortfolioHeat $heat = null
     ): string {
         $token = Layout::escape($csrfToken);
         $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
@@ -42,6 +45,7 @@ class PortfolioPage
         $alertsNote = self::renderUnreadAlertsNote($unreadAlerts);
         $cards = self::renderCards($portfolio);
         $concentrationPanel = self::renderConcentration($concentration);
+        $heatPanel = self::renderHeat($heat);
         $valueChart = self::renderValueHistoryChart($valueHistory);
         $watched = array_fill_keys($watchedTickers, true);
         $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels, $suggestedPositions);
@@ -67,6 +71,7 @@ class PortfolioPage
 
         {$valueChart}
         {$concentrationPanel}
+        {$heatPanel}
 
         <section class="panel">
             <h2>Historial de operaciones</h2>
@@ -176,6 +181,51 @@ HTML;
             self::thresholdPercent(PortfolioConcentration::POSITION_WARNING_PERCENT),
             self::thresholdPercent(PortfolioConcentration::SECTOR_WARNING_PERCENT),
             self::thresholdPercent(PortfolioConcentration::FOREIGN_CURRENCY_WARNING_PERCENT)
+        );
+    }
+
+    /**
+     * "Calor de cartera" (v2.103, idea de `gestor-riesgo`, ver versions.md):
+     * cuanto se perderia en total si TODOS los stop-loss saltaran a la vez,
+     * como % del valor de la cartera. Complementa a "Concentracion de la
+     * cartera" (que mira COMO esta repartida) respondiendo una pregunta
+     * distinta: cuanto arriesga la cartera COMPLETA, no cada posicion por
+     * separado. Mismo `weightBars()` que el reparto por posicion de
+     * concentracion, pero sin colores por posicion: aqui el aviso es sobre
+     * el TOTAL, no hay un umbral por posicion individual que respalde
+     * marcar una fila en concreto.
+     */
+    private static function renderHeat(?PortfolioHeat $heat): string
+    {
+        if ($heat === null) {
+            return '';
+        }
+
+        $bars = self::weightBars($heat->getRiskWeights(), [], PortfolioHeat::WARNING_PERCENT);
+        $excluded = $heat->getExcludedTickers();
+
+        $excludedNote = $excluded === []
+            ? ''
+            : sprintf(
+                '<p class="muted panel-note">%s sin datos suficientes para calcular su riesgo (%s): el calor mostrado es una cota inferior, no el riesgo completo de la cartera.</p>',
+                count($excluded) === 1 ? 'Una posicion queda' : sprintf('%d posiciones quedan', count($excluded)),
+                Layout::escape(implode(', ', $excluded))
+            );
+
+        $warning = $heat->isHot()
+            ? sprintf(
+                '<section class="panel panel-notice"><strong>Si todos los stop-loss sugeridos saltaran a la vez, perderias un %s de la cartera,</strong> por encima del %s de referencia. No es una prediccion de que vaya a pasar, es cuanto arriesga la cartera completa si pasara lo peor en todas las posiciones a la vez.</section>',
+                self::percent($heat->getTotalHeatPercent()),
+                self::thresholdPercent(PortfolioHeat::WARNING_PERCENT)
+            )
+            : '';
+
+        return sprintf(
+            '<section class="panel"><h2>Calor de cartera</h2><p class="muted panel-note">Si el precio de cada posicion cayera hasta su stop-loss sugerido a la vez, esto es cuanto perderia la cartera en total: %s del valor actual. El 1,5%% de riesgo por operacion se calibra posicion a posicion; esto suma ese riesgo cuando varios stops saltan juntos, justo lo que puede pasar en una caida de mercado amplia.</p>%s%s%s</section>',
+            self::percent($heat->getTotalHeatPercent()),
+            $bars,
+            $excludedNote,
+            $warning
         );
     }
 

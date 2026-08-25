@@ -51,11 +51,31 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
         private readonly string $historyRange = '2y',
         private readonly DateInterval $stockTtl = new DateInterval('PT15M'),
         ?DateInterval $historyTtl = null,
-        private readonly DateInterval $dividendHistoryTtl = new DateInterval('P30D')
+        private readonly DateInterval $dividendHistoryTtl = new DateInterval('P30D'),
+        /**
+         * TTL corto (90s por defecto, dentro del rango 60-120s pedido):
+         * las velas intradia (v2.9) no se cacheaban nunca porque perder
+         * frescura frente al mercado en vivo les quita valor, pero pedirlas
+         * a Yahoo en cada refresco de la ficha de detalle sin ningun margen
+         * es innecesario cuando varias peticiones caen en la misma ventana
+         * de menos de dos minutos (p.ej. el usuario cambiando de rango de
+         * fechas sobre el mismo grafico). 90s sigue siendo "casi en vivo":
+         * la vela mas fina que se pide es de 1 minuto.
+         */
+        private readonly DateInterval $intradayTtl = new DateInterval('PT90S')
     ) {
         $this->historyTtl = $historyTtl ?? new DateInterval(
             self::HISTORY_TTL_BY_RANGE[$this->historyRange] ?? 'P1D'
         );
+    }
+
+    /**
+     * Expuesto por el mismo motivo que getHistoryTtl(): poder verificar en
+     * un test el TTL corto del intradia sin espiar la peticion al proveedor.
+     */
+    public function getIntradayTtl(): DateInterval
+    {
+        return $this->intradayTtl;
     }
 
     /**
@@ -74,7 +94,8 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         try {
             $cached = $this->cache->findStock($ticker, $this->stockTtl);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getStock (lectura)', $ticker, $exception);
             $cached = null;
         }
 
@@ -86,7 +107,8 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         try {
             $this->cache->saveStock($ticker, $stock);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getStock (escritura)', $ticker, $exception);
         }
 
         return $stock;
@@ -99,7 +121,8 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         try {
             $cached = $this->cache->findHistory($ticker, $this->historyTtl, $this->historyRange);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getHistoricalQuotes (lectura)', $ticker, $exception);
             $cached = null;
         }
 
@@ -111,21 +134,51 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         try {
             $this->cache->saveHistory($ticker, $quotes, $this->historyRange);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getHistoricalQuotes (escritura)', $ticker, $exception);
         }
 
         return $quotes;
     }
 
     /**
-     * Sin cache: las velas intradia (v2.9) pierden su valor si se sirven
-     * con retraso, y su volumen de peticiones es mucho menor que el
-     * ranking diario (solo se piden cuando alguien abre la temporalidad
-     * intradia en la ficha de detalle).
+     * TTL corto (intradayTtl, 90s por defecto), no sin cache: las velas
+     * intradia (v2.9) pierden su valor si se sirven con retraso, pero un
+     * margen de minuto y medio sigue siendo "casi en vivo" (la vela mas
+     * fina es de 1 minuto) y evita volver a pedir a Yahoo en cada
+     * interaccion que cae dentro de esa ventana. Reutiliza el mismo
+     * mecanismo que el historico diario (MarketDataCacheRepository::
+     * findHistory()/saveHistory()), con el intervalo como parte de la
+     * clave de rango (p.ej. "intraday_5m") para no colisionar con las
+     * claves de historico diario ('6mo', '1y', '2y'...) ni entre
+     * intervalos intradia distintos.
      */
     public function getIntradayQuotes(string $ticker, string $interval): array
     {
-        return $this->inner->getIntradayQuotes(strtoupper(trim($ticker)), $interval);
+        $ticker = strtoupper(trim($ticker));
+        $cacheKey = 'intraday_' . $interval;
+        $cached = null;
+
+        try {
+            $cached = $this->cache->findHistory($ticker, $this->intradayTtl, $cacheKey);
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getIntradayQuotes (lectura)', $ticker, $exception);
+            $cached = null;
+        }
+
+        if (is_array($cached) && $cached !== []) {
+            return $cached;
+        }
+
+        $quotes = $this->inner->getIntradayQuotes($ticker, $interval);
+
+        try {
+            $this->cache->saveHistory($ticker, $quotes, $cacheKey);
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getIntradayQuotes (escritura)', $ticker, $exception);
+        }
+
+        return $quotes;
     }
 
     /**
@@ -142,7 +195,8 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         try {
             $cached = $this->cache->findDividendHistory($ticker, $this->dividendHistoryTtl);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getDividendHistory (lectura)', $ticker, $exception);
             $cached = null;
         }
 
@@ -154,9 +208,38 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
 
         try {
             $this->cache->saveDividendHistory($ticker, $payments);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            self::logCacheFailure('getDividendHistory (escritura)', $ticker, $exception);
         }
 
         return $payments;
+    }
+
+    /**
+     * Todos los catch (\Throwable) de esta clase envuelven una llamada al
+     * repositorio de cache (PDO/JSON), nunca al proveedor externo: un
+     * cache-miss normal (fila ausente o caducada) ya se resuelve devolviendo
+     * null/[] sin lanzar nada (ver MarketDataCacheRepository::isFresh()), asi
+     * que llegar a uno de estos catch significa siempre un fallo real (PDO
+     * caido, fila corrupta, error de serializacion JSON al guardar), no
+     * ruido esperado. El proyecto no tiene infraestructura de logging propia
+     * (sin Logger/Monolog en uso, ver bin/*.php), asi que STDERR es el mismo
+     * mecanismo que ya usa el resto de la aplicacion para avisos. El flujo
+     * de control no cambia: se sigue cayendo al dato en vivo exactamente
+     * igual que antes de este aviso.
+     */
+    private static function logCacheFailure(string $operation, string $ticker, \Throwable $exception): void
+    {
+        fwrite(
+            STDERR,
+            sprintf(
+                '[CachedMarketDataProvider] %s fallo para %s (%s): %s%s',
+                $operation,
+                $ticker,
+                $exception::class,
+                $exception->getMessage(),
+                PHP_EOL
+            )
+        );
     }
 }

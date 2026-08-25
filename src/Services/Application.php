@@ -907,7 +907,8 @@ class Application
                 $holdingsAnalysis['riskLevels'],
                 (new SuggestedPositionCalculator(new RiskLevelsConfig()))
                     ->compute($portfolio, $holdingsAnalysis['riskLevels']),
-                (new PortfolioConcentrationCalculator())->compute($portfolio, $holdingsAnalysis['sectors'])
+                (new PortfolioConcentrationCalculator())->compute($portfolio, $holdingsAnalysis['sectors']),
+                (new PortfolioHeatCalculator())->compute($portfolio, $holdingsAnalysis['riskLevels'])
             );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
@@ -1122,10 +1123,12 @@ class Application
 
     /**
      * Endpoint AJAX ligero (ver versions.md v2.9) usado por el selector de
-     * temporalidad intradia de StockDetailPage: no pasa por
-     * CachedMarketDataProvider (los intervalos intradia no se cachean) y
-     * devuelve solo lo que el grafico necesita, no un StockAnalysis
-     * completo.
+     * temporalidad intradia de StockDetailPage: pasa por
+     * CachedMarketDataProvider igual que el resto de datos de mercado, pero
+     * con un TTL corto propio (90s por defecto, ver
+     * CachedMarketDataProvider::$intradayTtl) en vez del TTL diario del
+     * historico, y devuelve solo lo que el grafico necesita, no un
+     * StockAnalysis completo.
      */
     private function renderIntraday(): string
     {

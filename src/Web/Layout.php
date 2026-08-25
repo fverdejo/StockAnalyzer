@@ -534,9 +534,18 @@ class Layout
             background: var(--surface-alt);
         }
 
-        .ticker,
-        .score {
+        .ticker {
             font-weight: 800;
+        }
+
+        /* El score numerico no debe competir en peso visual con el ticker
+           ni con la pildora de recomendacion (.recommendation), que es la
+           que de verdad resume la decision de un vistazo a la tabla —
+           antes ambos compartian el mismo font-weight:800 (v2.101,
+           idea de diseno-usabilidad). */
+        .score {
+            font-weight: 400;
+            color: var(--muted);
         }
 
         /* Grupos que no deben partirse por un salto de linea: importes con su
@@ -1430,8 +1439,14 @@ class Layout
                 grid-template-columns: 1fr;
             }
 
+            /* Antes pasaba a 2 columnas aqui: con 5 hijos directos
+               (Cantidad, Importe, Precio, boton Comprar, boton Vender) el
+               auto-placement dejaba "Precio" pegado al boton "Comprar",
+               sugiriendo visualmente que el precio solo aplica a comprar.
+               1 columna evita la ambiguedad (mismo patron que ya se usaba
+               por debajo de 640px). Idea de diseno-usabilidad, v2.101. */
             .trade-form {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
+                grid-template-columns: 1fr;
             }
 
             form button {
