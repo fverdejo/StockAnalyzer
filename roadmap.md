@@ -989,3 +989,9 @@ El usuario pide "realizar" (no solo proponer) las ideas pendientes en `versions.
 **`v2.102`** (`fiabilidad-datos-mercado`, con permiso de escritura): logging de excepciones reales de cache, backoff ante 429 de Yahoo, TTL corto para intradia — los tres implementados y verificados. Script de verificacion semanal de universos listo, sin instalar (pendiente de aprobacion para el cron en la Pi).
 
 Dos arreglos de diseño de `diseno-usabilidad` (`2026-08-23`) tambien implementados: el Score de las tablas deja de competir en peso visual con el ticker, y el formulario de compra/venta ya no arriesga desalinearse en tablets. Suite final: 362 tests, 1042 assertions. Detalle completo en `versions.md`, `v2.102` y `v2.103`.
+
+---
+
+## 2026-08-25 (tercera sesion: primer modelo multivariante, tambien nulo)
+
+El usuario pregunta que haria falta para que el motor mejore de verdad, dado el patron de 20+ investigaciones nulas. Se prueba la via nunca intentada: combinar señales en un modelo real (ridge regression) en vez de umbrales fijos, con fundamentales como candidatas. `auditor-estadistico` disena el protocolo primero y confirma que los fundamentales **no son viables todavia** — no por cobertura de tickers, sino porque el plan gratuito de FMP da datos anuales (~5 valores por ticker en 5 años, insuficiente para dividir entrenamiento/validacion/test). `analista-mercado` ejecuta el modelo solo-tecnico (8 señales, verificado contra casos de solucion analitica conocida, split cronologico 60/20/20, test evaluado una sola vez): **t pareado = 0,641 en el bloque de test, indistinguible de ruido**. Ni siquiera el metodo mas riguroso aplicado hasta ahora encuentra alpha adicional combinando las señales ya conocidas sobre este universo — el cuello de botella parece ser el universo (mega-caps muy eficientes) y la profundidad de datos, no el metodo de combinacion. Detalle completo en `versions.md`, 2026-08-25 (segunda entrada).
