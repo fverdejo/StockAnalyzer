@@ -600,6 +600,7 @@ class Layout
         .buy { background: #dff3e8; color: var(--good); }
         .hold { background: #fff1d2; color: var(--warn-text); }
         .sell { background: #f9dedb; color: var(--bad); }
+        .strong-sell { background: var(--bad); color: var(--surface); }
 
         .chips {
             display: flex;
@@ -1740,6 +1741,7 @@ HTML;
         return match ($recommendation) {
             'BUY' => 'buy',
             'HOLD' => 'hold',
+            'STRONG SELL' => 'strong-sell',
             default => 'sell',
         };
     }

@@ -115,7 +115,7 @@ HTML;
 
             $ticker = (string) ($item['ticker'] ?? '');
             $rows[] = sprintf(
-                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%d</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td></tr>',
                 urlencode($ticker),
                 Layout::escape($ticker),
                 (int) ($item['samples'] ?? 0),
@@ -270,7 +270,7 @@ HTML;
     private static function columnHeader(string $label, string $description, bool $alignEnd = false): string
     {
         return sprintf(
-            '<th>%s <span class="info-icon info-icon-below%s" tabindex="0" data-tooltip="%s">i</span></th>',
+            '<th class="num">%s <span class="info-icon info-icon-below%s" tabindex="0" data-tooltip="%s">i</span></th>',
             Layout::escape($label),
             $alignEnd ? ' info-icon-end' : '',
             Layout::escape($description)

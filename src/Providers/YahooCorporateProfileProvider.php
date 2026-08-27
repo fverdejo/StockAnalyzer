@@ -78,6 +78,15 @@ class YahooCorporateProfileProvider
      * Yahoo en cada visita. TTL por defecto 24h: estos datos no cambian
      * varias veces al dia.
      *
+     * Las llamadas a $cache van envueltas en try/catch (mismo patron que
+     * CachedMarketDataProvider::logCacheFailure() desde v2.102): un fallo
+     * real de cache (PDO caido, JSON corrupto) no debe tumbar la ficha de
+     * detalle ni el recorrido de la watchlist/cartera, que es justo la
+     * garantia que este metodo (y los tres llamadores en Application.php)
+     * ya asumian sin que fuera cierta -- fetch() ya capturaba cualquier
+     * fallo de Yahoo, pero antes de esto un fallo de $cache->find()/save()
+     * se propagaba sin capturar.
+     *
      * @return array{0: Company, 1: CorporateEvents}
      */
     public function fetchCached(
@@ -87,16 +96,42 @@ class YahooCorporateProfileProvider
         ?DateInterval $ttl = null
     ): array {
         $ttl ??= new DateInterval('P1D');
-        $cached = $cache->find($ticker, $ttl);
+        $cached = null;
+
+        try {
+            $cached = $cache->find($ticker, $ttl);
+        } catch (Throwable $exception) {
+            self::logCacheFailure('fetchCached (lectura)', $ticker, $exception);
+        }
 
         if ($cached !== null) {
             return self::fromCachePayload($cached, $baseCompany);
         }
 
         [$company, $events] = $this->fetch($ticker, $baseCompany);
-        $cache->save($ticker, self::toCachePayload($company, $events));
+
+        try {
+            $cache->save($ticker, self::toCachePayload($company, $events));
+        } catch (Throwable $exception) {
+            self::logCacheFailure('fetchCached (escritura)', $ticker, $exception);
+        }
 
         return [$company, $events];
+    }
+
+    private static function logCacheFailure(string $operation, string $ticker, Throwable $exception): void
+    {
+        fwrite(
+            STDERR,
+            sprintf(
+                '[YahooCorporateProfileProvider] %s fallo para %s (%s): %s%s',
+                $operation,
+                $ticker,
+                $exception::class,
+                $exception->getMessage(),
+                PHP_EOL
+            )
+        );
     }
 
     /**

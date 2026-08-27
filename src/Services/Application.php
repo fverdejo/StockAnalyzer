@@ -402,9 +402,11 @@ class Application
 
         // Descripcion/sector/industria y proximas fechas de resultados y
         // ex-dividendo: siempre via Yahoo, solo para el ticker en detalle. Un
-        // fallo aqui nunca debe tumbar la ficha (ver
-        // YahooCorporateProfileProvider::fetch()), por eso no hay try/catch
-        // adicional. Version cacheada (TTL 24h, ver
+        // fallo aqui nunca debe tumbar la ficha: fetch() ya capturaba
+        // cualquier fallo de Yahoo, y fetchCached() tambien captura un
+        // fallo real del propio $cache (ver
+        // YahooCorporateProfileProvider::fetchCached()), asi que no hace
+        // falta try/catch adicional aqui. Version cacheada (TTL 24h, ver
         // CorporateProfileCacheRepository) para no pedir quoteSummary a
         // Yahoo cada vez que alguien mira el mismo ticker.
         [$companyProfile, $corporateEvents] = $this->corporateProfileProvider->fetchCached(

@@ -43,7 +43,8 @@ class CachedMarketMoversProvider implements MarketMoversProviderInterface
     {
         try {
             $cached = $this->cache->find($kind, $this->ttl);
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            self::logCacheFailure('getCached (lectura)', $kind, $exception);
             $cached = null;
         }
 
@@ -55,9 +56,32 @@ class CachedMarketMoversProvider implements MarketMoversProviderInterface
 
         try {
             $this->cache->save($kind, $tickers);
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            self::logCacheFailure('getCached (escritura)', $kind, $exception);
         }
 
         return $tickers;
+    }
+
+    /**
+     * Mismo patron que CachedMarketDataProvider::logCacheFailure() desde
+     * v2.102: antes de esto, un fallo real de cache (PDO caido, JSON
+     * corrupto al guardar) desaparecia en silencio en vez de dejar rastro
+     * en STDERR. El flujo de control no cambia: se sigue cayendo al
+     * screener en vivo exactamente igual que antes de este aviso.
+     */
+    private static function logCacheFailure(string $operation, string $kind, Throwable $exception): void
+    {
+        fwrite(
+            STDERR,
+            sprintf(
+                '[CachedMarketMoversProvider] %s fallo para %s (%s): %s%s',
+                $operation,
+                $kind,
+                $exception::class,
+                $exception->getMessage(),
+                PHP_EOL
+            )
+        );
     }
 }
