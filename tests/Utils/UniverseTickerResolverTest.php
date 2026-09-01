@@ -111,10 +111,11 @@ final class UniverseTickerResolverTest extends TestCase
     }
 
     /**
-     * Con la config real (20 universos, 540 entradas repetidas), el
-     * conjunto unico es 305 tickers (medido en 2026-08 y reconfirmado
-     * hoy) — el numero exacto que hace real el bug: ningun universo
-     * individual llega a 60, pero la union si.
+     * Con la config real, el conjunto unico es 628 tickers (medido el
+     * 2026-09-01 tras añadir `sp500`/`nasdaq100`, sube desde los 305 de
+     * los 20 universos anteriores) — el numero exacto que hace real el
+     * bug: ningun universo individual (salvo los dos nuevos, ya resueltos
+     * sin pasar por `TickerNormalizer`) llega a 60, pero la union si.
      */
     public function testConLaConfigRealElConjuntoUnicoSuperaElLimiteDe60(): void
     {
@@ -123,6 +124,6 @@ final class UniverseTickerResolverTest extends TestCase
         $unique = $resolver->allUniverseTickers();
 
         self::assertGreaterThan(60, count($unique));
-        self::assertSame(305, count($unique));
+        self::assertSame(628, count($unique));
     }
 }

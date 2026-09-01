@@ -5464,3 +5464,23 @@ Nota de la tabla actualizada (`PortfolioPage.php`) para reflejar el nuevo compor
 Test actualizado: `tests/Models/PortfolioTransactionProfitTest.php` — el caso que antes fijaba "la compra compara contra el precio de hoy" se sustituye por dos casos que fijan "la compra siempre es 0", con precio de hoy subiendo y bajando. Los tres casos de venta (beneficio real, perdida real, sin coste medio conocido → null) no cambian, siguen en verde.
 
 Verificado: `ddev exec vendor/bin/phpunit`: **394 tests, 1115 assertions, OK** (sube desde 393/1113). `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+---
+
+## v2.107 - `sp500` y `nasdaq100` añadidos como universos filtrables
+
+Estado: implementado y verificado (cron de la Pi sin tocar, no forma parte de esta tarea).
+
+Objetivo:
+
+Tras aclarar el usuario que S&P500/Nasdaq100 no eran para la pregunta de investigacion de universo independiente (ver nota en `v2.105` mas arriba) sino para poder **filtrarlos en el Home** como cualquier otro universo curado (mismo uso que `ibex35`), `fiabilidad-datos-mercado` cura las dos listas completas.
+
+**`sp500`**: 503/503 tickers (incluidas las 3 empresas con doble clase de accion del indice: `GOOGL`/`GOOG`, `FOXA`/`FOX`, `NWSA`/`NWS`), curados desde el wikitext crudo de Wikipedia (el resumen de `WebFetch` truncaba la tabla en el primer intento, descartado). Conversion de formato Yahoo ya conocida (`BRK.B`→`BRK-B`, `BF.B`→`BF-B`). `CBOE` usa una plantilla de wikitext distinta al resto de la tabla, anotado en el comentario del fichero para no perderla si se regenera la lista. **`nasdaq100`**: 102/102 tickers (101 empresas, `GOOGL`/`GOOG` doble clase otra vez), mismo origen.
+
+**Verificado el 100% contra Yahoo real** (`chart/{ticker}`, no una muestra): 503/503 y 102/102, 0 fallos, incluidos los casos mas atipicos (spin-offs y cambios de ticker recientes: `GEV`, `SOLV`, `VLTO`, `KVUE`, `CEG`, `XYZ`, `CPAY`, `COR`, `GEHC`, `FDXF`, `HONA`, `PSKY`, `Q`, `SW`, `TKO`, `VMRK`, `SPCX`, `MSTR`→"Strategy Inc", `TRI`, `FER`-no-Ferrari). Hallazgo lateral sin impacto: Marsh & McLennan cotiza hoy como `MRSH`, no `MMC` (404) — no afecta a ningun universo existente, ninguno la incluia.
+
+**Impacto en `--all-universes`** (`v2.105`): el conjunto unico sube de 305 a **628 tickers**, por debajo de la estimacion previa (~650-750) por el fuerte solape de `sp500`/`nasdaq100` con `largecap60`/`tech40`/`dow30` entre si. Test de guardarraíl actualizado (`tests/Utils/UniverseTickerResolverTest.php`, fija 628). El presupuesto de tiempo/llamadas estimado para el cron de la Pi sube en proporcion (de ~305 a ~628 tickers/noche) — a revisar en las primeras ejecuciones reales cuando se instale, junto con el resto de `--all-universes` (ver `v2.105`, todavia pendiente de confirmacion para tocar el systemd timer de la Pi).
+
+Nota de sesgo de supervivencia (listas de HOY, `roadmap.md` linea 68) documentada en el propio comentario de cada universo nuevo, mismo criterio que el resto del fichero.
+
+Verificado: `ddev exec vendor/bin/phpunit`: **394 tests, 1115 assertions, OK**. `ddev exec vendor/bin/phpstan analyse`: sin errores. `php -l config/universes.php`: sin errores de sintaxis.
