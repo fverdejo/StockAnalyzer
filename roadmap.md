@@ -61,6 +61,8 @@ Implementacion esperada:
 
 **Criterio de salida:** 628/628 respuestas archivadas y verificadas por hash; restauracion de prueba en una base vacia que reconstruya una muestra sin llamar a EODHD; informe de campos ausentes, cobertura temporal y anomalías por ticker.
 
+**Parcialmente hecho el `2026-09-01`** (`versions.md`, `v2.111`): 628/628 respuestas archivadas en `eodhd_raw_fundamentals` (JSON crudo tal cual, con hash sha256, verificado 10/10 en muestra), y `EodhdFiscalPeriodProvider::parse()` ya reconstruye `FiscalPeriod` sin red a partir de un payload archivado (usado para regenerar `fundamentals_history_v2110`, ver punto 4). **Sin hacer todavia**: el almacenamiento normalizado de periodos/cuentas con clave estable, el manifest de esperados/obtenidos/fallidos, y la telemetria de cuota corregida (10 unidades/llamada vs 1 peticion HTTP).
+
 ### 3. Auditoria de calidad y limitaciones point-in-time
 
 La presencia de `filing_date` evita usar un informe antes de publicarse, pero no garantiza por si sola datos historicos de primera publicacion: EODHD podria devolver hoy cifras antiguas reformuladas posteriormente. Consultar/documentar si las series son *as reported* o la ultima version restatada. Si no hay vintages, etiquetar el backtest como `filing-date point-in-time, restatement-safe=false`; no afirmar que esta completamente libre de look-ahead.
@@ -70,6 +72,8 @@ Automatizar un informe de calidad con: `filing_date < period_end`, duplicados, s
 ### 4. Regenerar, comparar y desplegar con una ruta reversible
 
 No borrar ni sobrescribir a ciegas el historico actual. Construir el nuevo resultado en tabla/version paralela, conservar `source`, `formula_version` y cobertura, y comparar distribuciones por ticker/sector/fecha con `v2.109`. Investigar outliers antes del intercambio. La sincronizacion a la Pi requiere copia previa, tabla intermedia, conteos/hashes y rollback probado; sigue necesitando confirmacion explicita del usuario por ser produccion.
+
+**Regenerado y comparado el `2026-09-01`** (`versions.md`, `v2.111`): `fundamentals_history_v2110` tiene los 628 tickers recalculados con la formula corregida, comparado contra la tabla real (628 comunes, ancorado a `snapshot_date <= 2026-08-27` para evitar contaminacion de pruebas ya hechas el mismo dia). Reproduce el patron esperado (PER/EV-EBITDA a ~1/4, ROE/ROIC a ~3,6-4x, balance sin cambios: deuda/patrimonio y current ratio en 1,000 exacto). Outliers investigados uno a uno; solo `KB` (ADR coreano) resulto ser un dato sucio real de la fuente, no un bug. **Sigue pendiente, decision del usuario**: el intercambio de tablas (`fundamentals_history` real todavia sirve los datos con el bug de `v2.109`) y la sincronizacion con la Pi.
 
 ## Segundo bloque: eliminar el sesgo de supervivencia mientras la suscripcion esta activa
 

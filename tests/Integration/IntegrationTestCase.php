@@ -55,6 +55,8 @@ abstract class IntegrationTestCase extends TestCase
         'transactions',
         'score_history',
         'fundamentals_history',
+        'fundamentals_history_v2110',
+        'eodhd_raw_fundamentals',
         'market_data_cache',
         'market_history_cache',
         'market_movers_cache',

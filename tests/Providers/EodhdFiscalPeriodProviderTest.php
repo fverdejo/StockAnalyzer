@@ -355,4 +355,91 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
 
         (new EodhdFiscalPeriodProvider('clave', $http))->fetch('   ');
     }
+
+    /**
+     * fetchRawJson() existe para archivar la respuesta (roadmap.md,
+     * "Prioridad cero" punto 2): tiene que devolver el CUERPO ORIGINAL, no
+     * una version re-codificada, para que lo archivado sea bit a bit lo
+     * que EODHD envio.
+     */
+    public function testFetchRawJsonDevuelveElCuerpoOriginalSinRecodificar(): void
+    {
+        // Orden de claves deliberadamente "raro": si fetchRawJson()
+        // decodificase y volviese a codificar, json_encode normalizaria
+        // este orden y la comparacion de abajo fallaria.
+        $original = '{"z_ultimo":1,"a_primero":2,"Financials":{"Income_Statement":{"quarterly":[]},'
+            . '"Balance_Sheet":{"quarterly":[]},"Cash_Flow":{"quarterly":[]}}}';
+
+        $http = new class ($original) extends HttpClient {
+            public function __construct(private readonly string $body)
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                return new Response(200, [], $this->body);
+            }
+        };
+
+        $raw = (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJson('AAPL');
+
+        self::assertSame($original, $raw);
+    }
+
+    /**
+     * Un cuerpo que no decodifica como JSON no se puede dar por archivado:
+     * mejor un ticker que se reintenta que un archivo corrupto que parece
+     * completo.
+     */
+    public function testFetchRawJsonRechazaUnCuerpoQueNoEsJson(): void
+    {
+        $http = new class extends HttpClient {
+            public function __construct()
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                return new Response(200, [], 'esto no es json');
+            }
+        };
+
+        $this->expectException(MarketDataException::class);
+
+        (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJson('AAPL');
+    }
+
+    /**
+     * parse() es fetch() sin la parte de red: el mismo payload decodificado
+     * a mano tiene que producir exactamente los mismos FiscalPeriod que
+     * fetch() sobre ese mismo JSON, porque es literalmente el codigo que
+     * fetch() ejecuta internamente desde v2.110. Es lo que permite
+     * reconstruir fundamentals_history desde el archivo, sin red.
+     */
+    public function testParseProduceLosMismosPeriodosQueFetchSobreElMismoPayload(): void
+    {
+        $payload = [
+            'Financials' => [
+                'Income_Statement' => ['quarterly' => [$this->income('2025-03-31', '2025-05-02')]],
+                'Balance_Sheet' => ['quarterly' => [$this->balance('2025-03-31', '2025-05-02')]],
+                'Cash_Flow' => ['quarterly' => [$this->cashFlow('2025-03-31', '2025-05-02')]],
+            ],
+            'Earnings' => ['History' => []],
+            'outstandingShares' => ['quarterly' => []],
+        ];
+
+        $periods = (new EodhdFiscalPeriodProvider('clave', new HttpClient()))->parse($payload, 'AAPL');
+
+        self::assertCount(1, $periods);
+        self::assertSame('AAPL', $periods[0]->ticker);
+        self::assertSame('2025-03-31', $periods[0]->endDate->format('Y-m-d'));
+        self::assertSame(95_359_000_000.0, $periods[0]->revenue);
+    }
+
+    public function testParseConTickerVacioLanzaExcepcion(): void
+    {
+        $this->expectException(MarketDataException::class);
+
+        (new EodhdFiscalPeriodProvider('clave', new HttpClient()))->parse(['Financials' => []], '   ');
+    }
 }

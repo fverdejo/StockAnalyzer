@@ -5609,3 +5609,51 @@ Verificado de forma independiente (no solo el informe del agente): `ddev exec ve
 ### Lo que sigue pendiente, sin tocar todavia (puntos 2-4 del plan)
 
 No se ha regenerado `fundamentals_history` (los 1,5M snapshots de `v2.109`, mal calculados, siguen tal cual en `ddev`; en la Pi tambien, sin revertir por decision del usuario). No se han archivado las respuestas crudas de EODHD, ni capturado membresias historicas de indices/delisted. Con la formula ya corregida, el siguiente paso logico es regenerar una muestra representativa, comparar contra `v2.109`, y solo despues plantear la regeneracion completa — decision pendiente de la proxima sesion.
+
+---
+
+## v2.111 - Archivo crudo de EODHD y regeneracion completa en tabla paralela, verificada y pendiente de desplegar
+
+Estado: implementado y verificado en `ddev`. **`fundamentals_history` real SIGUE sin tocar** (1.512.260 filas de `v2.109`, con el bug) — la version corregida vive en una tabla paralela a la espera de que el usuario decida el intercambio. Pi sin tocar.
+
+Objetivo: cerrar los puntos 2 y 4 de "Prioridad cero" en `roadmap.md`, ahora que la formula esta corregida (`v2.110`).
+
+### Punto 2 — Archivo crudo de EODHD, para no depender mas de la suscripcion
+
+**628/628 tickers archivados** (0 errores, ~430 MB) en la tabla nueva `eodhd_raw_fundamentals` (migracion `019`, `ticker`/`payload_json`/`payload_hash` sha256/`fetched_at`, UNIQUE por ticker) via `bin/archive-eodhd-fundamentals.php` (reanudable, 1 reintento en 429). Verificacion de integridad por hash sobre una muestra: 10/10 coinciden. `EodhdFiscalPeriodProvider::fetch()` se descompuso sin cambiar su comportamiento en `fetchRawJson()` (la llamada HTTP, sin re-codificar) + `parse()` (el cruce de los tres estados financieros, ahora reutilizable sobre un payload ya archivado, sin red) — los 10 tests existentes de la clase siguen pasando sin tocarlos, mas 4 nuevos para los metodos nuevos.
+
+Con esto, cualquier correccion futura de formula (o un campo nuevo que se quiera añadir) se puede recalcular sin volver a pagar ni pedir nada a EODHD.
+
+### Punto 4 — Regeneracion completa en tabla paralela
+
+**628/628 tickers regenerados** (0 errores), **1.511.963 filas** en `fundamentals_history_v2110` (migracion `020`, misma estructura que la tabla real), calculados con `PointInTimeFundamentalsBuilder` ya corregido y usando el JSON ya archivado (sin volver a golpear la API para esto, solo los precios de Yahoo, con su cache normal). `FundamentalsHistoryRepository` gana un parametro `$table` opcional (por defecto `fundamentals_history`, comportamiento existente intacto; validado contra una lista blanca de caracteres antes de interpolarse en SQL). **La tabla real no se ha tocado**: sigue en 1.512.260 filas, exactamente como quedo en `v2.109`.
+
+**Hallazgo operativo real, no provocado por esta tarea**: al comparar se descubrio que `fundamentals_history` (la tabla vieja) ya tenia **305/628 tickers reescritos el mismo dia con la formula corregida** — probablemente de una prueba de `bin/backfill-fundamentals.php` durante el desarrollo de `v2.110`, antes de esta sesion. Sin anclar la comparacion a una fecha fija, esos 305 tickers grandes (incluidos AAPL/MSFT/GOOGL) habrian parecido "sin cambio" y habrian escondido el tamaño real del bug. Corregido ancorando ambas tablas a `snapshot_date <= 2026-08-27` (mismo criterio point-in-time que `findAsOf()`), fecha en la que las 628 filas de la tabla vieja son garantizadamente pre-arreglo.
+
+**Informe de comparacion** (628 tickers comunes, mediana del ratio nuevo/viejo por campo):
+
+| Campo | mediana | p10 | p90 |
+|---|---|---|---|
+| PER | 0,268 | 0,180 | 0,377 |
+| ROE | 3,597 | 1,588 | 5,687 |
+| ROIC | 3,635 | 1,671 | 5,406 |
+| EV/EBITDA | 0,261 | 0,188 | 0,372 |
+| Margen neto | 0,945 | 0,459 | 1,394 |
+| Margen bruto | 0,979 | 0,763 | 1,100 |
+| Margen operativo | 0,961 | 0,582 | 1,262 |
+| Deuda/patrimonio | **1,000** | 1,000 | 1,000 |
+| Current ratio | **1,000** | 1,000 | 1,000 |
+
+Reproduce exactamente el patron documentado en `v2.110` (PER de AAPL 81,08→20,08, factor 0,248; ROE 37,25%→151,91%, factor 4,08) sobre toda la muestra: PER/EV-EBITDA caen a ~1/4, ROE/ROIC suben ~3,6-4x, margenes casi invariantes, y **deuda/patrimonio y current ratio no cambian en absoluto** (mediana exacta 1,000, cero outliers) — la prueba de control mas limpia posible de que el balance nunca se sumo entre periodos, ni antes ni despues del arreglo.
+
+**Outliers investigados** (251 de 4.229 pares campo/ticker comparados, umbral >3x la mediana del campo o cambio de signo):
+
+- **`KB` (KB Financial, ADR coreano) — dato sucio real de EODHD, no un bug de codigo**: `epsDiluted` cambia de escala entre trimestres de la misma ventana TTM (~4.453/2.034 KRW crudos en los dos trimestres mas antiguos, ~3,49/3,16 en una unidad distinta en los mas recientes), inflando la suma TTM sin sentido. Mismo tipo de anomalia ya documentada para `SAN.MC` en `v2.110`. Material para el punto 3 del plan (auditoria de calidad), no arreglado aqui.
+- **La mayoria de los demas outliers de ROE/ROIC/margenes (`IP`, `CRL`, `GPN`, `BIDU`...) son el bug revelandose, no un bug nuevo**: perdidas puntuales grandes en un trimestre concreto (`IP` -2.384M en 2025-12-31, `GPN` -1.800M en 2026-03-31, `BIDU` -11.232M en 2025-09-30) que el calculo viejo escondia por pura casualidad si ese trimestre en concreto salia positivo. El TTM correcto las saca a la luz — es exactamente el efecto esperado de arreglar el bug.
+- El resto son inestabilidad numerica de un denominador casi cero (p.ej. `PFE roic`, ratio 493x porque el valor viejo era 0,0094): ruido de division, no error de calculo.
+
+Verificado de forma independiente: `ddev exec vendor/bin/phpunit`: **423 tests, 1205 assertions, OK** (sube desde 411/1181; +12: `EodhdFiscalPeriodProviderTest` +4, `EodhdRawFundamentalsRepositoryTest` +5, `FundamentalsHistoryRepositoryAltTableTest` +3). `ddev exec vendor/bin/phpstan analyse`: sin errores (205 ficheros).
+
+### Decision pendiente del usuario: intercambiar `fundamentals_history_v2110` por la tabla real, y sincronizar con la Pi
+
+No se ha hecho. Requiere: (1) renombrar tablas en `ddev` (`fundamentals_history` → `fundamentals_history_v2109_bug`, `fundamentals_history_v2110` → `fundamentals_history`), (2) repetir en la Pi el mismo procedimiento seguro ya usado antes (copia previa, tabla intermedia, fusion o intercambio), con la salvedad de que el intento de tocar la base de datos de la Pi por SSH ya fue bloqueado una vez hoy por el clasificador de auto-mode de Claude Code — probablemente haga falta que el usuario ejecute el comando el mismo, o ajuste el permiso.

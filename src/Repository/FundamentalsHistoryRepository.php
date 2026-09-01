@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StockAnalyzer\Repository;
 
 use DateTimeImmutable;
+use InvalidArgumentException;
 use PDO;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Models\Fundamentals;
@@ -21,6 +22,16 @@ use StockAnalyzer\Models\Fundamentals;
  * Idempotente por ticker/dia, mismo patron UPSERT que
  * ScoreHistoryRepository: varias visitas el mismo dia sobrescriben en vez
  * de acumular filas.
+ *
+ * `$table` (2026-09-01, roadmap.md "Prioridad cero" punto 4) permite
+ * apuntar esta misma clase a una tabla PARALELA con identica estructura
+ * (`fundamentals_history_v2110`, migracion 020) para regenerar el
+ * historico con la formula corregida en v2.110 sin tocar ni sobrescribir
+ * `fundamentals_history`. Por defecto sigue siendo la tabla real: todo el
+ * codigo existente que instancia esta clase sin argumentos no cambia de
+ * comportamiento. El nombre se valida contra una lista blanca de
+ * caracteres antes de interpolarse en SQL — no llega nunca de un input de
+ * usuario, pero tampoco cuesta nada cerrar esa puerta.
  */
 class FundamentalsHistoryRepository
 {
@@ -54,9 +65,17 @@ class FundamentalsHistoryRepository
         'dividendGrowth5y' => 'getDividendGrowth5y',
     ];
 
+    private readonly string $table;
+
     public function __construct(
-        private readonly Connection $connection
+        private readonly Connection $connection,
+        string $table = 'fundamentals_history'
     ) {
+        if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table) !== 1) {
+            throw new InvalidArgumentException(sprintf('Nombre de tabla invalido: %s', $table));
+        }
+
+        $this->table = $table;
     }
 
     public function recordSnapshot(string $ticker, Fundamentals $fundamentals, ?DateTimeImmutable $date = null): void
@@ -73,11 +92,11 @@ class FundamentalsHistoryRepository
         );
 
         $statement = $this->connection->getPdo()->prepare(
-            'INSERT INTO fundamentals_history (ticker, snapshot_date, fundamentals_payload, created_at)
+            "INSERT INTO {$this->table} (ticker, snapshot_date, fundamentals_payload, created_at)
              VALUES (:ticker, :snapshot_date, :fundamentals_payload, NOW())
              ON DUPLICATE KEY UPDATE
                 fundamentals_payload = VALUES(fundamentals_payload),
-                created_at = NOW()'
+                created_at = NOW()"
         );
         $statement->execute([
             'ticker' => strtoupper($ticker),
@@ -99,11 +118,11 @@ class FundamentalsHistoryRepository
     public function findAsOf(string $ticker, DateTimeImmutable $date): ?array
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT fundamentals_payload
-               FROM fundamentals_history
+            "SELECT fundamentals_payload
+               FROM {$this->table}
               WHERE ticker = :ticker AND snapshot_date <= :snapshot_date
            ORDER BY snapshot_date DESC
-              LIMIT 1'
+              LIMIT 1"
         );
         $statement->execute([
             'ticker' => strtoupper($ticker),
@@ -128,7 +147,7 @@ class FundamentalsHistoryRepository
     public function countSnapshots(string $ticker): int
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT COUNT(*) FROM fundamentals_history WHERE ticker = :ticker'
+            "SELECT COUNT(*) FROM {$this->table} WHERE ticker = :ticker"
         );
         $statement->execute(['ticker' => strtoupper($ticker)]);
 

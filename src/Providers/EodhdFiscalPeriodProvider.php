@@ -18,6 +18,15 @@ use StockAnalyzer\Infrastructure\Http\HttpClient;
  * list<FiscalPeriod> de mas antiguo a mas reciente, con filingDate
  * obligatoria y los tres estados financieros completos.
  *
+ * Desde el 2026-09-01 (roadmap.md, "Prioridad cero" punto 2) fetch() se
+ * descompone en dos pasos reutilizables por separado:
+ *   - fetchRawJson(): la respuesta HTTP en crudo, para archivarla
+ *     (EodhdRawFundamentalsRepository) sin gastar cuota dos veces.
+ *   - parse(): cruza un payload ya decodificado (venga de la red o de un
+ *     archivo) en list<FiscalPeriod>, sin tocar la red.
+ * fetch() sigue siendo fetchJson() + parse(), con el mismo comportamiento
+ * de siempre.
+ *
  * Confirmado contra la API real con dos llamadas de control antes de
  * escribir esto (AAPL.US y SAN.MC, 2026-09-01):
  *
@@ -96,6 +105,74 @@ class EodhdFiscalPeriodProvider
         }
 
         $payload = $this->fetchJson($this->toEodhdSymbol($rawTicker), $rawTicker);
+
+        return $this->parse($payload, $rawTicker);
+    }
+
+    /**
+     * El JSON crudo de /api/fundamentals/{ticker}, tal cual lo devuelve
+     * EODHD, SIN transformar ni decodificar (mas alla de validar que es
+     * JSON). Existe para poder archivarlo (ver
+     * `EodhdRawFundamentalsRepository`, roadmap.md punto 2 de "Prioridad
+     * cero"): si en el futuro hace falta corregir otra formula o anadir un
+     * campo que `parse()` no extrae hoy, no hace falta volver a pagar o
+     * pedir a EODHD el mismo historico, basta con re-parsear el archivo.
+     *
+     * Comparte la misma proteccion de la API key que `fetch()`: nunca en
+     * el mensaje de error.
+     */
+    public function fetchRawJson(string $ticker): string
+    {
+        $rawTicker = strtoupper(trim($ticker));
+
+        if ($rawTicker === '') {
+            throw new MarketDataException('Ticker cannot be empty.');
+        }
+
+        $eodhdSymbol = $this->toEodhdSymbol($rawTicker);
+        $body = $this->requestBody($eodhdSymbol, $rawTicker);
+
+        // Se valida que decodifica como JSON antes de darlo por archivable
+        // (roadmap.md: "validacion de JSON antes de marcar un ticker
+        // completo"), pero se devuelve el CUERPO ORIGINAL sin re-codificar:
+        // un json_encode(json_decode(...)) podria reordenar claves o
+        // cambiar el formato numerico, y el objetivo es archivar
+        // exactamente lo que EODHD envio.
+        try {
+            $decoded = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new MarketDataException(sprintf(
+                'EODHD no devolvio JSON valido para %s: %s',
+                $rawTicker,
+                substr($body, 0, 160)
+            ), 0, $exception);
+        }
+
+        if (!is_array($decoded) || $decoded === []) {
+            throw new MarketDataException(sprintf('EODHD no devolvio datos para %s.', $rawTicker));
+        }
+
+        return $body;
+    }
+
+    /**
+     * Cruza los tres estados financieros ya decodificados (el mismo JSON
+     * que devuelve `fetchRawJson()`) en una lista de `FiscalPeriod`.
+     * Separado de `fetch()` para poder reconstruir el historico desde un
+     * payload ARCHIVADO, sin volver a golpear la red ni gastar cuota de
+     * EODHD (roadmap.md, criterio de salida del punto 2: "reconstruir
+     * fundamentals_history desde el archivo... sin red y sin suscripcion").
+     *
+     * @param array<string,mixed> $payload
+     * @return list<FiscalPeriod>
+     */
+    public function parse(array $payload, string $ticker): array
+    {
+        $rawTicker = strtoupper(trim($ticker));
+
+        if ($rawTicker === '') {
+            throw new MarketDataException('Ticker cannot be empty.');
+        }
 
         $financials = $payload['Financials'] ?? null;
 
@@ -294,9 +371,12 @@ class EodhdFiscalPeriodProvider
     }
 
     /**
-     * @return array<string,mixed>
+     * La peticion HTTP en crudo, sin decodificar: el cuerpo tal cual EODHD
+     * lo envio. Extraida de `fetchJson()` para que `fetchRawJson()` pueda
+     * archivar exactamente esto, sin pasar por un decode+encode que
+     * pudiera alterar el formato original.
      */
-    private function fetchJson(string $eodhdSymbol, string $ticker): array
+    private function requestBody(string $eodhdSymbol, string $ticker): string
     {
         $url = self::BASE_URL . rawurlencode($eodhdSymbol) . '?' . http_build_query([
             'api_token' => $this->apiKey,
@@ -321,6 +401,16 @@ class EodhdFiscalPeriodProvider
                 $status === 404 ? ' (simbolo no encontrado, revisar sufijo de bolsa)' : ''
             ));
         }
+
+        return $body;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fetchJson(string $eodhdSymbol, string $ticker): array
+    {
+        $body = $this->requestBody($eodhdSymbol, $ticker);
 
         try {
             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
