@@ -13,7 +13,7 @@ Esta seccion llevaba sin tocarse desde el `2026-07-09`, el dia en que se creo el
 
 **Se volvio a desincronizar igualmente.** El `2026-08-09` este documento seguia diciendo `v2.45`/`v2.47` con el proyecto ya en `v2.68`, o sea 23 versiones de retraso: la enumeracion version a version que habia aqui era exactamente la duplicacion que la regla de arriba prohibe, y se ha retirado. Si hace falta saber que hay implementado, la respuesta esta en `versions.md` y solo ahi.
 
-Resumen a fecha de la ultima revision (`2026-08-14`, `v2.94`): la app cubre analisis tecnico y fundamental con score por categorias, ranking por universos configurables, ficha de detalle con graficos (SMA/Bollinger/MACD/RSI), watchlist, cartera con contabilidad en euros y exportacion CSV, alertas gestionables, backtesting por umbrales y transversal, API JSON y CLI. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
+Resumen a fecha de la ultima revision (`2026-09-01`, `v2.109`): la app cubre analisis tecnico y fundamental con score por categorias, ranking diario de 628 tickers/22 universos, ficha de detalle con graficos, watchlist, cartera con contabilidad en euros, alertas, backtesting transversal, API JSON y CLI. EODHD ha permitido rellenar localmente 628/628 tickers y 1.512.260 snapshots fundamentales reconstruidos. El detalle exacto, version a version y con las limitaciones honestas de cada pieza, esta en `versions.md`; aqui no se repite.
 
 ---
 
@@ -24,6 +24,83 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 ---
 
 # Proxima tarea
+
+## Prioridad cero: corregir y conservar el historico EODHD antes de medir el motor
+
+Este bloque **manda sobre las tareas antiguas de recalibracion que aparecen mas abajo**. No se cambia `config/weights.php`, no se reactiva el bloque fundamental, no se actualiza `config/measured_edge.php` y no se sincronizan todavía los 1.512.260 snapshots de `v2.109` con la Pi hasta cerrar los puntos 1-4. No hay calendario artificial de cuatro semanas. **Orden operativo por caducidad:** ejecutar primero la captura de materia prima del punto 2 mientras la suscripcion esta activa; en paralelo o inmediatamente despues corregir el punto 1. **Orden logico de validacion:** 1 -> 3 -> 4; ningun backtest usa los datos hasta cerrar esa cadena.
+
+### 1. Corregir la semantica anual -> trimestral (bloqueante)
+
+`PointInTimeFundamentalsBuilder` se escribio para los cinco ejercicios **anuales** de FMP. `EodhdFiscalPeriodProvider` entrega trimestres, pero `FiscalPeriod` no declara la periodicidad y el builder usa el ultimo periodo como si fuera un año completo. Antes de cualquier backtest hay que demostrar y corregir, como minimo:
+
+- PER: precio / EPS de los ultimos doce meses (TTM), no precio / EPS de un trimestre.
+- FCF yield y dividend yield: flujo/dividendos TTM.
+- EV/EBITDA: EBITDA TTM y balance mas reciente conocido.
+- Margenes: numerador y ventas TTM.
+- ROE: beneficio TTM sobre patrimonio medio; ROIC: NOPAT TTM sobre capital empleado medio, con la aproximacion documentada.
+- Crecimientos: TTM contra TTM de cuatro trimestres atras (YoY), no trimestre contra trimestre. PEG solo cuando denominador y unidades sean coherentes.
+- Deuda, liquidez, patrimonio y acciones: ultimo balance publicado disponible, no suma de cuatro balances.
+
+El modelo de periodos debe expresar `annual|quarterly` (o separar DTOs/builders) para que volver a mezclar proveedores no falle en silencio. Primero hay que comprobar con varios tickers reales —EEUU, IBEX, financiera, industrial, empresa con ejercicio fiscal no natural y una OPV reciente— si EODHD entrega cada trimestre aislado o acumulado YTD. Las formulas se fijan con tests de cuatro trimestres, huecos, cambio de ejercicio fiscal, denominadores negativos y fechas de publicacion desordenadas. Una comparacion de magnitudes contra el TTM actual de una fuente independiente forma parte del criterio de aceptacion.
+
+**Criterio de salida:** ninguna formula anual consume directamente un unico trimestre; los tests demuestran que en una fecha D solo entran trimestres con `filingDate <= D`; PHPUnit y PHPStan limpios; informe de diferencias antes/despues sobre una muestra representativa. Solo entonces se regenera `fundamentals_history`.
+
+### 2. Conservar la materia prima, no solo 18 ratios derivados
+
+Durante el mes de suscripcion se debe archivar, dentro de lo permitido por la licencia personal de EODHD, la respuesta original de cada ticker antes de transformarla. Confirmar con soporte por escrito que se puede conservar tras cancelar para uso personal y que no se puede redistribuir. Nunca guardar la API key en URL, log, payload o nombre de fichero.
+
+Implementacion esperada:
+
+- Usar el endpoint recomendado `/api/v1.1/fundamentals/{ticker}` y guardar JSON comprimido, simbolo interno/EODHD, proveedor, version de esquema, `fetched_at`, hash y estado de descarga.
+- Crear almacenamiento normalizado de periodos fiscales con clave estable (`ticker`, `period_end`, `period_type`, `filing_date`, `source`) y las cuentas brutas necesarias. Incluir moneda/unidad y procedencia. No depender exclusivamente de una fila JSON diaria ya derivada.
+- Hacer la ingesta reanudable e idempotente; manifest de esperados/obtenidos/fallidos; reintentos con backoff; validacion de JSON antes de marcar un ticker completo.
+- Poder reconstruir `fundamentals_history` desde el archivo/tabla de periodos **sin red y sin suscripcion**. El historico diario es una vista materializada regenerable; los estados y periodos originales son la fuente de verdad.
+- Corregir la telemetria de cuota: una descarga HTTP de Fundamentals cuesta actualmente 10 unidades de API, aunque `CALLS_PER_TICKER` cuente una peticion HTTP. Informar ambas cifras y no prometer 628/100.000 cuando el consumo real aproximado es 6.280/100.000.
+
+**Criterio de salida:** 628/628 respuestas archivadas y verificadas por hash; restauracion de prueba en una base vacia que reconstruya una muestra sin llamar a EODHD; informe de campos ausentes, cobertura temporal y anomalías por ticker.
+
+### 3. Auditoria de calidad y limitaciones point-in-time
+
+La presencia de `filing_date` evita usar un informe antes de publicarse, pero no garantiza por si sola datos historicos de primera publicacion: EODHD podria devolver hoy cifras antiguas reformuladas posteriormente. Consultar/documentar si las series son *as reported* o la ultima version restatada. Si no hay vintages, etiquetar el backtest como `filing-date point-in-time, restatement-safe=false`; no afirmar que esta completamente libre de look-ahead.
+
+Automatizar un informe de calidad con: `filing_date < period_end`, duplicados, saltos de moneda/unidad, huecos de mas de dos trimestres, shares/deuda negativos, margenes/ratios extremos, diferencias de calendario fiscal y cobertura TTM real por fecha. Un snapshot diario cuenta como cubierto solo si todos los periodos necesarios para su TTM estaban publicados entonces; el respaldo con datos actuales nunca se mezcla silenciosamente y siempre reduce la cobertura publicada.
+
+### 4. Regenerar, comparar y desplegar con una ruta reversible
+
+No borrar ni sobrescribir a ciegas el historico actual. Construir el nuevo resultado en tabla/version paralela, conservar `source`, `formula_version` y cobertura, y comparar distribuciones por ticker/sector/fecha con `v2.109`. Investigar outliers antes del intercambio. La sincronizacion a la Pi requiere copia previa, tabla intermedia, conteos/hashes y rollback probado; sigue necesitando confirmacion explicita del usuario por ser produccion.
+
+## Segundo bloque: eliminar el sesgo de supervivencia mientras la suscripcion esta activa
+
+Una vez asegurada la materia prima de los 628 actuales, el dato externo mas valioso no es otro ratio sino saber que empresas existian realmente en cada fecha.
+
+1. Archivar `HistoricalTickerComponents` de `GSPC.INDX`, `MID.INDX`, `SML.INDX` y `OEX.INDX`; para S&P 500 archivar tambien los snapshots `historical=1`. La cobertura util se considera desde 2012; las reconstrucciones anteriores se etiquetan incompletas.
+2. Crear un repositorio de membresia con `ticker`, indice, `start_date`, `end_date`, estado activo/delisted y simbolo original. Incorporar historial de cambios de ticker de EEUU.
+3. Formar el universo de antiguos componentes que no esta en los 628 actuales y descargar, mientras haya acceso, sus fundamentales originales. Priorizar antiguos componentes S&P 500/400/600 frente a descargar indiscriminadamente decenas de miles de delistadas.
+4. Probar primero si el plan contratado autoriza EOD historico, dividendos y splits. Si lo autoriza, archivar esos datos para los antiguos componentes; si no, documentar el hueco y buscar una fuente compatible. Una accion sin precios posteriores suficientes no se cuenta como muestra util.
+5. Hacer que el backtest transversal acepte un universo point-in-time. En una fecha D solo puede elegir valores miembros en D y con datos conocidos en D. Medir y publicar cobertura, bajas por falta de precio/fundamentales y cuantos delisted participan.
+
+**Criterio de salida:** backtest reproducible del S&P 500 desde 2012 usando miembros de cada fecha, incluyendo antiguos miembros, con pruebas que fallen si se cuela un componente futuro o se conserva uno despues de su salida.
+
+## Tercer bloque: nueva investigacion del motor, despues de los datos
+
+Preparar el protocolo antes de mirar resultados y congelar un tramo cronologico final que se consulte una sola vez. No trasladar una señal a produccion por mejorar una media aislada.
+
+- Baselines obligatorios: aleatorio dentro del mismo universo/fecha, indice, momentum 12-1 solo, fundamentales solos, modelo actual solo-tecnico y combinacion propuesta.
+- Familias fundamentales pequeñas y no redundantes: valoracion (`earnings yield`, FCF yield, EV/EBITDA), calidad (ROIC, margen bruto, conversion beneficio-caja, accruals, deuda), crecimiento/cambio (TTM YoY de ventas/EPS/FCF, variacion de margen/ROIC/deuda). Normalizar por fecha y sector; no recuperar sin evidencia umbrales universales tipo PER < 18.
+- Investigar Earnings History/Calendar Trends por separado: sorpresa real frente a estimacion y revisiones a 7/30/60/90 dias solo si su timestamp permite reconstruccion historica honesta. No tratar la estimacion disponible hoy como si hubiera existido años atras.
+- Medidas: rank IC, spread de deciles, alpha top-N pareada por fecha, win rate, turnover, costes, drawdown y estabilidad por año/sector/region. Horizontes 20/60/120 sesiones y ejecucion en la siguiente barra, no al cierre que genera la señal.
+- Particion cronologica entrenamiento/validacion/test; seleccion de variables y umbrales solo con entrenamiento/validacion. El test final no se reutiliza para iterar. Corregir por pruebas multiples y exigir consistencia en mas de un universo/regimen, no solo `p < 0,05` aislado.
+- Empezar por ranks/reglas transparentes y un modelo lineal regularizado como contraste. No introducir ML complejo hasta que una base sencilla tenga ventaja fuera de muestra.
+
+**Condicion para produccion:** alpha fuera de muestra positiva despues de costes, direccion consistente entre periodos/universos, cobertura suficiente y mejora material frente al baseline simple. Si no se cumple, los fundamentales siguen informativos y con peso 0. `config/measured_edge.php` debe describir exactamente el modelo que ve el usuario.
+
+## Cuarto bloque: hacer util la recomendacion sin exagerar lo medido
+
+- Separar `no abrir/evitar` para quien no tiene posicion de `mantener/reducir/salir` para quien ya la tiene. Un `SELL` tecnico no ordena por si solo liquidar una posicion sin considerar entrada, horizonte, impuestos, concentracion y riesgo.
+- Mostrar horizonte, fecha/calidad de datos y evidencia historica de señales comparables; el porcentaje actual es una puntuacion relativa, no una probabilidad, y no debe presentarse como tal.
+- Mantener una estrategia candidata en modo sombra antes de usarla: guardar recomendacion, version de formula, universo y precio de ejecucion teorico sin modificar operaciones del usuario.
+- Para investigacion se puede añadir Python + DuckDB/Parquet como laboratorio reproducible; PHP sigue siendo el runtime de la aplicacion. No migrar de lenguaje salvo que aparezca una limitacion concreta y medida.
+- Antes de cancelar EODHD: repetir manifiestos, reintentar fallos, verificar backups/restauracion, documentar endpoints/formatos/licencia y confirmar que toda reconstruccion necesaria funciona sin red.
 
 ## Conseguir que el score ordene en el sentido correcto
 

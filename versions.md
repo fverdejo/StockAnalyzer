@@ -5527,3 +5527,52 @@ Todo `ibex35` y los `_adr` (bloqueados en bloque por FMP) tienen ahora historial
 Verificado: `ddev exec vendor/bin/phpunit`: **404 tests, 1145 assertions, OK** (sube desde 394/1115). `ddev exec vendor/bin/phpstan analyse`: sin errores.
 
 **Pendiente, explicito**: sincronizar `fundamentals_history` con la Pi (mismo procedimiento seguro de `v2.93`: copia previa, tabla intermedia, fusion por `UNIQUE(ticker, snapshot_date)`) requiere confirmacion del usuario antes de tocar su base de datos de produccion — no se ha hecho todavia.
+
+---
+
+## 2026-09-01 (segunda entrada) - Plan de aprovechamiento de EODHD y correccion previa al siguiente backtest
+
+Estado: plan acordado y documentado; sin cambios de codigo en esta entrada.
+
+El usuario pide que quede preparado para Claude el trabajo necesario para aprovechar el mes de EODHD tan rapido como sea seguro, sin repartirlo artificialmente en cuatro semanas. La secuencia, criterios de aceptacion y tareas opcionales quedan en la nueva seccion **"Prioridad cero: corregir y conservar el historico EODHD antes de medir el motor"** al principio de `roadmap.md`. Esta entrada conserva el porqué y las decisiones que no deben perderse entre sesiones.
+
+### Hallazgo bloqueante: el constructor anual recibe trimestres
+
+La integracion de `v2.109` funciona mecanicamente y tiene cobertura excelente, pero descubre una incompatibilidad semantica que sus tests de proveedor no ejercitan. `PointInTimeFundamentalsBuilder` nacio sobre `FmpFiscalPeriodProvider::PERIOD = 'annual'`; toma un `FiscalPeriod` como ejercicio completo. `EodhdFiscalPeriodProvider` entrega periodos `quarterly` y `FiscalPeriod` no expresa la periodicidad. Por tanto, el relleno actual puede calcular PER con EPS de un trimestre, FCF/dividend yield y EV/EBITDA con flujos trimestrales, ROE sin anualizar y crecimiento contra el trimestre inmediatamente anterior. Que haya 1.512.260 filas no corrige la unidad de la formula.
+
+Decision: **no usar todavia esos snapshots para recalibrar, no reactivar fundamentales, no actualizar `measured_edge.php` y no sincronizarlos con la Pi**. Primero se valida si los valores EODHD son trimestre aislado o YTD y se implementa TTM point-in-time: cuatro trimestres ya publicados para flujos, ultimo balance publicado para stocks, crecimientos TTM interanuales y medias de capital donde corresponda. El modelo de dominio debe impedir que anual y trimestral vuelvan a mezclarse en silencio. El historico se regenera en paralelo y se compara antes de sustituir nada.
+
+### El activo que hay que conservar durante la suscripcion
+
+`fundamentals_history` solo conserva 18 ratios derivados y `EodhdFiscalPeriodProvider` descarta el resto del JSON despues de convertirlo a `FiscalPeriod`. Eso obliga a volver a la red cada vez que se corrige una formula o se incorpora una cuenta nueva. Durante la suscripcion se archivara la respuesta original (endpoint recomendado v1.1), con hash, version, fecha, simbolo y manifest de cobertura, y se creara una tabla normalizada de periodos/cuentas brutas desde la que pueda reconstruirse el historico sin EODHD. La licencia y la retencion tras cancelar se confirmaran con soporte por escrito; los datos son para uso personal y no se redistribuyen.
+
+Correccion de contabilidad de cuota anotada para la implementacion: una llamada HTTP de Fundamentals trae todo un ticker pero la documentacion actual la carga como **10 unidades de API**, por lo que los 628 tickers equivalen aproximadamente a 6.280/100.000 unidades diarias, no 628/100.000. Hay margen de sobra, pero el CLI debe distinguir peticiones HTTP de unidades de cuota.
+
+### Segundo activo: universos historicos y delisted
+
+El siguiente uso prioritario de EODHD es eliminar el sesgo de supervivencia. Se archivaran las membresias historicas de S&P 500/400/600/100, los snapshots point-in-time disponibles del S&P 500, cambios de ticker y los fundamentales de antiguos componentes que no estan entre los 628 actuales. Se prioriza esta poblacion relevante frente a descargar todas las delisted de EEUU sin criterio. Precios, dividendos y splits de esos valores se descargaran solo despues de confirmar que el plan concreto da acceso; sin precio no se declarara una muestra valida. El backtest debe seleccionar en cada fecha solo miembros de aquella fecha y publicar su cobertura.
+
+### Investigacion y producto, solo despues
+
+Con TTM correcto y universo point-in-time se repetira la investigacion con protocolo escrito antes de mirar el test: baselines simples, ranks fundamentales por fecha/sector, momentum separado, familias no redundantes de valor/calidad/crecimiento, horizontes 20/60/120, siguiente barra, costes, particion cronologica y test final de un solo uso. Earnings surprise y revisiones de consenso se investigaran solo si sus timestamps permiten reconstruccion honesta. Ninguna mejora media aislada cambia pesos.
+
+La promocion exige ventaja fuera de muestra positiva despues de costes y consistente entre periodos/universos. Si no aparece, fundamentales permanecen visibles con peso 0. En producto se separara "no entrar" de "salir/reducir" segun exista posicion, se mostrara horizonte/calidad/evidencia y se probara cualquier estrategia candidata en modo sombra. PHP se mantiene; Python + DuckDB/Parquet queda autorizado como laboratorio, no como reescritura de la aplicacion.
+
+### Orden de ejecucion para la siguiente sesion
+
+1. Confirmar licencia/retencion y documentar la respuesta de soporte (accion del usuario si exige hablar con EODHD).
+2. Archivar respuestas v1.1 de los 628 con manifest, hashes e ingesta reanudable.
+3. Modelar periodicidad y cuentas brutas; validar unidad EODHD; implementar TTM con tests.
+4. Regenerar snapshots en paralelo, auditar calidad y comparar con `v2.109`.
+5. Capturar membresias historicas, antiguos componentes, cambios de simbolo y datos asociados accesibles.
+6. Implementar universo point-in-time y pruebas contra entradas/salidas futuras.
+7. Ejecutar el protocolo cuantitativo; decidir con el test congelado.
+8. Solo con datos validados y confirmacion del usuario: backup, sincronizacion reversible a Pi y modo sombra.
+
+### Nota sobre la sincronizacion ya hecha con la Pi (mismo dia, antes de leer este plan)
+
+La sincronizacion de `v2.109` con la Pi (1.512.260 filas) se ejecuto **antes** de que Claude leyera este analisis — Codex lo escribio mientras esa sincronizacion ya estaba en marcha. Verificado el bug de forma independiente contra `PointInTimeFundamentalsBuilder.php`: correcto, PER/ROE/ROIC/EV-EBITDA y los crecimientos usan directamente el ultimo `FiscalPeriod`, que con EODHD es un trimestre, no un año — estan distorsionados (aprox. 4x en las magnitudes de flujo). Las metricas de balance (deuda/patrimonio, capitalizacion, P/VC, liquidez) no dependen de periodicidad y no estan afectadas.
+
+**Decision del usuario**: no revertir la Pi ahora. La tabla sincronizada no interfiere con nada en produccion (`fundamentals_history` solo alimenta backtesting, nunca el ranking/Score en vivo que ve el usuario hoy), y el mecanismo de sincronizacion es UPSERT por `(ticker, snapshot_date)` — cuando se corrija la formula y se regenere, la resincronizacion sobrescribira estas filas automaticamente sin necesitar deshacer nada antes. Se prioriza cerrar el punto 1 (la correccion bloqueante) sobre revertir. Copia de seguridad conservada en la Pi (`fundamentals_history_backup_20260901`, 53.783 filas, intacta) por si hiciera falta mas adelante.
+
+Nota tecnica aparte: el intento de revertir via `RENAME TABLE` fue bloqueado por el clasificador de auto-mode de Claude Code (mutacion de base de datos de produccion por SSH), incluso con confirmacion explicita del usuario en el chat — requeriria que el usuario ejecute el comando el mismo o ajuste el permiso. Sin urgencia real dado lo del parrafo anterior, se deja documentado y no se persigue mas por ahora.
