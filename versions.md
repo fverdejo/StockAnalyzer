@@ -5484,3 +5484,15 @@ Tras aclarar el usuario que S&P500/Nasdaq100 no eran para la pregunta de investi
 Nota de sesgo de supervivencia (listas de HOY, `roadmap.md` linea 68) documentada en el propio comentario de cada universo nuevo, mismo criterio que el resto del fichero.
 
 Verificado: `ddev exec vendor/bin/phpunit`: **394 tests, 1115 assertions, OK**. `ddev exec vendor/bin/phpstan analyse`: sin errores. `php -l config/universes.php`: sin errores de sintaxis.
+
+---
+
+## v2.108 - Cron `--all-universes` instalado en la Pi, verificado en produccion real
+
+Estado: instalado y verificado.
+
+El usuario pide instalar en la Pi el cron `--all-universes` diseñado en `v2.105`. Cambios en `stockanalyzer-analyze.service`: `ExecStart` pasa de `--universe=largecap60` a `--all-universes`, `TimeoutStartSec` sube de 1800 a 3600 (margen de seguridad ante el salto de 305 a 628 tickers). Codigo desplegado con `git pull --ff-only` (la Pi estaba 4 commits por detras, `v2.104` a `v2.107` sin sincronizar — empujados a `origin/dev` antes de desplegar) mas `composer install --no-dev --optimize-autoloader`.
+
+**Ejecutado a mano una vez para medir tiempo real antes de fiarse del horario nocturno** (mismo criterio que se aplico al cron de verificacion de universos el `2026-08-25`): **628/628 tickers OK, 0 errores, 22 rankings guardados** (uno por universo, incluidos los nuevos `sp500` 503, `nasdaq100` 102, y los tres `_adr` — `china_adr` 19, `asia_pacific_adr` 21, `latam_adr` 26 — confirmando que ya se analizan a diario sin intervencion). **Duracion real: 8 minutos 37 segundos** (13:26:46 a 13:35:23), muy por debajo de la estimacion conservadora de `v2.105` (5-15 min para 305 tickers, se temia mas para 628) y con margen de sobra antes del `stockanalyzer-backup.timer` de las 23:30 — **no hace falta adelantar el horario de las 23:00**, la preocupacion de colision con el backup no se materializa.
+
+`bin/verify-universes.php` ejecutado tambien contra la config real (628 tickers, incluidos los `_adr` sin visitar desde `2026-07-31`): **628/628 OK, 0 tickers no encontrados, 0 rate-limited**. Los universos `china_adr`/`asia_pacific_adr`/`latam_adr` quedan asi confirmados como usables hoy mismo, ademas de analizados a diario por el cron nuevo — es la "activacion" que pedia el usuario, sin necesitar codigo nuevo: ya estaban seleccionables en el desplegable del Home (`DashboardPage::renderUniverseOptions()` lista todo `config/universes.php` sin filtro), solo faltaba que se analizaran y verificaran de forma regular.
