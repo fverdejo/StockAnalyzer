@@ -5442,3 +5442,25 @@ Añadida por `analista-mercado`: universo **small/mid-cap EEUU** o activar `chin
 ### Decision: contratar EODHD Fundamentals Data Feed, un mes
 
 El usuario confirma que pagara **EODHD Fundamentals Data Feed** ($59,99/mes) para desbloquear el relleno de `fundamentals_history`, tras confirmar con soporte de EODHD que `SAN.MC` (uno de los pesos pesados del IBEX) tiene fundamentales hasta 1987, con "comparable length where possible" para el resto — descarta el riesgo de caer en el tramo "minor companies" (6 años/20 trimestres) que habia hecho dudar de la opcion. Confirmado tambien por codigo (no solo argumentado) que el relleno es una operacion de un solo mes sin dependencia posterior: `bin/backfill-fundamentals.php` escribe de forma permanente en MySQL, el cron diario nunca toca FMP/EODHD, y `fundamentals_history` sigue creciendo solo hacia adelante via Yahoo en cada visita a una ficha (`Application.php:393`) independientemente de cualquier proveedor de pago. Pendiente: el propio usuario contrata (accion suya, no de Claude); cuando este activo, preparar el comando exacto para aprovechar el mes al maximo (100.000 llamadas/dia de EODHD frente a las 250/dia de FMP) antes de cancelar.
+
+**Aclaracion del mismo dia sobre el alcance de S&P500/Nasdaq100**: el usuario no los pedia por la pregunta de investigacion (universo independiente), sino para poder **filtrarlos en el Home** como cualquier otro universo curado — el mismo uso que ya tiene `ibex35`. Cambia la decision: la objecion de `analista-mercado` (mismo regimen de mercado, no aporta independencia estadistica) sigue siendo cierta pero deja de ser el criterio relevante; el hallazgo de `fiabilidad-datos-mercado` (cobertura real nueva de Utilities/Real Estate/Materials, viable con Wikipedia + EODHD sin problema de limite) pasa a ser la razon que importa. Se procede a curar S&P500 y Nasdaq100 como universos nuevos.
+
+---
+
+## v2.106 - El beneficio de una compra en el historial de operaciones salia identico al de su venta
+
+Estado: implementado y verificado.
+
+Objetivo:
+
+El usuario reporta un fallo real con capturas: en "Historial de operaciones" (Mi cartera), tanto la fila de Compra como la de Venta de una misma operacion cerrada mostraban **exactamente el mismo beneficio** (`-20,05 $ (-10,02%)` en los dos, ejemplo con `JCI`). Su expectativa: el dia de la compra el beneficio deberia ser 0 (comprar no genera ganancia ni perdida por si sola), y el dia de la venta esta bien que se vea la rentabilidad real.
+
+Investigado antes de tocar codigo: no era un bug de calculo, era un diseño ya documentado (y reafirmado en `v2.97`, con un test que lo fijaba explicitamente) que nadie habia reconsiderado tras esa misma correccion. `Portfolio::getTransactionProfit()` comparaba una **compra** contra el precio de mercado de HOY ("como le iria a esta compra si se sigue el precio hasta ahora"), mientras que una **venta** comparaba contra el coste medio real (arreglado en `v2.97`, antes tenia el mismo problema que se describe abajo). Para una posicion ya cerrada del todo, "precio de hoy" para la pata de compra coincide (o casi) con el precio de venta reciente, asi que las dos filas mostraban el mismo numero — exactamente lo que el usuario vio y correctamente interpreto como un fallo, aunque la causa fuera una decision de diseño de dos versiones atras nunca revisada para el caso de posicion cerrada.
+
+**Cambio**: `Portfolio::getTransactionProfit()`/`getTransactionProfitPercent()` devuelven siempre `0.0` para una compra, sin comparar contra el precio de hoy. La venta no cambia (sigue comparando contra el coste medio en el momento exacto de venderse). El dato de "como le va a una posicion todavia abierta si se sigue el precio hasta hoy" no se pierde: ya vive sin ambiguedad en "Beneficio latente" / "Posiciones abiertas", las tarjetas de arriba en la misma pagina — tenerlo tambien por operacion en el historial era una segunda fuente del mismo dato, calculada de otra forma, y la causa real de la confusion.
+
+Nota de la tabla actualizada (`PortfolioPage.php`) para reflejar el nuevo comportamiento: "una compra siempre muestra 0... una venta muestra lo ganado o perdido de verdad... el rendimiento de una posicion todavia abierta se ve en 'Beneficio latente'". `PortfolioCsvExporter.php` no necesito cambios (usa el mismo metodo del modelo).
+
+Test actualizado: `tests/Models/PortfolioTransactionProfitTest.php` — el caso que antes fijaba "la compra compara contra el precio de hoy" se sustituye por dos casos que fijan "la compra siempre es 0", con precio de hoy subiendo y bajando. Los tres casos de venta (beneficio real, perdida real, sin coste medio conocido → null) no cambian, siguen en verde.
+
+Verificado: `ddev exec vendor/bin/phpunit`: **394 tests, 1115 assertions, OK** (sube desde 393/1113). `ddev exec vendor/bin/phpstan analyse`: sin errores.

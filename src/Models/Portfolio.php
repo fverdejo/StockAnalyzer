@@ -58,55 +58,45 @@ class Portfolio
     }
 
     /**
-     * Beneficio o perdida de una operacion concreta. Compras y ventas
-     * responden a preguntas distintas, asi que se calculan distinto desde
-     * `v2.97` (antes las dos comparaban contra el precio de mercado de
-     * HOY, ver versions.md v2.6):
+     * Beneficio o perdida de una operacion concreta, en el "Historial de
+     * operaciones". Compras y ventas responden a preguntas distintas:
      *
-     * - **Compra**: (precio_actual - precio_de_compra) * cantidad — como
-     *   le habria ido a ESTA compra concreta si se sigue el precio hasta
-     *   hoy, se haya vendido ya o no.
+     * - **Compra**: siempre 0 — es un log de lo que paso EN esa operacion,
+     *   y comprar no genera ganancia ni perdida por si solo. Hasta
+     *   `v2.105` comparaba contra el precio de mercado de hoy ("como le
+     *   iria a esta compra si se sigue el precio hasta ahora"), pero eso
+     *   duplicaba de forma confusa el beneficio realizado de una venta ya
+     *   cerrada de la misma operacion (mismo numero en las dos filas,
+     *   ver versions.md v2.105) y, para una posicion todavia abierta, ya
+     *   se ve sin ambiguedad en "Beneficio latente" / "Posiciones
+     *   abiertas" mas arriba en la misma pagina — no hacia falta un
+     *   segundo sitio con el mismo dato calculado de otra forma.
      * - **Venta**: (precio_de_venta - coste_medio_en_ese_momento) *
      *   cantidad — el beneficio REALIZADO de verdad al vender, contra lo
-     *   que costaron esas acciones, no contra el precio de hoy. Comparar
-     *   una venta con el precio actual no dice si se gano dinero, dice si
-     *   se vendio antes o despues del mejor momento — una pregunta
-     *   distinta, y la causa de que toda venta reciente mostrara
-     *   "0,00 (0,00%)" sin serlo: el precio de hoy y el precio de venta de
-     *   hace un minuto son practicamente el mismo numero.
+     *   que costaron esas acciones (`v2.97`, ver versions.md v2.6: antes
+     *   comparaba contra el precio de hoy, que no dice si se gano dinero,
+     *   dice si se vendio antes o despues del mejor momento).
      */
     public function getTransactionProfit(Transaction $transaction): ?float
     {
-        if ($transaction->getType() === TransactionType::SELL) {
-            $costBasis = $this->costBasisByTransactionId[$transaction->getId()] ?? null;
-
-            return $costBasis === null ? null : $transaction->getQuantity() * ($transaction->getPrice() - $costBasis);
+        if ($transaction->getType() !== TransactionType::SELL) {
+            return 0.0;
         }
 
-        $currentPrice = $this->getCurrentPriceFor($transaction->getTicker());
+        $costBasis = $this->costBasisByTransactionId[$transaction->getId()] ?? null;
 
-        if ($currentPrice === null) {
-            return null;
-        }
-
-        return $transaction->getQuantity() * ($currentPrice - $transaction->getPrice());
+        return $costBasis === null ? null : $transaction->getQuantity() * ($transaction->getPrice() - $costBasis);
     }
 
     public function getTransactionProfitPercent(Transaction $transaction): ?float
     {
-        if ($transaction->getType() === TransactionType::SELL) {
-            $costBasis = $this->costBasisByTransactionId[$transaction->getId()] ?? null;
-
-            return ($costBasis === null || $costBasis <= 0) ? null : (($transaction->getPrice() / $costBasis) - 1) * 100;
+        if ($transaction->getType() !== TransactionType::SELL) {
+            return 0.0;
         }
 
-        $currentPrice = $this->getCurrentPriceFor($transaction->getTicker());
+        $costBasis = $this->costBasisByTransactionId[$transaction->getId()] ?? null;
 
-        if ($currentPrice === null || $transaction->getPrice() <= 0) {
-            return null;
-        }
-
-        return (($currentPrice / $transaction->getPrice()) - 1) * 100;
+        return ($costBasis === null || $costBasis <= 0) ? null : (($transaction->getPrice() / $costBasis) - 1) * 100;
     }
 
     /**

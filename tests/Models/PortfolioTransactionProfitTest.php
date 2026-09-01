@@ -11,15 +11,24 @@ use StockAnalyzer\Models\Portfolio;
 use StockAnalyzer\Models\Transaction;
 
 /**
- * `Portfolio::getTransactionProfit()`/`getTransactionProfitPercent()`
- * (v2.97): antes de esta correccion, una VENTA se comparaba contra el
- * precio de mercado de HOY, la misma regla que una compra. Para una venta
- * reciente eso es casi siempre ~0 (el precio de venta y el de hoy son
- * practicamente el mismo numero), aunque la operacion se hubiera cerrado
- * con beneficio o perdida real frente a lo que costaron esas acciones —
- * que es la pregunta que de verdad importa al vender. Estos casos fijan
- * la correccion: compra sigue comparando contra el precio de hoy, venta
- * pasa a comparar contra el coste medio en el momento exacto de venderse.
+ * `Portfolio::getTransactionProfit()`/`getTransactionProfitPercent()`.
+ *
+ * La venta se corrigio en `v2.97`: antes se comparaba contra el precio de
+ * mercado de HOY, la misma regla que una compra. Para una venta reciente
+ * eso es casi siempre ~0 (el precio de venta y el de hoy son practicamente
+ * el mismo numero), aunque la operacion se hubiera cerrado con beneficio o
+ * perdida real frente a lo que costaron esas acciones — que es la pregunta
+ * que de verdad importa al vender. Pasa a comparar contra el coste medio
+ * en el momento exacto de venderse.
+ *
+ * La compra se corrigio en `v2.105`: hasta entonces comparaba contra el
+ * precio de mercado de hoy ("como le iria a esta compra si se sigue el
+ * precio hasta ahora"), lo que para una compra ya vendida por completo
+ * duplicaba de forma confusa el mismo numero que el beneficio realizado
+ * de su venta (bug real reportado por el usuario). Una compra pasa a
+ * mostrar siempre 0: es un log de lo que paso EN esa operacion, y comprar
+ * no genera ganancia ni perdida por si solo; el rendimiento de una
+ * posicion todavia abierta ya se ve sin ambiguedad en "Beneficio latente".
  */
 final class PortfolioTransactionProfitTest extends TestCase
 {
@@ -28,13 +37,22 @@ final class PortfolioTransactionProfitTest extends TestCase
         return new Transaction($id, 1, 'ADBE', $type, $quantity, $price, new DateTimeImmutable('2026-08-21 20:25:00'));
     }
 
-    public function testElBeneficioDeUnaCompraSigueComparandoConElPrecioDeHoy(): void
+    public function testElBeneficioDeUnaCompraSiempreEsCeroAunqueElPrecioDeHoyHayaSubido(): void
     {
         $compra = $this->transaction(1, TransactionType::BUY, 10.0, 100.0);
         $portfolio = new Portfolio([], [$compra], 0.0, ['ADBE' => 120.0], ['ADBE' => 'USD']);
 
-        self::assertSame(200.0, $portfolio->getTransactionProfit($compra));
-        self::assertEqualsWithDelta(20.0, $portfolio->getTransactionProfitPercent($compra), 0.0001);
+        self::assertSame(0.0, $portfolio->getTransactionProfit($compra));
+        self::assertSame(0.0, $portfolio->getTransactionProfitPercent($compra));
+    }
+
+    public function testElBeneficioDeUnaCompraSiempreEsCeroAunqueElPrecioDeHoyHayaBajado(): void
+    {
+        $compra = $this->transaction(1, TransactionType::BUY, 10.0, 100.0);
+        $portfolio = new Portfolio([], [$compra], 0.0, ['ADBE' => 60.0], ['ADBE' => 'USD']);
+
+        self::assertSame(0.0, $portfolio->getTransactionProfit($compra));
+        self::assertSame(0.0, $portfolio->getTransactionProfitPercent($compra));
     }
 
     /**
