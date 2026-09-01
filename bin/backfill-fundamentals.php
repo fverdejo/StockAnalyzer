@@ -10,6 +10,7 @@ use StockAnalyzer\DTO\FiscalPeriod;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
+use StockAnalyzer\Providers\EodhdFiscalPeriodProvider;
 use StockAnalyzer\Providers\FmpFiscalPeriodProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Repository\FundamentalsHistoryRepository;
@@ -22,7 +23,8 @@ use StockAnalyzer\Utils\TickerNormalizer;
  *
  * Cruza dos fuentes que ya existen por separado:
  *
- *  - los ejercicios contables de FMP, **con su fecha de publicacion**;
+ *  - los ejercicios contables del proveedor de fundamentales elegido
+ *    (`--provider=fmp|eodhd`), **con su fecha de publicacion**;
  *  - el historico diario de precios que ya esta cacheado de Yahoo.
  *
  * Para cada dia de cotizacion escribe los `Fundamentals` que se conocian
@@ -35,23 +37,33 @@ use StockAnalyzer\Utils\TickerNormalizer;
  *   php bin/backfill-fundamentals.php --universe=largecap60
  *   php bin/backfill-fundamentals.php --tickers="AAPL MSFT" --dry-run
  *   php bin/backfill-fundamentals.php --all-universes --max-tickers=80
+ *   php bin/backfill-fundamentals.php --provider=eodhd --all-universes
  *
  * Opciones:
+ *   --provider=fmp|eodhd  fuente de los ejercicios contables (por defecto
+ *                        `fmp`, para no romper nada existente). `eodhd`
+ *                        (`EodhdFiscalPeriodProvider`) es de pago, da
+ *                        historico trimestral profundo (decadas) en una
+ *                        sola llamada por ticker, y cubre tambien tickers
+ *                        no estadounidenses (`.MC` y demas).
  *   --universe=CLAVE     universo de config/universes.php
  *   --tickers="A B C"    lista explicita (manda sobre --universe)
  *   --all-universes      todos los tickers de todos los universos
  *   --max-tickers=N      corta ahi. El plan gratuito de FMP son 250
  *                        llamadas/dia y cada ticker cuesta 3, asi que
- *                        ~80 tickers agotan la cuota diaria.
+ *                        ~80 tickers agotan la cuota diaria (con `eodhd`
+ *                        cada ticker cuesta 1 llamada HTTP).
  *   --history=RANGO      rango de precios a pedir (por defecto 10y)
  *   --skip-existing      no reprocesa tickers que ya tengan historico
  *                        anterior a hoy (reanudacion entre dias)
  *   --dry-run            calcula y resume, sin escribir en la base
  *
- * Los tickers no estadounidenses fallan con un mensaje claro del plan
- * gratuito y no detienen el recorrido: se cuentan y se siguen.
+ * Con `--provider=fmp`, los tickers no estadounidenses fallan con un
+ * mensaje claro del plan gratuito y no detienen el recorrido: se cuentan y
+ * se siguen.
  */
 $options = getopt('', [
+    'provider::',
     'universe::',
     'tickers::',
     'all-universes',
@@ -98,17 +110,30 @@ if ($maxTickers > 0) {
     $tickers = array_slice($tickers, 0, $maxTickers);
 }
 
+$providerName = is_string($options['provider'] ?? null) ? strtolower((string) $options['provider']) : 'fmp';
+
+if (!in_array($providerName, ['fmp', 'eodhd'], true)) {
+    fwrite(STDERR, "Proveedor desconocido: '$providerName'. Usa --provider=fmp o --provider=eodhd." . PHP_EOL);
+    exit(1);
+}
+
 $providerConfig = (new ProviderConfig())->load();
-$apiKey = (string) ($providerConfig['providers']['financial_modeling_prep']['api_key'] ?? '');
+$configKey = $providerName === 'eodhd' ? 'eodhd' : 'financial_modeling_prep';
+$apiKey = (string) ($providerConfig['providers'][$configKey]['api_key'] ?? '');
 
 if ($apiKey === '') {
-    fwrite(STDERR, 'Falta la API key de Financial Modeling Prep en config/provider.local.php' . PHP_EOL);
-    fwrite(STDERR, "Añade: 'financial_modeling_prep' => ['api_key' => '...']" . PHP_EOL);
+    fwrite(STDERR, "Falta la API key de '$configKey' en config/provider.local.php" . PHP_EOL);
+    fwrite(STDERR, "Añade: '$configKey' => ['api_key' => '...']" . PHP_EOL);
     exit(1);
 }
 
 $connection = new Connection();
-$fiscalPeriods = new FmpFiscalPeriodProvider($apiKey);
+$fiscalPeriods = $providerName === 'eodhd'
+    ? new EodhdFiscalPeriodProvider($apiKey)
+    : new FmpFiscalPeriodProvider($apiKey);
+$callsPerTicker = $providerName === 'eodhd'
+    ? EodhdFiscalPeriodProvider::CALLS_PER_TICKER
+    : FmpFiscalPeriodProvider::CALLS_PER_TICKER;
 $history = new FundamentalsHistoryRepository($connection);
 try {
     // Argumento con nombre: el rango es el CUARTO parametro del
@@ -125,7 +150,8 @@ $prices = new CachedMarketDataProvider(
 );
 
 printf(
-    "Relleno historico de fundamentales%s%s%s tickers, precios %s%s",
+    "Relleno historico de fundamentales (proveedor: %s)%s%s%s tickers, precios %s%s",
+    $providerName,
     $dryRun ? ' (SIMULACION, no escribe)' : '',
     PHP_EOL,
     count($tickers),
@@ -154,7 +180,7 @@ foreach ($tickers as $index => $ticker) {
         }
 
         $periods = $fiscalPeriods->fetch($ticker);
-        $callsUsed += FmpFiscalPeriodProvider::CALLS_PER_TICKER;
+        $callsUsed += $callsPerTicker;
 
         if ($periods === []) {
             echo $prefix . 'sin ejercicios utilizables' . PHP_EOL;
@@ -206,7 +232,7 @@ foreach ($tickers as $index => $ticker) {
     } catch (MarketDataException $exception) {
         echo $prefix . 'ERROR ' . $exception->getMessage() . PHP_EOL;
         ++$failed;
-        $callsUsed += FmpFiscalPeriodProvider::CALLS_PER_TICKER;
+        $callsUsed += $callsPerTicker;
     } catch (Throwable $exception) {
         echo $prefix . 'ERROR inesperado: ' . $exception->getMessage() . PHP_EOL;
         ++$failed;
@@ -224,7 +250,9 @@ printf(
 printf("Filas de historico escritas: %s%s", number_format($totalRows, 0, ',', '.'), $dryRun ? ' (simuladas)' : '');
 echo PHP_EOL;
 printf(
-    "Llamadas a FMP gastadas: ~%d (el plan gratuito son 250/dia)%s",
+    "Llamadas a %s gastadas: ~%d%s%s",
+    $providerName === 'eodhd' ? 'EODHD' : 'FMP',
     $callsUsed,
+    $providerName === 'fmp' ? ' (el plan gratuito son 250/dia)' : '',
     PHP_EOL
 );

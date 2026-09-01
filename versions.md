@@ -5496,3 +5496,34 @@ El usuario pide instalar en la Pi el cron `--all-universes` diseñado en `v2.105
 **Ejecutado a mano una vez para medir tiempo real antes de fiarse del horario nocturno** (mismo criterio que se aplico al cron de verificacion de universos el `2026-08-25`): **628/628 tickers OK, 0 errores, 22 rankings guardados** (uno por universo, incluidos los nuevos `sp500` 503, `nasdaq100` 102, y los tres `_adr` — `china_adr` 19, `asia_pacific_adr` 21, `latam_adr` 26 — confirmando que ya se analizan a diario sin intervencion). **Duracion real: 8 minutos 37 segundos** (13:26:46 a 13:35:23), muy por debajo de la estimacion conservadora de `v2.105` (5-15 min para 305 tickers, se temia mas para 628) y con margen de sobra antes del `stockanalyzer-backup.timer` de las 23:30 — **no hace falta adelantar el horario de las 23:00**, la preocupacion de colision con el backup no se materializa.
 
 `bin/verify-universes.php` ejecutado tambien contra la config real (628 tickers, incluidos los `_adr` sin visitar desde `2026-07-31`): **628/628 OK, 0 tickers no encontrados, 0 rate-limited**. Los universos `china_adr`/`asia_pacific_adr`/`latam_adr` quedan asi confirmados como usables hoy mismo, ademas de analizados a diario por el cron nuevo — es la "activacion" que pedia el usuario, sin necesitar codigo nuevo: ya estaban seleccionables en el desplegable del Home (`DashboardPage::renderUniverseOptions()` lista todo `config/universes.php` sin filtro), solo faltaba que se analizaran y verificaran de forma regular.
+
+---
+
+## v2.109 - Relleno de fundamentales con EODHD: de 47 a 628 tickers confirmados
+
+Estado: implementado, verificado y ejecutado contra la base de datos local de `ddev`. **Sin sincronizar con la Pi todavia**, pendiente de confirmacion explicita del usuario.
+
+Objetivo:
+
+El usuario contrata EODHD Fundamentals Data Feed y pide "actualizar el historico". Hasta hoy, `bin/backfill-fundamentals.php` solo sabia hablar con FMP, cuyo plan gratuito llevaba dos semanas bloqueando cualquier ticker nuevo con 402 sistematico (47/628 confirmados, datos anuales, ~5 valores/ticker en 5 años — la limitacion que `auditor-estadistico` señalo como insuficiente para cualquier split serio el `2026-08-25`).
+
+**`src/Providers/EodhdFiscalPeriodProvider.php`** (nuevo), mismo contrato que `FmpFiscalPeriodProvider` (`fetch(ticker): list<FiscalPeriod>`), confirmado contra la API real con dos llamadas de control (`AAPL.US`, `SAN.MC`) antes de escribir nada:
+
+- **Una sola llamada HTTP trae TODO el historico de un ticker** (164 trimestres para AAPL desde 1985, 150+ para SAN.MC desde 1987) — a diferencia de FMP, que necesita 3 llamadas y solo da 5 años anuales en el plan gratuito. `CALLS_PER_TICKER = 1`.
+- Dos aproximaciones documentadas honestamente en el codigo, porque EODHD no expone exactamente los mismos campos que FMP: **`totalDebt`** no viene directo, se deriva de `shortLongTermDebtTotal` o de la suma corto+largo plazo; **`epsDiluted`/`sharesDiluted`** se cruzan por fecha con `Earnings.History[fecha].epsActual` y `outstandingShares.quarterly` (acciones en circulacion, no literalmente "media ponderada diluida" como el dato equivalente de FMP).
+- `dividendsPaid` de EODHD viene en positivo (FMP lo da negativo); `FiscalPeriod::dividendPerShare()` ya usaba `abs()`, asi que no hizo falta tocar nada ahi, solo un test que lo confirma.
+- Sufijo de bolsa: ticker sin punto (EEUU) recibe `.US`; ticker con punto (`SAN.MC`) se usa tal cual, coincide con la convencion de EODHD.
+
+**`bin/backfill-fundamentals.php` gana `--provider=fmp|eodhd`** (por defecto `fmp`, no rompe nada existente), que elige la api_key de `config/provider.local.php` segun corresponda. Reanudacion/`--skip-existing`/`--dry-run` sin cambios.
+
+Tests nuevos: `tests/Providers/EodhdFiscalPeriodProviderTest.php` (10 casos, fixtures basados en la estructura real: cruce de los tres estados, orden, descartes por trio incompleto o `filing_date` ausente, las dos variantes de derivar `totalDebt`, sufijo `.US` vs ya sufijado, 404, no filtrado de la API key en errores, ticker vacio).
+
+**Relleno real ejecutado** (`php bin/backfill-fundamentals.php --provider=eodhd --all-universes`, SIN `--skip-existing` a proposito: los 47 tickers ya confirmados por FMP solo tenian 5 años anuales, y EODHD da una base bastante mas profunda para los mismos tickers, no solo cobertura nueva). Monitorizados primero 20 tickers reales antes de lanzar el resto. **Resultado, verificado de forma independiente contra la base de datos** (no solo el resumen del script): **628/628 tickers confirmados** (`countSnapshots() > 5`), **1.512.260 filas** en `fundamentals_history`, 0 errores, ~628 llamadas gastadas (de 100.000/dia).
+
+Profundidad real: 585/628 (93%) con datos fiscales desde 2016 o antes (la mayoria de grandes caps hasta 1989-1990, limite real de `Cash_Flow.quarterly` en EODHD); 611/628 (97%) superan 1.000 filas diarias reconstruidas. Los 43 tickers con menos profundidad son casos genuinos (OPVs/spin-offs recientes: `RDDT` 2024, `ARM` 2023, `KVUE`/`GEHC` 2022-2023, `PUIG.MC` 2024, etc.), no fallos de mapeo — verificado que las fechas coinciden con salidas a bolsa reales. La ventana de reconstruccion diaria sigue acotada por `--history` (10y por defecto, el mismo rango de precios de Yahoo que ya se usaba): la profundidad fiscal mayor mejora la GRANULARIDAD dentro de esos 10 años (trimestral en vez de anual), no extiende la ventana por si sola — para eso haria falta tambien `--history` mas largo, no medido hoy.
+
+Todo `ibex35` y los `_adr` (bloqueados en bloque por FMP) tienen ahora historial completo: `SAN.MC` 90 trimestres desde 2004, `BABA` 54 desde 2013, `TSM` 106 desde 2000, etc. No hizo falta tocar `config/universes.php`: ningun 404/delisting real en los 628.
+
+Verificado: `ddev exec vendor/bin/phpunit`: **404 tests, 1145 assertions, OK** (sube desde 394/1115). `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+**Pendiente, explicito**: sincronizar `fundamentals_history` con la Pi (mismo procedimiento seguro de `v2.93`: copia previa, tabla intermedia, fusion por `UNIQUE(ticker, snapshot_date)`) requiere confirmacion del usuario antes de tocar su base de datos de produccion — no se ha hecho todavia.

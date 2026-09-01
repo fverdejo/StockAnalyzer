@@ -1,0 +1,335 @@
+<?php
+
+declare(strict_types=1);
+
+namespace StockAnalyzer\Providers;
+
+use DateTimeImmutable;
+use JsonException;
+use StockAnalyzer\DTO\FiscalPeriod;
+use StockAnalyzer\Exceptions\MarketDataException;
+use StockAnalyzer\Infrastructure\Http\HttpClient;
+
+/**
+ * Descarga de EODHD (Fundamentals Data Feed, de pago) los trimestres
+ * contables de un ticker, cruzados por fecha de cierre de periodo, con el
+ * mismo contrato que FmpFiscalPeriodProvider (v2.93): fetch() devuelve una
+ * list<FiscalPeriod> de mas antiguo a mas reciente, con filingDate
+ * obligatoria y los tres estados financieros completos.
+ *
+ * Confirmado contra la API real con dos llamadas de control antes de
+ * escribir esto (AAPL.US y SAN.MC, 2026-09-01):
+ *
+ * - Una unica llamada a /api/fundamentals/{TICKER} devuelve TODO el
+ *   historico de golpe (164 trimestres para AAPL, desde 1985; 150+ para
+ *   SAN.MC, desde 1987), a diferencia de FMP que necesita 3 llamadas y solo
+ *   da 5 anhos en el plan gratuito. De ahi CALLS_PER_TICKER = 1.
+ * - Los trimestres de Financials.{Income_Statement,Balance_Sheet,Cash_Flow}
+ *   vienen bajo "quarterly", indexados por fecha de cierre ("date"), con
+ *   "filing_date" en cada entrada.
+ * - Los tickers estadounidenses necesitan el sufijo ".US" (AAPL ->
+ *   AAPL.US); los que ya traen sufijo de bolsa en config/universes.php
+ *   (p.ej. SAN.MC) se usan tal cual, porque coincide con la convencion de
+ *   EODHD (confirmado: SAN.MC respondio con PrimaryTicker "SAN.MC").
+ * - No hay totalDebt directo en Balance_Sheet (a diferencia de FMP): se
+ *   deriva de shortLongTermDebtTotal si es numerico, o si no de la suma de
+ *   shortTermDebt + longTermDebt. Es una aproximacion, documentada aqui con
+ *   el mismo criterio de honestidad que el resto de FiscalPeriod.
+ * - No hay EPS diluido ni acciones diluidas en Income_Statement. Se
+ *   aproximan cruzando por fecha con Earnings.History[fecha].epsActual
+ *   (puede venir null en el trimestre mas reciente si aun no se ha
+ *   publicado) y con outstandingShares.quarterly (una LISTA, no un mapa por
+ *   fecha; se indexa aqui por su campo "dateFormatted"). Es "acciones en
+ *   circulacion", no literalmente "media ponderada diluida" como el
+ *   weightedAverageShsOutDil de FMP; la mejor aproximacion disponible en
+ *   este proveedor, documentada como tal.
+ */
+class EodhdFiscalPeriodProvider
+{
+    private const BASE_URL = 'https://eodhd.com/api/fundamentals/';
+
+    /** Una sola llamada HTTP trae todo el historico de un ticker. */
+    public const CALLS_PER_TICKER = 1;
+
+    public function __construct(
+        private readonly string $apiKey,
+        private readonly HttpClient $httpClient = new HttpClient()
+    ) {
+    }
+
+    /**
+     * Los trimestres publicados de un ticker, ordenados de mas antiguo a
+     * mas reciente.
+     *
+     * @return list<FiscalPeriod>
+     */
+    public function fetch(string $ticker): array
+    {
+        $rawTicker = strtoupper(trim($ticker));
+
+        if ($rawTicker === '') {
+            throw new MarketDataException('Ticker cannot be empty.');
+        }
+
+        $payload = $this->fetchJson($this->toEodhdSymbol($rawTicker), $rawTicker);
+
+        $financials = $payload['Financials'] ?? null;
+
+        if (!is_array($financials)) {
+            throw new MarketDataException(sprintf('EODHD no devolvio Financials para %s.', $rawTicker));
+        }
+
+        $income = $this->quarterlyByDate($financials['Income_Statement'] ?? null, $rawTicker, 'Income_Statement');
+        $balance = $this->quarterlyByDate($financials['Balance_Sheet'] ?? null, $rawTicker, 'Balance_Sheet');
+        $cashFlow = $this->quarterlyByDate($financials['Cash_Flow'] ?? null, $rawTicker, 'Cash_Flow');
+        $earnings = $this->earningsByDate($payload['Earnings'] ?? null);
+        $shares = $this->sharesByDate($payload['outstandingShares'] ?? null);
+
+        $periods = [];
+
+        foreach ($income as $endDate => $inc) {
+            // Se exige el trio completo: un trimestre con resultados pero
+            // sin balance daria ROE, deuda y valor contable a null y
+            // ensuciaria el historico con filas a medias.
+            if (!isset($balance[$endDate], $cashFlow[$endDate])) {
+                continue;
+            }
+
+            $filingDate = $this->date($inc['filing_date'] ?? null);
+
+            // Sin fecha de publicacion no se puede saber cuando fue publico
+            // este trimestre, que es la unica razon de ser de todo esto.
+            if ($filingDate === null) {
+                continue;
+            }
+
+            $bal = $balance[$endDate];
+            $cf = $cashFlow[$endDate];
+
+            $periods[] = new FiscalPeriod(
+                ticker: $rawTicker,
+                endDate: new DateTimeImmutable($endDate),
+                filingDate: $filingDate,
+                revenue: $this->numeric($inc['totalRevenue'] ?? null),
+                grossProfit: $this->numeric($inc['grossProfit'] ?? null),
+                operatingIncome: $this->numeric($inc['operatingIncome'] ?? null),
+                netIncome: $this->numeric($inc['netIncome'] ?? null),
+                ebitda: $this->numeric($inc['ebitda'] ?? null),
+                ebit: $this->numeric($inc['ebit'] ?? null),
+                incomeBeforeTax: $this->numeric($inc['incomeBeforeTax'] ?? null),
+                incomeTaxExpense: $this->numeric($inc['incomeTaxExpense'] ?? null),
+                epsDiluted: $this->numeric($earnings[$endDate]['epsActual'] ?? null),
+                sharesDiluted: $this->numeric($shares[$endDate]['shares'] ?? null),
+                totalStockholdersEquity: $this->numeric($bal['totalStockholderEquity'] ?? null),
+                totalDebt: $this->totalDebt($bal),
+                netDebt: $this->numeric($bal['netDebt'] ?? null),
+                totalCurrentAssets: $this->numeric($bal['totalCurrentAssets'] ?? null),
+                totalCurrentLiabilities: $this->numeric($bal['totalCurrentLiabilities'] ?? null),
+                freeCashFlow: $this->numeric($cf['freeCashFlow'] ?? null),
+                commonDividendsPaid: $this->numeric($cf['dividendsPaid'] ?? null)
+            );
+        }
+
+        usort($periods, static fn (FiscalPeriod $a, FiscalPeriod $b): int => $a->endDate <=> $b->endDate);
+
+        return $periods;
+    }
+
+    /**
+     * EODHD necesita el sufijo de bolsa en la URL. Los tickers de
+     * config/universes.php que ya tienen uno (SAN.MC) coinciden con la
+     * convencion de EODHD y se usan tal cual; los que no (todos los de
+     * EEUU, sin sufijo en Yahoo) necesitan ".US" anhadido.
+     */
+    private function toEodhdSymbol(string $ticker): string
+    {
+        return str_contains($ticker, '.') ? $ticker : $ticker . '.US';
+    }
+
+    /**
+     * totalDebt no existe en el balance de EODHD (a diferencia de FMP): se
+     * deriva de shortLongTermDebtTotal si viene numerico, o si no de la
+     * suma de deuda a corto y largo plazo. Es una aproximacion.
+     *
+     * @param array<string,mixed> $balance
+     */
+    private function totalDebt(array $balance): ?float
+    {
+        $combined = $this->numeric($balance['shortLongTermDebtTotal'] ?? null);
+
+        if ($combined !== null) {
+            return $combined;
+        }
+
+        $short = $this->numeric($balance['shortTermDebt'] ?? null);
+        $long = $this->numeric($balance['longTermDebt'] ?? null);
+
+        if ($short === null && $long === null) {
+            return null;
+        }
+
+        return ($short ?? 0.0) + ($long ?? 0.0);
+    }
+
+    /**
+     * @return array<string,array<string,mixed>>
+     */
+    private function quarterlyByDate(mixed $statement, string $ticker, string $label): array
+    {
+        $quarterly = is_array($statement) ? ($statement['quarterly'] ?? null) : null;
+
+        if (!is_array($quarterly)) {
+            throw new MarketDataException(sprintf('EODHD no devolvio %s.quarterly para %s.', $label, $ticker));
+        }
+
+        $indexed = [];
+
+        foreach ($quarterly as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $date = is_string($row['date'] ?? null) ? $row['date'] : null;
+
+            if ($date !== null) {
+                $indexed[$date] = $row;
+            }
+        }
+
+        if ($indexed === []) {
+            throw new MarketDataException(sprintf('EODHD no devolvio trimestres utilizables para %s en %s.', $ticker, $label));
+        }
+
+        return $indexed;
+    }
+
+    /**
+     * Earnings.History ya viene indexado por fecha de cierre de periodo,
+     * pero se reindexa explicitamente por su campo "date" en vez de confiar
+     * en la clave del array: es JSON de un tercero y no vale la pena
+     * arriesgarse a que la clave difiera del contenido.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private function earningsByDate(mixed $earnings): array
+    {
+        $history = is_array($earnings) ? ($earnings['History'] ?? null) : null;
+
+        if (!is_array($history)) {
+            return [];
+        }
+
+        $indexed = [];
+
+        foreach ($history as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $date = is_string($row['date'] ?? null) ? $row['date'] : null;
+
+            if ($date !== null) {
+                $indexed[$date] = $row;
+            }
+        }
+
+        return $indexed;
+    }
+
+    /**
+     * outstandingShares.quarterly es una LISTA (claves numericas), no un
+     * mapa por fecha como los tres estados financieros: se indexa aqui por
+     * su campo "dateFormatted" (confirmado contra la API real).
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private function sharesByDate(mixed $outstandingShares): array
+    {
+        $quarterly = is_array($outstandingShares) ? ($outstandingShares['quarterly'] ?? null) : null;
+
+        if (!is_array($quarterly)) {
+            return [];
+        }
+
+        $indexed = [];
+
+        foreach ($quarterly as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $date = is_string($row['dateFormatted'] ?? null) ? $row['dateFormatted'] : null;
+
+            if ($date !== null) {
+                $indexed[$date] = $row;
+            }
+        }
+
+        return $indexed;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fetchJson(string $eodhdSymbol, string $ticker): array
+    {
+        $url = self::BASE_URL . rawurlencode($eodhdSymbol) . '?' . http_build_query([
+            'api_token' => $this->apiKey,
+            'fmt' => 'json',
+        ]);
+
+        // http_errors => false no es comodidad: por defecto Guzzle lanza en
+        // 4xx con un mensaje que incluye la URL entera, y la URL lleva la
+        // API key. Ese mensaje acaba en la salida del CLI y en los logs.
+        // Desactivandolo, el cuerpo se inspecciona aqui y el error se
+        // construye sin filtrar la credencial.
+        $response = $this->httpClient->get($url, ['http_errors' => false]);
+        $status = $response->getStatusCode();
+        $body = (string) $response->getBody();
+
+        if ($status >= 400) {
+            throw new MarketDataException(sprintf(
+                '%s: EODHD respondio %d en %s%s',
+                $ticker,
+                $status,
+                $eodhdSymbol,
+                $status === 404 ? ' (simbolo no encontrado, revisar sufijo de bolsa)' : ''
+            ));
+        }
+
+        try {
+            $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new MarketDataException(sprintf(
+                'EODHD no devolvio JSON para %s: %s',
+                $ticker,
+                substr($body, 0, 160)
+            ), 0, $exception);
+        }
+
+        if (!is_array($payload) || $payload === []) {
+            throw new MarketDataException(sprintf('EODHD no devolvio datos para %s.', $ticker));
+        }
+
+        /** @var array<string,mixed> $payload */
+        return $payload;
+    }
+
+    private function date(mixed $value): ?DateTimeImmutable
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return new DateTimeImmutable($value);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function numeric(mixed $value): ?float
+    {
+        return is_numeric($value) ? (float) $value : null;
+    }
+}
