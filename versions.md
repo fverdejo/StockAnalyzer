@@ -5674,3 +5674,74 @@ Resultado verificado: `fundamentals_history` en la Pi pasa a **1.511.963 filas**
 De paso, Claude sincroniza el codigo (`git pull --ff-only`, la Pi estaba en `v2.107`, 4 versiones por detras) y `composer install`. Migracion `019` (`eodhd_raw_fundamentals`) aplicada a mano en la Pi (`bin/migrate.php` fallo por una inconsistencia previa y no relacionada de `schema_migrations` con una migracion antigua ya aplicada por otra via — no investigado hoy, fuera de alcance). Migracion `020` (`fundamentals_history_v2110`, tabla de trabajo temporal) deliberadamente NO aplicada en la Pi: su proposito ya se cumplio en `ddev` y no hace falta que exista alli. Verificado tras el despliegue: `nginx`/`php8.4-fpm`/`mariadb` activos, sitio respondiendo (HTTP 301 esperado, redirect a HTTPS).
 
 **Con esto, `v2.110`/`v2.111` quedan desplegados de punta a punta**: formula corregida, datos regenerados y verificados, servidos tanto en `ddev` como en produccion. Fichero temporal (`/tmp/fh_v2110_dump.sql.gz` y el `.sql` de la migracion) borrados de la Pi al terminar.
+
+## v2.112 — Auditoria de calidad de fundamentales EODHD y etiquetado honesto point-in-time (`2026-09-01`)
+
+Cierra el punto 3 de "Prioridad cero" en `roadmap.md` ("Auditoria de calidad y limitaciones point-in-time"), el ultimo punto suelto del bloque tras `v2.111`. Es una auditoria de solo lectura: no se ha corregido ningun dato (ni `KB`, ni `SAN.MC`, ni ningun otro caso encontrado hoy), ni tocado `config/weights.php`, `fundamentals_history` ni la Pi.
+
+### Parte A — ¿EODHD sirve datos *as reported* o reformulados (*restated*)?
+
+Investigado por dos vias, ninguna concluyente a favor de "as reported":
+
+1. **Documentacion publica**: la pagina de producto de EODHD (Fundamental Data API) y una busqueda dirigida no mencionan en ningun sitio si las cifras de un trimestre antiguo se mantienen como se publicaron originalmente o se sobrescriben si la empresa las reformula despues (correccion contable, cambio de norma, error detectado). Ni "as reported", ni "restated", ni "vintage" aparecen en la documentacion accesible.
+2. **El payload archivado**: revisados los campos completos de una fila trimestral de `Income_Statement` de AAPL en `eodhd_raw_fundamentals` (31 campos) y las claves de primer nivel del JSON (`AnalystRatings`, `Earnings`, `Financials`, `General`, `Highlights`, `Holders`, `InsiderTransactions`, `SharesStats`, `SplitsDividends`, `Technicals`, `Valuation`, `outstandingShares`): **no existe ningun campo de version, vintage o distincion "as reported"/"restated"**. Cada trimestre es un unico valor con `date` (cierre) y `filing_date` (publicacion), sin historial.
+
+Ademas, la propia arquitectura de archivo lo confirma estructuralmente: `eodhd_raw_fundamentals` es UPSERT por ticker (una fila por ticker, sobrescrita en cada re-descarga; ver cabecera de `EodhdRawFundamentalsRepository`), asi que aunque se hubiera querido comparar "el mismo trimestre en dos descargas de dias distintos" para detectar reformulaciones empiricamente, **no hay mas que una descarga (`2026-09-01`) archivada**; una comparacion asi no es posible con los datos actuales.
+
+**Conclusion**: no se puede confirmar ni descartar que EODHD sirva cifras reformuladas para trimestres antiguos. `filing_date` elimina el sesgo mas grosero (usar un dato antes de que existiera), pero no garantiza que el valor de hoy para un trimestre de hace tres años sea el que el mercado vio entonces. **Documentado explicitamente como limitacion, no arreglado**: `src/Services/BacktestingService.php` gana un docblock de clase nuevo que etiqueta el backtest como `filing-date point-in-time, restatement-safe=false` (cita literal del plan), explicando el porque en el propio codigo para que no se pueda perder de vista en una sesion futura.
+
+### Parte B — Informe de calidad automatizado (`bin/audit-fundamentals-quality.php`)
+
+Nuevo, reutilizable (mismo patron que `bin/verify-universes.php`, pensado para volver a ejecutarse tras cada regeneracion futura, no un script de un solo uso). Recorre los 628 tickers ya archivados en `eodhd_raw_fundamentals` **sin tocar la red**: reutiliza el JSON crudo ya pagado y guardado (igual que `bin/regenerate-fundamentals-history-v2110.php`). La deteccion en si vive en `src/Services/FundamentalsQualityAuditor.php` (pura, sin red ni base de datos), con `src/DTO/FundamentalsQualityIssue.php` como resultado tipado; 21 tests nuevos en `tests/Services/FundamentalsQualityAuditorTest.php` cubren cada tipo de hallazgo con fixtures escritos a mano (incluido el caso `KB` exacto).
+
+Ejecutado contra los 628 tickers reales en `ddev` el `2026-09-01`. **Ningun ticker sin archivar, ninguno no parseable, los 628 con historico de precios cacheado** (rango `10y`, 672/628 tickers ya lo tenian de antes).
+
+**Resumen por tipo de hallazgo** (umbrales documentados como heuristicos donde aplica, ver docblocks de cada chequeo en el codigo):
+
+| Tipo | Severidad | Hallazgos | Tickers afectados |
+|---|---|---|---|
+| `filing_before_period_end` | error | 182 | 23 |
+| `duplicate_period` | error | 0 | 0 |
+| `negative_shares` | error | 0 | 0 |
+| `negative_debt` | error | 3 | 2 |
+| `currency_unit_jump` | warning | 185 | 110 |
+| `series_gap` | warning | 50 | 37 |
+| `extreme_ratio` | warning | 3.265 | 263 |
+| `fiscal_calendar_note` | nota | 68 | 68 |
+
+**`filing_before_period_end` (imposible por definicion, el hallazgo mas serio)**: 182 casos en 23 tickers. El caso mas concentrado, `VTRS` (75 de los 182), no es ruido aleatorio: sus ~25 trimestres tienen sistematicamente `filing_date` = `period_end` − 1 dia en los tres estados financieros (ej. cierre `2019-09-30` "publicado" el `2019-09-29`), un patron demasiado uniforme para ser un error de picoteo — parece una fecha de relleno/estimacion de EODHD para este ticker en concreto, no la fecha real de publicacion. El resto (`CCEP` 21, `QRVO` 12, `MOS`/`SNDK`/`STX` 9 cada uno...) siguen el mismo patron de desfase de pocos dias. Ninguno se ha corregido; quedan documentados para que una sesion futura decida si excluir esos tickers de backtests sensibles a la fecha exacta de publicacion.
+
+**`negative_debt`**: `FAST` (2013-12-31, deuda derivada −2.447.000) y `LITE` (2015-06-30 y 2016-06-30, −30,3M y −31,9M). Magnitudes pequeñas relativas al balance de cada empresa; probablemente un problema de signo en `shortTermDebt`/`longTermDebt` de la fuente para esos trimestres puntuales, no sistemico.
+
+**`currency_unit_jump` (el caso `KB` generalizado a los 628 tickers) — umbral calibrado, no el ">10x" literal del plan**: con el umbral ingenuo de 10x que cita el plan, el chequeo marcaba **2.094 saltos en 464/628 tickers (74%)** — inservible como señal, porque la inmensa mayoria eran trimestres reales cerca del punto muerto (ingresos/beneficio rondando cero: `AAPL` 1993-1997, `SAN.MC` 2011-2012 en plena crisis de deuda soberana), no un problema de la fuente. Los ocho saltos reales de `KB` van de **x294,8 a x4.703,8** (EPS oscilando entre ~1-4 y ~2.000-4.000 KRW crudos), dos ordenes de magnitud por encima del ruido de negocio observado en la distribucion completa (p90 = x91,3, p95 = x184,2, umbral ingenuo p99 = x1.219,2). Subido a **100x** (`UNIT_JUMP_RATIO`, con margen amplio bajo el minimo real de `KB`): el informe baja a **185 hallazgos en 110/628 tickers (17,5%)**, mucho mas manejable y sigue capturando los ocho casos de `KB` integros. Sigue siendo `warning`, nunca `error`: el mensaje del hallazgo dice explicitamente "candidato a cambio de moneda/unidad, o un trimestre real cerca del punto muerto — revisar caso a caso", no afirma que sea un bug. Se añadio ademas un suelo absoluto de 0,05 solo para EPS (`EPS_ROUNDING_FLOOR`), que filtra ruido de puro redondeo (ej. AAPL 2003: EPS 0,0009 → 0,01, un salto x11 sin ningun significado).
+
+**`series_gap`** (mas de dos trimestres seguidos sin publicar): 50 huecos en 37 tickers, encabezados por `CRH`/`MUFG`/`TEF.MC` (3 huecos cada uno). Coherente con reestructuraciones corporativas conocidas (`CRH` redomicilio su cotizacion principal a EEUU en 2023, lo que puede partir el historico de EODHD en dos tramos).
+
+**`extreme_ratio`** (margenes/ratios calculados con `PointInTimeFundamentalsBuilder` YA corregido, no la formula rota anual/trimestral de antes de `v2.110`): 3.265 hallazgos en 263/628 tickers (42%). Umbral deliberadamente amplio (±150% margenes, ±300% ROE, ±200% ROIC, >20x deuda/patrimonio o liquidez, ±500% crecimiento de ingresos) y aun asi es el chequeo con mas ruido de falsos positivos esperados: los tickers con mas hallazgos son biotecnologicas en fase clinica con ingresos casi nulos (`ALNY` 97, `INCY` 87, `VRTX` 78 — un margen neto de varios miles por ciento cuando el ingreso es minimo es una caracteristica real del sector, no un error de datos) y aseguradoras/financieras con ROE elevado por diseño (`RJF`, `AMP`, `MET`, `AFL`...). Se deja marcado como candidato a revision manual, tal y como pide el plan, sin intentar depurar sector a sector aqui.
+
+**`duplicate_period`/`negative_shares`**: 0 en los 628 tickers. `EodhdFiscalPeriodProvider::parse()` ya deduplica en silencio por `endDate` (se queda con la ultima fila), asi que si hubiera un duplicado real con valores distintos solo se veria en `auditRawPayload()` (que trabaja sobre el JSON crudo, antes de esa deduplicacion) — no aparecio ninguno.
+
+**`fiscal_calendar_note`** (informativa, nunca error): 68 tickers con algun cierre de trimestre fuera de marzo/junio/septiembre/diciembre — minoristas con año fiscal a finales de enero (`WMT`, `COST`, `TGT`...) es el patron esperado. **`MSFT` NO aparece aqui**, como debia: su año fiscal empieza en julio, pero sus cuatro cierres trimestrales SI caen en meses naturales (sep/dic/mar/jun) — lo inusual en `MSFT` es el orden fiscal, no el mes de cierre, y el chequeo (basado en el mes) correctamente no la marca.
+
+**Cobertura TTM real por fecha** (nueva metrica, la que el plan pedia explicitamente en vez de asumir uniformidad por los "628/628 confirmados"): de los dias de precio cacheados (rango `10y`) de cada ticker, que porcentaje ya tenian publicados los cuatro trimestres necesarios para un TTM valido en esa fecha. **Mediana 100%, pero NO uniforme**: 598/628 tickers (95,2%) en 100% exacto, pero **17 tickers por debajo del 90%** y 6 por debajo del 50%:
+
+| Ticker | Cobertura TTM | Motivo probable |
+|---|---|---|
+| `HONA` | 0,0% (0/54 dias) | Cotizacion demasiado reciente, sin cuatro trimestres aun |
+| `SPCX` | 0,0% (0/55 dias) | Idem |
+| `FER` | 29,1% (731/2.512) | Redomicilio de cotizacion principal (Ferrovial → Paises Bajos/EEUU) |
+| `PUIG.MC` | 32,2% (192/596) | OPV reciente (2024) |
+| `CRH` | 34,1% (857/2.512) | Redomicilio de cotizacion principal a EEUU (2023) |
+| `TKO` | 46,6% (1.170/2.512) | Entidad formada por fusion en 2023 (TKO Group) |
+| `ANE.MC` | 56,3% (744/1.322) | OPV relativamente reciente |
+| `Q` | 60,8% (129/212) | Cotizacion muy reciente |
+| `BBD` | 72,3% (1.817/2.512) | — |
+| `CCEP` | 75,4% (1.895/2.512) | Coincide con los `filing_before_period_end` de esta misma tabla |
+
+El resto de la cola (`FDR.MC` 81,7%, `ANA.MC` 85,0%, `FER.MC` 85,8%, `NTGY.MC` 87,5%, `SAB.MC`/`SLR.MC` 89,1%, `BKR` 89,2%) confirma que la brecha se concentra en valores del IBEX con historico de precios mas largo (10 años cacheados) que su historico de fundamentales archivado en EODHD — el precio existe, el trimestre necesario para el TTM de esos años tempranos no. Ningun ticker de estos se ha excluido de nada; el informe solo deja constancia de que "628/628 archivados" no equivale a "cobertura TTM completa en todo el rango de precios", exactamente la distincion que pedia el plan.
+
+### Verificacion
+
+`ddev exec vendor/bin/phpunit`: **444 tests, 1.238 assertions, OK** (sube desde 423/1.205; +21 de `FundamentalsQualityAuditorTest`). `ddev exec vendor/bin/phpstan analyse`: sin errores (209 ficheros). `php -l` limpio en los tres ficheros nuevos y en `bin/audit-fundamentals-quality.php`.
+
+**Con esto se cierra el bloque "Prioridad cero" completo** (puntos 1, 3 y 4; el punto 2 sigue parcialmente pendiente — el modelo normalizado de periodos con clave estable, el manifest y la telemetria de cuota corregida, ver `v2.111`). El punto 3 queda como una herramienta reutilizable (`bin/audit-fundamentals-quality.php`), no como un informe de un solo uso: puede volver a ejecutarse tras cualquier regeneracion futura de `fundamentals_history` para comprobar si los mismos tickers siguen teniendo los mismos problemas.

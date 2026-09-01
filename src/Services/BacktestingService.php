@@ -22,6 +22,28 @@ use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 use Throwable;
 
+/**
+ * Limitacion honesta de etiquetado (roadmap.md, "Prioridad cero" punto 3A,
+ * `2026-09-01`): los fundamentales usados aqui son
+ * `filing-date point-in-time, restatement-safe=false`.
+ *
+ * `filingDate` (ver `FiscalPeriod`, `PointInTimeFundamentalsBuilder`)
+ * garantiza que en una fecha D solo se usa lo YA PUBLICADO en D -- eso
+ * elimina el sesgo de "usar el futuro" (mirar un dato que todavia no
+ * existia). Pero NO garantiza que el valor servido para un trimestre
+ * antiguo sea el que se publico ORIGINALMENTE: si una empresa reformula
+ * (`restated`) una cifra despues (correccion contable, cambio de norma,
+ * error detectado), EODHD podria devolver hoy la version reformulada para
+ * ese mismo `filing_date` antiguo, sin distincion. Investigado y
+ * confirmado el `2026-09-01`: ni la documentacion publica de EODHD ni el
+ * payload archivado (`eodhd_raw_fundamentals`, revisado campo a campo)
+ * mencionan version/vintage/"as reported" vs "restated" -- no hay forma
+ * de saberlo con los datos de un unico proveedor y una unica descarga
+ * (`eodhd_raw_fundamentals` es UPSERT por ticker, no conserva vintages
+ * historicos de re-descargas). No se afirma por tanto que el backtest
+ * este completamente libre de sesgo de anticipacion, solo que esta libre
+ * del caso mas grosero (usar un trimestre antes de su `filing_date`).
+ */
 class BacktestingService
 {
     public function __construct(
