@@ -6,6 +6,7 @@ namespace StockAnalyzer\Tests\Providers;
 
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
+use StockAnalyzer\DTO\FiscalPeriodType;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Http\HttpClient;
 use StockAnalyzer\Providers\FmpFiscalPeriodProvider;
@@ -116,6 +117,9 @@ final class FmpFiscalPeriodProviderTest extends TestCase
         self::assertCount(1, $periods);
         $p = $periods[0];
         self::assertSame('AAPL', $p->ticker);
+        // FMP entrega ejercicios anuales completos (PERIOD='annual'), nunca
+        // trimestres: ver v2.109/2026-09-01 en versions.md.
+        self::assertSame(FiscalPeriodType::Annual, $p->periodType);
         self::assertSame('2025-09-27', $p->endDate->format('Y-m-d'));
         self::assertSame('2025-10-31', $p->filingDate->format('Y-m-d'));
         self::assertSame(416_161_000_000.0, $p->revenue);

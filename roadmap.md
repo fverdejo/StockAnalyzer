@@ -29,7 +29,9 @@ Ver `versions.md`. La tabla que habia aqui (`Estructura proyecto`, `Composer`, e
 
 Este bloque **manda sobre las tareas antiguas de recalibracion que aparecen mas abajo**. No se cambia `config/weights.php`, no se reactiva el bloque fundamental, no se actualiza `config/measured_edge.php` y no se sincronizan todavía los 1.512.260 snapshots de `v2.109` con la Pi hasta cerrar los puntos 1-4. No hay calendario artificial de cuatro semanas. **Orden operativo por caducidad:** ejecutar primero la captura de materia prima del punto 2 mientras la suscripcion esta activa; en paralelo o inmediatamente despues corregir el punto 1. **Orden logico de validacion:** 1 -> 3 -> 4; ningun backtest usa los datos hasta cerrar esa cadena.
 
-### 1. Corregir la semantica anual -> trimestral (bloqueante)
+### 1. ~~Corregir la semantica anual -> trimestral (bloqueante)~~ HECHO el `2026-09-01`
+
+**Corregido y verificado** (`versions.md`, `v2.110`): `FiscalPeriod` declara ahora `periodType` (`annual`/`quarterly`); `PointInTimeFundamentalsBuilder` calcula TTM (4 trimestres) para toda cifra de flujo cuando el origen es trimestral, usa el ultimo balance publicado sin sumar entre periodos, y compara TTM contra TTM de hace un año para los crecimientos. Confirmado con datos reales que EODHD entrega cada trimestre aislado (no YTD). Informe antes/despues: PER de AAPL FY2025 pasa de 81,08 a 20,08 (el bug lo daba 4x mas barato de lo real), ROE de 37,25% a 151,91%. 411 tests/1181 assertions OK, PHPStan limpio. **Sigue pendiente**: `fundamentals_history` (los 1,5M snapshots de `v2.109`, tanto en `ddev` como en la Pi) todavia no se ha regenerado con la formula corregida — la formula esta lista, la regeneracion es la tarea siguiente.
 
 `PointInTimeFundamentalsBuilder` se escribio para los cinco ejercicios **anuales** de FMP. `EodhdFiscalPeriodProvider` entrega trimestres, pero `FiscalPeriod` no declara la periodicidad y el builder usa el ultimo periodo como si fuera un año completo. Antes de cualquier backtest hay que demostrar y corregir, como minimo:
 

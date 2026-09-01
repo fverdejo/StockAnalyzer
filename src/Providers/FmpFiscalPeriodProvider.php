@@ -7,6 +7,7 @@ namespace StockAnalyzer\Providers;
 use DateTimeImmutable;
 use JsonException;
 use StockAnalyzer\DTO\FiscalPeriod;
+use StockAnalyzer\DTO\FiscalPeriodType;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Http\HttpClient;
 
@@ -92,6 +93,7 @@ class FmpFiscalPeriodProvider
                 ticker: $ticker,
                 endDate: new DateTimeImmutable($endDate),
                 filingDate: $filingDate,
+                periodType: FiscalPeriodType::Annual,
                 revenue: $this->numeric($inc['revenue'] ?? null),
                 grossProfit: $this->numeric($inc['grossProfit'] ?? null),
                 operatingIncome: $this->numeric($inc['operatingIncome'] ?? null),

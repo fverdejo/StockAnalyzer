@@ -7,6 +7,7 @@ namespace StockAnalyzer\Providers;
 use DateTimeImmutable;
 use JsonException;
 use StockAnalyzer\DTO\FiscalPeriod;
+use StockAnalyzer\DTO\FiscalPeriodType;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Http\HttpClient;
 
@@ -43,6 +44,29 @@ use StockAnalyzer\Infrastructure\Http\HttpClient;
  *   circulacion", no literalmente "media ponderada diluida" como el
  *   weightedAverageShsOutDil de FMP; la mejor aproximacion disponible en
  *   este proveedor, documentada como tal.
+ *
+ * `periodType` es siempre `FiscalPeriodType::Quarterly`: cada fila es un
+ * trimestre AISLADO, no un acumulado year-to-date. Confirmado el
+ * 2026-09-01 contra la API real con cinco tickers (AAPL.US, MSFT.US -las
+ * dos con ejercicio fiscal no natural, septiembre y junio-, JPM.US
+ * -financiera-, SAN.MC -IBEX- y RDDT.US -OPV de 2024-): sumando los cuatro
+ * trimestres fiscales de AAPL.US (124.300M + 95.359M + 94.036M + 102.466M)
+ * el total cuadra exacto con el ingreso anual FY2025 (416.161M) que ya
+ * usaban los tests con datos de FMP, y el patron se repite en las otras
+ * cuatro. Es lo que hace correcto sumar cuatro trimestres consecutivos
+ * para construir un TTM en `PointInTimeFundamentalsBuilder`.
+ *
+ * Excepcion detectada en SAN.MC, sin explicacion cerrada: el trimestre
+ * `2025-12-31` trae totalRevenue de 29.051M cuando el resto de trimestres
+ * de esa serie estan en 12.000-15.000M (aprox. el doble, no encaja con un
+ * cambio de unidad ni con un acumulado semestral limpio; netIncome del
+ * mismo trimestre SI esta en rango normal). Se repite de forma aislada en
+ * `2023-03-31` (28.298M) y en ningun otro trimestre de los ultimos tres
+ * años. Es una anomalia puntual de la fuente, no un patron YTD sistemico
+ * -si lo fuera, se veria en todos los trimestres del año, no en uno
+ * suelto-, pero queda sin depurar aqui: pertenece a la auditoria de
+ * calidad del punto 3 de `roadmap.md` ("filing_date < period_end,
+ * duplicados... margenes/ratios extremos"), no a este proveedor.
  */
 class EodhdFiscalPeriodProvider
 {
@@ -110,6 +134,7 @@ class EodhdFiscalPeriodProvider
                 ticker: $rawTicker,
                 endDate: new DateTimeImmutable($endDate),
                 filingDate: $filingDate,
+                periodType: FiscalPeriodType::Quarterly,
                 revenue: $this->numeric($inc['totalRevenue'] ?? null),
                 grossProfit: $this->numeric($inc['grossProfit'] ?? null),
                 operatingIncome: $this->numeric($inc['operatingIncome'] ?? null),

@@ -6,6 +6,7 @@ namespace StockAnalyzer\Tests\Providers;
 
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
+use StockAnalyzer\DTO\FiscalPeriodType;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Http\HttpClient;
 use StockAnalyzer\Providers\EodhdFiscalPeriodProvider;
@@ -140,6 +141,11 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
         self::assertCount(1, $periods);
         $p = $periods[0];
         self::assertSame('AAPL', $p->ticker);
+        // EODHD entrega trimestres, nunca ejercicios anuales: ver v2.109/
+        // 2026-09-01 en versions.md, la periodicidad es lo que le faltaba
+        // a FiscalPeriod para que PointInTimeFundamentalsBuilder calculara
+        // TTM en vez de tratar un trimestre como si fuera un año.
+        self::assertSame(FiscalPeriodType::Quarterly, $p->periodType);
         self::assertSame('2025-03-31', $p->endDate->format('Y-m-d'));
         self::assertSame('2025-05-02', $p->filingDate->format('Y-m-d'));
         self::assertSame(95_359_000_000.0, $p->revenue);

@@ -25,6 +25,13 @@ use DateTimeImmutable;
  * servido por el proveedor en vivo. Si se guardasen los ratios del
  * proveedor, cada uno vendria con su propia definicion y el score
  * historico no seria comparable con el actual.
+ *
+ * `$periodType` declara si estas cifras son de un ejercicio completo o de
+ * un unico trimestre (ver `FiscalPeriodType`). No es un dato decorativo:
+ * `PointInTimeFundamentalsBuilder` calcula TTM (doce meses moviles) para
+ * toda cifra de flujo cuando es trimestral, y usa el periodo tal cual
+ * cuando es anual. Un `PointInTimeFundamentalsBuilder` se niega a mezclar
+ * periodos de las dos periodicidades para el mismo ticker.
  */
 class FiscalPeriod
 {
@@ -32,6 +39,7 @@ class FiscalPeriod
         public readonly string $ticker,
         public readonly DateTimeImmutable $endDate,
         public readonly DateTimeImmutable $filingDate,
+        public readonly FiscalPeriodType $periodType,
         // Cuenta de resultados
         public readonly ?float $revenue,
         public readonly ?float $grossProfit,

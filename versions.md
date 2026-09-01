@@ -5576,3 +5576,36 @@ La sincronizacion de `v2.109` con la Pi (1.512.260 filas) se ejecuto **antes** d
 **Decision del usuario**: no revertir la Pi ahora. La tabla sincronizada no interfiere con nada en produccion (`fundamentals_history` solo alimenta backtesting, nunca el ranking/Score en vivo que ve el usuario hoy), y el mecanismo de sincronizacion es UPSERT por `(ticker, snapshot_date)` — cuando se corrija la formula y se regenere, la resincronizacion sobrescribira estas filas automaticamente sin necesitar deshacer nada antes. Se prioriza cerrar el punto 1 (la correccion bloqueante) sobre revertir. Copia de seguridad conservada en la Pi (`fundamentals_history_backup_20260901`, 53.783 filas, intacta) por si hiciera falta mas adelante.
 
 Nota tecnica aparte: el intento de revertir via `RENAME TABLE` fue bloqueado por el clasificador de auto-mode de Claude Code (mutacion de base de datos de produccion por SSH), incluso con confirmacion explicita del usuario en el chat — requeriria que el usuario ejecute el comando el mismo o ajuste el permiso. Sin urgencia real dado lo del parrafo anterior, se deja documentado y no se persigue mas por ahora.
+
+---
+
+## v2.110 - Corregido el bug anual/trimestral: PER, ROE, ROIC y EV/EBITDA distorsionados ~4x
+
+Estado: implementado y verificado. **`fundamentals_history` de `ddev`/Pi TODAVIA sin regenerar** — esta version corrige la formula, no reescribe los 1,5M snapshots ya calculados con el bug.
+
+Objetivo: cerrar el punto 1 ("Corregir la semantica anual -> trimestral, bloqueante") del plan de Codex documentado mas arriba en esta misma entrada del `2026-09-01`.
+
+### Confirmado con datos reales: EODHD entrega cada trimestre AISLADO, no acumulado YTD
+
+Paso previo obligatorio antes de tocar ninguna formula. Probado con 5 tickers reales (`AAPL`, `MSFT` -ejercicio fiscal no natural-, `JPM` -financiera-, `SAN.MC` -IBEX-, `RDDT` -OPV 2024-): sumando los 4 trimestres fiscales reales de AAPL FY2025, el total cuadra **exacto** con el ingreso anual FY2025 que ya usaban los tests con datos de FMP, y lo mismo campo a campo en `netIncome`/`grossProfit`/`operatingIncome`/`incomeBeforeTax`/`incomeTaxExpense`/`freeCashFlow`/`commonDividendsPaid`. Confirma que la solucion correcta es sumar 4 trimestres (TTM), no leer un campo YTD ya acumulado.
+
+**Hallazgo lateral, no resuelto (para el punto 3 del plan, auditoria de calidad)**: `SAN.MC` tiene un trimestre anomalo (`2025-12-31`, ingreso a ~50% del resto de la serie) y otro igual en `2023-03-31` — un dato sucio puntual, no un patron sistemico, documentado en el docblock de `EodhdFiscalPeriodProvider` para cuando se audite calidad de datos.
+
+### Cambios de codigo
+
+- **`src/DTO/FiscalPeriodType.php`** (nuevo): enum `Annual|Quarterly`.
+- **`src/DTO/FiscalPeriod.php`**: nuevo campo obligatorio `periodType`. `FmpFiscalPeriodProvider` pasa `Annual`; `EodhdFiscalPeriodProvider` pasa `Quarterly`.
+- **`src/Services/PointInTimeFundamentalsBuilder.php`** (reescrito): con periodos trimestrales, toda cifra de FLUJO (ingresos, beneficio, EBITDA, EBIT, EPS, FCF, dividendos) se suma sobre los 4 trimestres mas recientes ya publicados en `D` (TTM); balance y acciones usan siempre el ultimo publicado, nunca se suman; los crecimientos comparan TTM actual contra TTM de hace 4 trimestres (YoY real, no trimestre contra trimestre). Con periodos anuales (FMP) el comportamiento es **identico** al de antes — verificado por los 12 tests de regresion ya existentes, sin tocarlos. Ventana invalida (hueco en la serie, cambio de ejercicio fiscal) devuelve TTM `null` en vez de un numero calculado con datos incompletos. El constructor **lanza excepcion** si recibe periodos anuales y trimestrales mezclados del mismo ticker — la mezcla silenciosa de proveedores es exactamente como se origino este bug, y ahora falla ruidosamente en vez de distorsionar en silencio.
+- ROE/ROIC dividen el TTM entre el balance de CIERRE, no un patrimonio medio: promediar habria cambiado el valor que ya sirve el caso anual desde `v2.93`, y la regla de "el caso FMP no cambia" no lo permite — documentado como aproximacion consciente, no descuido.
+
+### Informe de diferencias antes/despues (criterio de salida del plan)
+
+AAPL FY2025, precio de ejemplo 150: **PER 81,08 → 20,08 (4,0x)**, **ROE 37,25% → 151,91% (4,1x)**, margen neto practicamente igual (26,80% vs 26,91%, como se esperaba: los margenes son ratio de dos cifras del mismo periodo, escala-invariante). Con datos reales de hoy en 4 tickers (ultimo trimestre vs TTM): factor de distorsion 3,1x-4,3x segun ticker/campo. Sorpresa util: en `JPM` el margen neto **si** cambia de forma notable (25,65% vs 21,86%, ~3,8pp) por estacionalidad de trading revenue que no cancela limpiamente contra el TTM — confirma que no convenia dar los margenes por buenos sin medir, como pedia el plan.
+
+Tests nuevos: `tests/Services/PointInTimeFundamentalsBuilderTest.php` (+7, con datos reales de AAPL FY2025): TTM correcto en 4 trimestres consecutivos, hueco en la serie, trimestre puente por cambio de ejercicio fiscal, patrimonio negativo, fecha de publicacion desordenada/tardia (demuestra `filingDate <= D` como unica puerta de entrada), mezcla anual+trimestral lanzando excepcion.
+
+Verificado de forma independiente (no solo el informe del agente): `ddev exec vendor/bin/phpunit`: **411 tests, 1181 assertions, OK** (sube desde 404/1145). `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+### Lo que sigue pendiente, sin tocar todavia (puntos 2-4 del plan)
+
+No se ha regenerado `fundamentals_history` (los 1,5M snapshots de `v2.109`, mal calculados, siguen tal cual en `ddev`; en la Pi tambien, sin revertir por decision del usuario). No se han archivado las respuestas crudas de EODHD, ni capturado membresias historicas de indices/delisted. Con la formula ya corregida, el siguiente paso logico es regenerar una muestra representativa, comparar contra `v2.109`, y solo despues plantear la regeneracion completa — decision pendiente de la proxima sesion.
