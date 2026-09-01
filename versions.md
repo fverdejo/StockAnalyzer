@@ -5170,6 +5170,7 @@ Tres candidatas nuevas del `2026-08-27` (ver `v2.104`), ninguna con codigo tocad
 - **Bucket de spread SMA20/50 aislado** (`trader-tendencia`): factor puro death-cross ancho vs golden-cross, 0/30 combinaciones sobrevive Bonferroni pero 24/30 mismo signo (p≈0,0014) — falta el parche temporal sobre `TechnicalScoreAnalyzer.php:104-117` con `runCrossSectional()` real, mismo protocolo que ya se uso dos veces en esta saga.
 - **Consistencia de tendencia "Frog in the Pan"** (`trader-tendencia`, Da/Gurun/Warachka 2014): 0/12 sobrevive Bonferroni pero 11/12 mismo signo (p≈0,0064), mas fuerte en `healthcare` (el universo que suele romper el resto de señales). Requeriria un campo nuevo en `TechnicalSnapshot` (discrecion de tendencia sobre la ventana de `momentum12m1`).
 - **RSI(2) de Connors** (`analista-mercado`): sin medir todavia, indicador nuevo (no el RSI14 ya existente) para reversion de 1-2 sesiones.
+- **Universo small/mid-cap EEUU, no S&P500/Nasdaq100 completos** (`analista-mercado`, 2026-09-01): el usuario propuso anadir S&P500/Nasdaq100 completos a `config/universes.php`. Verificado con `bin/backtest.php --cross-sectional` sobre 49 tickers reales del S&P500 fuera de todo universo actual (EBAY, HPQ, homebuilders, materiales, staples, retail, ocio/viajes): la inversion del score ya documentada en `largecap60`/`ibex35`/`healthcare` se reproduce, y con mas fuerza (alpha -0,80pp, t=-2,81 pooled, frente a -0,30pp/t=-1,23 en `largecap60` con los mismos parametros). Confirma que ampliar dentro de large/mid-cap EEUU da potencia estadistica pero no cambia de regimen (mismo mercado eficiente que senalo el modelo ridge del `2026-08-25`). Nasdaq100 completo solapa demasiado con `largecap60`/`tech40` (la mayoria de sus pesos pesados ya estan en algun universo) y aporta poco neto. La condicion del usuario del `2026-08-21` ("mas de un universo independiente") la cumpliria mejor un universo small/mid-cap EEUU (regimen genuinamente distinto, nunca medido) o correr el mismo protocolo sobre `china_adr`/`asia_pacific_adr`/`latam_adr`, que ya existen desde el 2026-07-31 y ninguna investigacion cerrada ha usado todavia. Ojo: la cobertura de fundamentales point-in-time de FMP parece bloquear en bloque los tickers `.MC` de IBEX (19/19 con 402 el `2026-08-23`), asi que es dudoso que ampliar `config/universes.php` por si solo desbloquee cobertura fuera de EEUU sin coordinarlo con `fiabilidad-datos-mercado`.
 
 ---
 
@@ -5393,3 +5394,51 @@ Verificado: `ddev exec vendor/bin/phpunit`: **388 tests, 1100 assertions, OK (1 
 - RSI(2) de Connors (analista-mercado, 2026-08-27): sin medir todavia, candidato de reversion de muy corto plazo.
 
 RSI(14), Volumen, momentum ponderado por volumen, ROE/drawdown y el ensanchado de ATR quedan cerrados con resultado nulo (los dos ultimos, auditados) y no entran en la lista.
+
+---
+
+## 2026-08-27 (segunda tanda del dia) - Relleno de fundamentales: sin suerte, 47 confirmados se mantiene
+
+El usuario pide reintentar el relleno "a ver si hay suerte esta vez", con la Pi y `ddev` reactivados tras haberse parado entre sesiones. Mismas dos tandas de siempre: `--all-universes --skip-existing --max-tickers=80` (144 llamadas) mas los siguientes 30 candidatos explicitos en el orden de `config/universes.php` (90 llamadas) — 234/250 llamadas diarias. **0 tickers nuevos**, los 78 candidatos con error fueron todos HTTP 402, identicos uno a uno a los de la tanda de la mañana. Se mantiene en **47 tickers confirmados**. Sin datos nuevos que sincronizar con la Pi.
+
+---
+
+## v2.105 - `bin/analyze.php --all-universes`, bug de truncamiento a 60 arreglado, y decision de EODHD para el relleno
+
+Estado: implementado y verificado (cron todavia sin instalar en la Pi, pendiente de confirmacion).
+
+Objetivo:
+
+El usuario reencuadra el proyecto (uso personal, no un producto a vender — ver nota mas abajo) y pide tres cosas: (1) que el historico de **todos** los universos actuales se actualice a diario sin intervencion manual, no solo `largecap60`; (2) evaluar si los universos actuales son los adecuados, con la propuesta concreta de añadir S&P500/Nasdaq100 completos; (3) confirma que va a contratar **EODHD Fundamentals Data Feed** ($59,99/mes, un mes) para desbloquear el relleno de fundamentales, estancado en 47/305 desde hace dos semanas por el 402 sistematico de FMP.
+
+### `--all-universes`, implementado y verificado (`fiabilidad-datos-mercado`)
+
+`bin/analyze.php` ganó el flag `--all-universes`: analiza cada uno de los **305 tickers unicos** de `config/universes.php` una sola vez (no 540 veces, una por cada aparicion en un universo) y guarda un `daily_rankings` por cada uno de los 20 universos filtrando el resultado ya calculado — mismo patron que `bin/backfill-fundamentals.php --all-universes` ya resolvia para el relleno de fundamentales.
+
+**De paso, se encontró y arregló un bug real**: `bin/analyze.php` pasaba SIEMPRE los tickers por `TickerNormalizer::normalize()` (tope `MAX_TICKERS=60`, pensado para el buscador de texto libre del Home), incluso viniendo ya validados de `UniverseConfig`. Invisible hasta hoy porque ningun universo individual supera 60 (`largecap60` encaja justo en el limite), pero real en cuanto se agregan varios (`--all-universes`, 305 unicos) o crece uno mas alla de 60 — mismo bug de fondo que ya se documentó el `2026-08-18` para `bin/backfill-fundamentals.php --tickers`, aqui mas grave por afectar tambien al camino normal por `--universe`. Arreglado con una clase nueva, `src/Utils/UniverseTickerResolver.php`, que separa los dos caminos (texto libre por `--tickers` sigue acotado a 60; `--universe`/`--all-universes` ya no pasa por el normalizador). Test de regresion que fija **305** como guardarraíl contra la config real (`tests/Utils/UniverseTickerResolverTest.php`).
+
+Verificado en vivo contra Yahoo real + MySQL real: **305/305 tickers OK, 0 errores, 2m17s** en el entorno de desarrollo; 20 filas nuevas en `daily_rankings` con recuentos correctos; cero duplicacion en `fundamentals_history`/`score_history` pese a tickers compartidos entre universos. Estimacion para la Pi (mas lenta, sin medicion CLI directa posible desde aqui): **5-15 minutos**, extrapolando el ratio ya documentado en `roadmap.md` (`2026-08-14`, 60 tickers cache-frios por la via web superaban el timeout de 60s de nginx). Riesgo de 429 bajo (el ritmo secuencial ya actua como espaciado natural, mas el backoff de `v2.102`), pero sin garantia total sobre la IP residencial de la Pi — recomendado vigilar las primeras ejecuciones reales.
+
+`ddev exec vendor/bin/phpunit`: **393 tests, 1113 assertions, OK** (sube desde 388/1100). `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+**Cron recomendado, pendiente de instalar** (sustituye `--universe=largecap60` por `--all-universes`, mismo horario L-V 23:00, `Persistent=true`):
+```
+ExecStart=/usr/bin/php /var/www/StockAnalyzer/bin/analyze.php --all-universes
+```
+
+### Universos por defecto: S&P500/Nasdaq100 completos, evaluado y NO implementado todavia — decision pendiente del usuario
+
+Dos agentes en paralelo, cada uno desde su terreno:
+
+- **`fiabilidad-datos-mercado`** confirma que es tecnicamente viable: Wikipedia como fuente estandar (con el mismo problema de formato ya conocido, `BRK.B`→`BRK-B`), solapamiento alto pero no problematico con universos ya existentes (mismo patron que `tech40`/`semiconductors_global`), y el limite de "500 tickers" de EODHD en su tabla de precios es solo paginacion del endpoint bulk, no un techo real (100.000 llamadas/dia, ~10.000 tickers/dia de margen — ni de lejos un obstaculo para ~650-750 tickers unicos tras solape). Aporta un dato nuevo real: **`config/universes.php` no tiene HOY ningun universo de Utilities, Real Estate ni Materials** — S&P500 completo seria la primera cobertura de esos tres sectores GICS.
+- **`analista-mercado`** mide en vivo (49 tickers reales del S&P500 fuera de todo universo actual, `bin/backtest.php --cross-sectional`) y encuentra que la inversion del score ya conocida se reproduce **con mas fuerza** ahi (alpha -0,80pp, t=-2,81, frente a -0,30pp/t=-1,23 en `largecap60`) — confirma que ampliar dentro de large/mid-cap EEUU da mas muestra pero **no cambia de regimen de mercado**, el mismo cuello de botella que ya señalo el modelo ridge del `2026-08-25`. Nasdaq100 completo solapa demasiado con `largecap60`/`tech40` para aportar algo neto. Para cumplir de verdad la condicion del usuario del `2026-08-21` ("mas de un universo independiente" para repetir la investigacion de fundamentales), propone en su lugar un universo **small/mid-cap EEUU** (nunca medido, regimen genuinamente distinto) o activar `china_adr`/`asia_pacific_adr`/`latam_adr`, que **ya existen en `config/universes.php` desde el `2026-07-31` y ninguna investigacion cerrada los ha usado todavia**.
+
+**Sintesis: son dos preguntas distintas, con respuestas distintas.** Para la pregunta de investigacion (repetir fundamentales en un universo independiente), S&P500/Nasdaq100 no sirven — hace falta small/mid-cap o activar los ADR ya existentes. Para la pregunta de cobertura personal (poder analizar cualquier sector para invertir, que es el objetivo declarado hoy del proyecto), S&P500 si aporta algo real y nuevo (Utilities/Real Estate/Materials, sectores con cero cobertura hoy). Ninguna de las dos vias se ha implementado: decision pendiente del usuario, no de los agentes.
+
+### Ideas adicionales sugeridas — nueva entrada
+
+Añadida por `analista-mercado`: universo **small/mid-cap EEUU** o activar `china_adr`/`asia_pacific_adr`/`latam_adr`, para satisfacer la condicion de universo independiente antes de repetir la investigacion de fundamentales. Ojo con `fiabilidad-datos-mercado`: la cobertura de fundamentales point-in-time de FMP bloquea en bloque los `.MC` de IBEX (19/19 con 402 el `2026-08-23`), asi que ampliar `config/universes.php` fuera de EEUU no garantiza por si solo tener datos fundamentales point-in-time sin coordinarlo — aunque para EODHD esto no aplica (soporte confirmo profundidad favorable en `SAN.MC` hasta 1987, ver entrada mas abajo).
+
+### Decision: contratar EODHD Fundamentals Data Feed, un mes
+
+El usuario confirma que pagara **EODHD Fundamentals Data Feed** ($59,99/mes) para desbloquear el relleno de `fundamentals_history`, tras confirmar con soporte de EODHD que `SAN.MC` (uno de los pesos pesados del IBEX) tiene fundamentales hasta 1987, con "comparable length where possible" para el resto — descarta el riesgo de caer en el tramo "minor companies" (6 años/20 trimestres) que habia hecho dudar de la opcion. Confirmado tambien por codigo (no solo argumentado) que el relleno es una operacion de un solo mes sin dependencia posterior: `bin/backfill-fundamentals.php` escribe de forma permanente en MySQL, el cron diario nunca toca FMP/EODHD, y `fundamentals_history` sigue creciendo solo hacia adelante via Yahoo en cada visita a una ficha (`Application.php:393`) independientemente de cualquier proveedor de pago. Pendiente: el propio usuario contrata (accion suya, no de Claude); cuando este activo, preparar el comando exacto para aprovechar el mes al maximo (100.000 llamadas/dia de EODHD frente a las 250/dia de FMP) antes de cancelar.
