@@ -119,17 +119,20 @@ class YahooCorporateProfileProvider
         return [$company, $events];
     }
 
+    /**
+     * error_log(), no STDERR (constante que solo existe bajo el SAPI cli,
+     * ver `versions.md` 2026-09-02): esta clase se invoca tanto desde
+     * bin/*.php como desde el endpoint web de la ficha del valor.
+     */
     private static function logCacheFailure(string $operation, string $ticker, Throwable $exception): void
     {
-        fwrite(
-            STDERR,
+        error_log(
             sprintf(
-                '[YahooCorporateProfileProvider] %s fallo para %s (%s): %s%s',
+                '[YahooCorporateProfileProvider] %s fallo para %s (%s): %s',
                 $operation,
                 $ticker,
                 $exception::class,
-                $exception->getMessage(),
-                PHP_EOL
+                $exception->getMessage()
             )
         );
     }

@@ -223,22 +223,22 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
      * que llegar a uno de estos catch significa siempre un fallo real (PDO
      * caido, fila corrupta, error de serializacion JSON al guardar), no
      * ruido esperado. El proyecto no tiene infraestructura de logging propia
-     * (sin Logger/Monolog en uso, ver bin/*.php), asi que STDERR es el mismo
-     * mecanismo que ya usa el resto de la aplicacion para avisos. El flujo
-     * de control no cambia: se sigue cayendo al dato en vivo exactamente
-     * igual que antes de este aviso.
+     * (sin Logger/Monolog en uso, ver bin/*.php), asi que error_log() es el
+     * mismo mecanismo que ya usa el resto de la aplicacion para avisos: a
+     * diferencia de STDERR (constante que solo existe bajo el SAPI cli,
+     * ver `versions.md` 2026-09-02), error_log() funciona igual en
+     * bin/*.php que bajo php-fpm. El flujo de control no cambia: se sigue
+     * cayendo al dato en vivo exactamente igual que antes de este aviso.
      */
     private static function logCacheFailure(string $operation, string $ticker, \Throwable $exception): void
     {
-        fwrite(
-            STDERR,
+        error_log(
             sprintf(
-                '[CachedMarketDataProvider] %s fallo para %s (%s): %s%s',
+                '[CachedMarketDataProvider] %s fallo para %s (%s): %s',
                 $operation,
                 $ticker,
                 $exception::class,
-                $exception->getMessage(),
-                PHP_EOL
+                $exception->getMessage()
             )
         );
     }

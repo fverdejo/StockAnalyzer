@@ -67,20 +67,20 @@ class CachedMarketMoversProvider implements MarketMoversProviderInterface
      * Mismo patron que CachedMarketDataProvider::logCacheFailure() desde
      * v2.102: antes de esto, un fallo real de cache (PDO caido, JSON
      * corrupto al guardar) desaparecia en silencio en vez de dejar rastro
-     * en STDERR. El flujo de control no cambia: se sigue cayendo al
-     * screener en vivo exactamente igual que antes de este aviso.
+     * en el log. error_log(), no STDERR (constante que solo existe bajo el
+     * SAPI cli, ver `versions.md` 2026-09-02). El flujo de control no
+     * cambia: se sigue cayendo al screener en vivo exactamente igual que
+     * antes de este aviso.
      */
     private static function logCacheFailure(string $operation, string $kind, Throwable $exception): void
     {
-        fwrite(
-            STDERR,
+        error_log(
             sprintf(
-                '[CachedMarketMoversProvider] %s fallo para %s (%s): %s%s',
+                '[CachedMarketMoversProvider] %s fallo para %s (%s): %s',
                 $operation,
                 $kind,
                 $exception::class,
-                $exception->getMessage(),
-                PHP_EOL
+                $exception->getMessage()
             )
         );
     }

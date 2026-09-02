@@ -5973,3 +5973,23 @@ Cuatro tests que fijan el criterio de correccion de cada punto P0 por separado (
 `ddev exec vendor/bin/phpunit`: **493 tests, 1.351 assertions, OK** (1 skip preexistente sin relacion, ya documentado en el propio test: `BacktestUsesPointInTimeFundamentalsTest::testLosFundamentalesDelSnapshotCambianElResultadoDelBacktest`, inaplicable mientras dure `feature/solo-tecnico`). Sube desde 489/1.324 antes de esta entrada (+4 tests, +27 assertions netas: 27 tests reparados sin perder cobertura, 4 nuevos). `ddev exec vendor/bin/phpstan analyse`: sin errores (230 ficheros).
 
 Resultado esperado: el motor de backtesting mide lo que de verdad se podria haber operado (P0.1), con fechas transversales genuinamente independientes (P0.2) y sin rellenar con un neutral inventado lo que no se pudo medir (P0.3) — y la suite de tests vuelve a demostrarlo, no solo a no contradecirlo. Repetir el baseline de `v2.114` con el motor corregido (el siguiente paso que ya apuntaba la entrada anterior) sigue pendiente, deliberadamente fuera de esta tarea.
+
+---
+
+## 2026-09-02 (sexta entrada) - Bug real: los graficos con temporalidad menor a 1 mes no funcionaban (velas intradia)
+
+Estado: corregido y verificado en ddev. Reportado por el usuario: en la ficha de un valor, el rango "1S" (7 dias, el unico por debajo de 1 mes en el selector de `StockDetailPage`) dispara velas intradia de 15 minutos en vez de simplemente recortar el historico diario, y esa peticion no devolvia nada.
+
+### Causa raiz: dos bugs independientes, el segundo enmascaraba al primero
+
+1. **`market_history_cache.history_range` es `VARCHAR(8)`** (definido en `017_create_market_history_cache.sql` para rangos diarios como `2y`/`6mo`/`max`). Las claves de cache intradia (`CachedMarketDataProvider::getIntradayQuotes()`, v2.9) usan `'intraday_' . $interval`: `intraday_15m`/`intraday_1h` miden 11-12 caracteres, no caben. Con `sql_mode=STRICT_TRANS_TABLES` (activo en ddev y en la Pi), el `INSERT` de `saveHistory()` lanza `Data too long for column 'history_range'` en vez de truncar en silencio.
+2. Esa excepcion se captura correctamente en `CachedMarketDataProvider::getIntradayQuotes()`, pero el propio manejador de log, `logCacheFailure()`, hacia `fwrite(STDERR, ...)` — y `STDERR` es una constante que **solo existe bajo el SAPI `cli`**, no bajo `php-fpm`. La llamada al logger fallaba con `Error: Undefined constant "StockAnalyzer\Providers\STDERR"`, un error que ya no esta dentro del `try`/`catch` que lo origino, asi que se propaga sin capturar hasta `Application::renderIntraday()`, que lo devuelve como `{"error": "..."}` con HTTP 502 — **abortando la respuesta antes de devolver las velas que ya se habian obtenido de Yahoo con exito**. En el navegador, el `fetch()` de `StockDetailPage.php` recibe ese JSON, no encuentra `data.closes`, y sale en silencio sin pintar nada ni avisar (mismo patron latente en los otros dos usos de `STDERR` del proyecto, `CachedMarketMoversProvider` y `YahooCorporateProfileProvider`: ninguno de los dos habia disparado el bug todavia porque sus fallos de cache son mas raros en la practica, pero el mismo defecto estaba presente en los tres).
+
+Reproducido en ddev antes de corregir: `curl ".../?page=intraday&ticker=AAPL&interval=15m"` devolvia exactamente `{"error":"Undefined constant \"StockAnalyzer\\Providers\\STDERR\""}`.
+
+### Arreglo
+
+- **`database/migrations/024_widen_market_history_cache_range.sql`**: `ALTER TABLE market_history_cache MODIFY COLUMN history_range VARCHAR(20) NOT NULL`. Aplicado en ddev; pendiente en la Pi hasta el proximo despliegue (no bloquea el despliegue de codigo: sin la migracion, el guardado en cache de velas intradia seguira fallando, pero de forma silenciosa con el logger ya corregido, sin romper la respuesta al usuario).
+- **`CachedMarketDataProvider::logCacheFailure()`, `CachedMarketMoversProvider::logCacheFailure()`, `YahooCorporateProfileProvider::logCacheFailure()`**: `fwrite(STDERR, ...)` -> `error_log(...)`, que funciona igual en `bin/*.php` (SAPI `cli`) que bajo `php-fpm`. Mismo mensaje, sin la constante que solo existia en un SAPI.
+
+Verificado en ddev tras el arreglo: `intraday_15m` para AAPL devuelve velas reales y la fila de cache se escribe (`SELECT * FROM market_history_cache WHERE history_range='intraday_15m'` -> 1 fila, payload de 19.888 bytes). Repetido para `1m`/`5m`/`1h` con MSFT, los tres devuelven datos. `ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK. `ddev exec vendor/bin/phpstan analyse`: sin errores.
