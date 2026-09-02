@@ -5800,3 +5800,38 @@ Tests nuevos (`BacktestingServicePointInTimeUniverseTest`, con un doble en memor
 `ddev exec vendor/bin/phpunit`: **477 tests, 1.301 assertions, OK** (sube desde 444/1.238; +33 tests: `EodhdIndexMembershipProviderTest` 7, `EodhdIndexMembershipParserTest` 6, `IndexMembershipRecordTest` 6, `BacktestingServicePointInTimeUniverseTest` 3, `EodhdRawIndexMembershipRepositoryTest` 5, `IndexMembershipRepositoryTest` 6). `ddev exec vendor/bin/phpstan analyse`: sin errores (225 ficheros). Migraciones `021`/`022` aplicadas en `ddev` (no sincronizadas con la Pi, fuera de alcance de esta tarea de investigacion).
 
 Ficheros nuevos: `database/migrations/021_create_eodhd_raw_index_membership.sql`, `022_create_index_membership.sql`; `src/DTO/IndexMembershipRecord.php`; `src/Providers/EodhdIndexMembershipProvider.php`, `EodhdIndexMembershipParser.php`; `src/Repository/EodhdRawIndexMembershipRepository.php`, `IndexMembershipRepository.php`; `src/Interfaces/IndexMembershipCheckerInterface.php`; `bin/capture-index-membership.php`, `archive-legacy-fundamentals.php`, `verify-legacy-fundamentals-coverage.php`. Modificados: `src/Providers/EodhdFiscalPeriodProvider.php` (`$eodhdSymbolOverride`), `src/Services/BacktestingService.php` (`runCrossSectional()` point-in-time), `tests/Integration/IntegrationTestCase.php` (dos tablas nuevas en el `TRUNCATE`).
+
+---
+
+## 2026-09-02 (segunda entrada) - Version reducida del "Tercer bloque": backtest point-in-time real, sin hallazgo
+
+El usuario, informado del bloqueo del "Segundo bloque" (174/450 ex-miembros del S&P 500 sin fuente de precio fiable), pide seguir con la version reducida que el propio Claude propuso: usar solo los 136 que salieron del indice pero siguen cotizando hoy, verificando caso a caso que el ticker sigue siendo la misma empresa antes de fiarse de Yahoo.
+
+### Fase 1: verificacion de identidad, 129/136 (95%) pasan
+
+Correccion de partida: la query literal (`is_active_now=0 AND is_delisted=0`) da **141**, no 136 — los 136 reales son esos 141 menos 5 ya cubiertos por el universo actual (`MOH`, `NOV`, `QRVO`, `SE`, `YUMC`, que salieron del S&P 500 pero siguen en otros universos de `config/universes.php` hoy), exactamente el criterio que ya implementaba `IndexMembershipRepository::formerMembersNotIn()`.
+
+Heuristica de cribado: `firstTradeDate` del ticker actual en Yahoo posterior a la `end_date` archivada (el valor de hoy empezo a cotizar DESPUES de que la empresa historica saliera del indice) — marco 12 casos dudosos, verificados uno a uno contra fuentes externas:
+
+- **7 descartados, reciclaje de ticker confirmado**: `EMC` (hoy un ETF, no EMC Corporation), `BEAM` (Beam Therapeutics, IPO 2020, no Beam Inc/Jim Beam), `MMI` (Marcus & Millichap, no Motorola Mobility), `S` (SentinelOne, IPO 2021, no Sprint Nextel), `STI` (penny stock, no SunTrust), `VAL` (Valaris, perforacion offshore, no Valspar/pinturas), `SBNY` (Signature Bank quebro en 2023, intervencion FDIC, la entidad ya no existe).
+- **5 marcados por la heuristica pero confirmados como la MISMA empresa** (reorganizacion Chapter 11 o brecha de dias por spin-off, no reciclaje): `ADT`, `BTU` (Peabody), `NE` (Noble Corp), `KTB` (Kontoor, spin-off de VF Corp), `ONL` (Orion Office REIT, spin-off de Realty Income).
+
+Persistido en `index_membership` (migracion `023`, columnas `identity_verified_at`/`identity_status`/`identity_note`, solo rellenas para estos 136 — el resto de filas quedan `NULL`, no necesitaban esta verificacion).
+
+### Fase 2: backtest transversal con universo point-in-time real (636 tickers), sin hallazgo
+
+Universo: 507 (subconjunto de los 628 actuales confirmados como miembros historicos reales de GSPC) + 129 (verificados en fase 1) = **636 tickers**, filtrados fecha a fecha por membresia real (`IndexMembershipRepository::isMemberAt()`, ya conectado a `BacktestingService::runCrossSectional(..., indexCode: 'GSPC')` desde la entrada anterior). `--horizon=20 --step=20 --top=10 --history=10y`, 121 fechas independientes, 0 errores en los 636 tickers.
+
+**Hallazgo colateral, no buscado**: `mode=full` y `mode=technical` dieron resultados identicos hasta el ultimo decimal en las 4 corridas — confirma que `config/weights.php` ya tiene FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND a peso 0 **en produccion**, no solo en la rama de investigacion `feature/solo-tecnico`. La comparacion "con/sin bloque FUNDAMENTAL" es hoy un no-op real.
+
+| | Universo sesgado (lista de hoy aplicada al pasado) | Universo point-in-time real |
+|---|---|---|
+| Muestras tras filtro | 73.684 | 56.382 (17.302 descartadas, 23,5%, por no ser miembro real ese dia) |
+| Alpha media top-10 | -0,66 pp | -0,58 pp |
+| t pareado por fecha (metrica principal del proyecto) | -1,85 | -1,70 |
+| t de Welch (pooled, secundaria) | -2,66 | -2,54 |
+| Split primera/segunda mitad | t=-1,30 / t=-1,30 | t=-1,03 / t=-1,35 |
+
+**Lectura, sin declarar hallazgo confirmado**: quitar parcialmente el sesgo de supervivencia suaviza ligeramente la alpha negativa ya conocida (-0,66→-0,58 pp) y le resta algo de fuerza en la metrica principal (t pareado -1,85→-1,70), sin que ninguna de las dos versiones cruce |t|≥1,96 en esa metrica. Consistente en orden de magnitud con mediciones previas (`largecap60`: -0,30pp/t=-1,23 pooled). **Limitacion que sigue sin resolverse**: el universo sigue sin los 174 ex-miembros genuinamente delistados, que probablemente rindieron peor de media — el resultado de arriba sigue sesgado en la misma direccion que antes, solo que menos. No se toca `config/weights.php` ni `config/measured_edge.php`.
+
+Verificado: `ddev exec vendor/bin/phpunit`: **477 tests, 1.301 assertions, OK** (sin cambio respecto a la entrada anterior — ningun codigo de produccion nuevo, solo la migracion `023`). `ddev exec vendor/bin/phpstan analyse`: sin errores. Scripts de la investigacion (`storage/scratch/`: `verify_identity2.php`, `persist_identity_verification.php`, `build_universe.php`, `run_point_in_time_backtest.php` y sus salidas) de un solo uso, no comprometidos.
