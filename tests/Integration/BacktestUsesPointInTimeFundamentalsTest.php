@@ -16,6 +16,7 @@ use StockAnalyzer\Services\BacktestingService;
 use StockAnalyzer\Services\DividendGrowthCalculator;
 use StockAnalyzer\Services\RiskLevelsCalculator;
 use StockAnalyzer\Tests\Services\FixedHistoryProvider;
+use StockAnalyzer\Tests\Services\MomentumPrefixFixture;
 use StockAnalyzer\Tests\Services\SyntheticStock;
 
 /**
@@ -34,6 +35,8 @@ use StockAnalyzer\Tests\Services\SyntheticStock;
  */
 final class BacktestUsesPointInTimeFundamentalsTest extends IntegrationTestCase
 {
+    use MomentumPrefixFixture;
+
     private const TICKER = 'TST';
     private const ENTRY_INDEX = 80;
 
@@ -47,19 +50,35 @@ final class BacktestUsesPointInTimeFundamentalsTest extends IntegrationTestCase
     }
 
     /**
+     * P0.3 (`versions.md`, 2026-09-02): prefijo plano de
+     * MOMENTUM_PREFIX_LENGTH velas (`MomentumPrefixFixture`) para que
+     * Momentum 12-1 deje de ser null en las muestras -sin el, todas se
+     * descartaban-. Los indices LOCALES (80, 85, 90...) que documentan los
+     * tests de este fichero viven en realidad desplazados
+     * MOMENTUM_PREFIX_LENGTH posiciones en el array devuelto: quien
+     * necesite `$quotes[85]` (fecha de un snapshot, por ejemplo) tiene que
+     * pedir `$quotes[self::MOMENTUM_PREFIX_LENGTH + 85]`.
+     *
      * @return list<HistoricalQuote>
      */
     private function quotes(): array
     {
-        $quotes = [];
-        $close = 100.0;
         $date = new DateTimeImmutable('2024-01-01');
+        $quotes = $this->flatMomentumPrefix($date, 100.0);
+        $close = 100.0;
 
         for ($i = 0; $i <= self::ENTRY_INDEX + 20; $i++) {
             $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
             $date = $date->modify('+1 day');
             $close += 0.05;
         }
+
+        // P0.1: la entrada de cada señal pasa a ser la apertura de la sesion
+        // SIGUIENTE, asi que sampleHistory() exige una sesion mas de margen
+        // que antes. Se continua la misma progresion (+0,05) para no
+        // introducir ningun precio arbitrario.
+        $close += 0.05;
+        $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
 
         return $quotes;
     }
@@ -153,9 +172,19 @@ final class BacktestUsesPointInTimeFundamentalsTest extends IntegrationTestCase
      */
     public function testConSnapshotsQueCubrenTodoElRecorridoLaCoberturaEsTotal(): void
     {
-        // Un snapshot anterior a la primera fecha muestreada basta: findAsOf
-        // devuelve el mas reciente en esa fecha o antes.
-        $this->history->recordSnapshot(self::TICKER, $this->malos(), new DateTimeImmutable('2023-12-01'));
+        // Anterior a TODO el historico devuelto por quotes(), prefijo de
+        // MOMENTUM_PREFIX_LENGTH velas incluido (`MomentumPrefixFixture`):
+        // sampleHistory() llama a stockAt()/fundamentalsAt() -y por tanto
+        // cuenta un hit o un miss- para CADA indice que visita el bucle
+        // (minimumLookback=80 en adelante, de 5 en 5), incluidos los que
+        // luego se descartan por Momentum 12-1 nulo (P0.3, dentro del
+        // prefijo). Un snapshot fechado solo "antes de la primera muestra
+        // real" (como '2023-12-01', que cae DENTRO del prefijo) deja esos
+        // candidatos descartados como miss y la cobertura no llega al
+        // 100%; findAsOf() devuelve el mas reciente en la fecha pedida o
+        // antes, asi que basta con fecharlo antes de la PRIMERA vela de
+        // todas, prefijo incluido.
+        $this->history->recordSnapshot(self::TICKER, $this->malos(), new DateTimeImmutable('2000-01-01'));
 
         $resultado = $this->backtest(true);
 
@@ -208,10 +237,12 @@ final class BacktestUsesPointInTimeFundamentalsTest extends IntegrationTestCase
     {
         // El muestreo no empieza en la primera vela: BacktestingService exige
         // 80 sesiones de calentamiento. Con horizonte 10 y paso 5, las
-        // muestras caen en los indices 80, 85 y 90, asi que un snapshot
-        // fechado en el 85 deja la primera fuera y cubre las otras dos.
+        // muestras caen en los indices locales 80, 85 y 90 (reales:
+        // MOMENTUM_PREFIX_LENGTH+80/85/90, ver el docblock de `quotes()`),
+        // asi que un snapshot fechado en el 85 deja la primera fuera y
+        // cubre las otras dos.
         $quotes = $this->quotes();
-        $this->history->recordSnapshot(self::TICKER, $this->malos(), $quotes[85]->getDate());
+        $this->history->recordSnapshot(self::TICKER, $this->malos(), $quotes[self::MOMENTUM_PREFIX_LENGTH + 85]->getDate());
 
         $cobertura = $this->backtest(true)['fundamentals_point_in_time_pct'];
 
@@ -227,7 +258,11 @@ final class BacktestUsesPointInTimeFundamentalsTest extends IntegrationTestCase
      */
     public function testLaCoberturaSeCalculaPorTickerYNoSeAcumula(): void
     {
-        $this->history->recordSnapshot('TST', $this->malos(), new DateTimeImmutable('2023-12-01'));
+        // Fecha anterior a TODO el historico (prefijo incluido, ver el
+        // comentario de testConSnapshotsQueCubrenTodoElRecorridoLaCoberturaEsTotal()):
+        // solo asi los dos tickers llegan al 100% que este test necesita
+        // para poder comparar "el primero" con "el segundo" sin ambiguedad.
+        $this->history->recordSnapshot('TST', $this->malos(), new DateTimeImmutable('2000-01-01'));
 
         /** @var array<string,mixed> $result */
         $result = $this->service(true)->run(['TST', 'TST'], 10, 5);

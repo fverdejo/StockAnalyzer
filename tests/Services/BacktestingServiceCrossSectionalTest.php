@@ -31,6 +31,8 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  */
 final class BacktestingServiceCrossSectionalTest extends TestCase
 {
+    use MomentumPrefixFixture;
+
     private const HORIZON_DAYS = 5;
     private const STEP = 5;
     private const TOP_N = 2;
@@ -50,19 +52,42 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
 
     /**
      * 81 velas de arranque (indices 0..80) con incremento de cierre
-     * constante `$baselineStep` desde `$startClose`, y despues una vela por
-     * cada elemento de `$increments`. Mismo esqueleto que usan los demas
-     * tests de BacktestingService: en el indice 80, el primero que muestrea
-     * el servicio, el cierre es exactamente `$startClose + 80*$baselineStep`.
+     * constante `$baselineStep` desde `$startClose` (mas el prefijo de
+     * MOMENTUM_PREFIX_LENGTH velas planas de `MomentumPrefixFixture`, ver su
+     * docblock): en el indice 80, la señal, el cierre es exactamente
+     * `$startClose + 80*$baselineStep`.
      *
-     * @param list<float> $increments
+     * A partir de ahi, **P0.1** (`versions.md`, 2026-09-02: la entrada de
+     * cada señal es la apertura de la sesion SIGUIENTE, no su propio
+     * cierre) desplaza en uno el indice que de verdad fija cada
+     * `forward_return`. El indice 81 continua la linea base un paso mas
+     * (es la apertura que usa la señal del indice 80 como entrada real), y
+     * desde ahi cada tramo de 5 velas se interpola LINEALMENTE
+     * (`linearSegment()`) hasta un cierre EXACTO igual a
+     * `entrada * (1 + $move/100)`: asi el `forward_return` de cada señal
+     * sigue siendo un porcentaje exacto, sin tener que recalcular a mano
+     * que delta diario produce ese porcentaje.
+     *
+     * Con `$move2` (el caso de dos señales, indices 80 y 85): el indice 86
+     * -cierre del primer tramo- es tanto el `forward_return` del indice 80
+     * COMO la apertura de entrada de la señal del indice 85, asi que el
+     * segundo tramo (indices 87-91) parte de ahi. Sin `$move2` (una sola
+     * señal) el historico termina en el indice 86.
+     *
      * @return list<HistoricalQuote>
      */
-    private function history(string $startDate, array $increments, float $startClose, float $baselineStep): array
-    {
-        $quotes = [];
-        $close = $startClose;
+    private function signalHistory(
+        string $startDate,
+        float $startClose,
+        float $baselineStep,
+        float $move1,
+        ?float $move2 = null
+    ): array {
         $date = new DateTimeImmutable($startDate);
+        // P0.3: prefijo plano para que Momentum 12-1 deje de ser null en el
+        // indice 80 (ver el docblock de `MomentumPrefixFixture`).
+        $quotes = $this->flatMomentumPrefix($date, $startClose);
+        $close = $startClose;
 
         for ($i = 0; $i < 81; $i++) {
             if ($i > 0) {
@@ -73,48 +98,77 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
             $date = $date->modify('+1 day');
         }
 
-        foreach ($increments as $increment) {
-            $close += $increment;
-            $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
+        // Indice 81: apertura real de la señal del indice 80 (P0.1).
+        $close += $baselineStep;
+        $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
+        $date = $date->modify('+1 day');
+        $entry1 = $close;
+        $target1 = $entry1 * (1 + ($move1 / 100));
+
+        foreach ($this->linearSegment($entry1, $target1, 5) as $segmentClose) {
+            $quotes[] = new HistoricalQuote($date, $segmentClose, $segmentClose + 0.5, $segmentClose - 0.5, $segmentClose, 1_000_000);
             $date = $date->modify('+1 day');
+        }
+
+        if ($move2 !== null) {
+            // $target1 (cierre del indice 86) es la apertura de entrada de
+            // la señal del indice 85.
+            $target2 = $target1 * (1 + ($move2 / 100));
+
+            foreach ($this->linearSegment($target1, $target2, 5) as $segmentClose) {
+                $quotes[] = new HistoricalQuote($date, $segmentClose, $segmentClose + 0.5, $segmentClose - 0.5, $segmentClose, 1_000_000);
+                $date = $date->modify('+1 day');
+            }
         }
 
         return $quotes;
     }
 
     /**
-     * 91 velas alcistas: arranque suave (100,00 -> 104,00 en el indice 80) y
-     * despues dos tramos de 5 velas que llevan el cierre a 109,20 y a
-     * 112,476. Con horizonte 5 y paso 5 se muestrean los indices 80 y 85,
-     * cuyos retornos forward son exactamente +5,00% y +3,00%.
+     * $steps cierres desde $from (exclusive) hasta $to (inclusive),
+     * interpolados linealmente. El ultimo se asigna directamente a $to (no
+     * se acumula sumando $delta $steps veces) para que sea EXACTO, sin
+     * arrastre de error de coma flotante.
+     *
+     * @return list<float>
+     */
+    private function linearSegment(float $from, float $to, int $steps): array
+    {
+        $delta = ($to - $from) / $steps;
+        $result = [];
+
+        for ($i = 1; $i <= $steps; $i++) {
+            $result[] = $i === $steps ? $to : $from + ($i * $delta);
+        }
+
+        return $result;
+    }
+
+    /**
+     * 92 velas propias (mas el prefijo de MOMENTUM_PREFIX_LENGTH, ver
+     * `MomentumPrefixFixture`) alcistas: arranque suave (100,00 -> 104,00
+     * en el indice 80). Con horizonte 5 y paso 5 se muestrean los indices
+     * 80 y 85, cuyos retornos forward son exactamente +5,00% y +3,00% (ver
+     * `signalHistory()`: P0.1 desplaza la entrada real a los indices 81 y
+     * 86).
      *
      * @return list<HistoricalQuote>
      */
     private function winnerHistory(string $startDate = '2024-01-01'): array
     {
-        return $this->history(
-            $startDate,
-            array_merge(array_fill(0, 5, 1.04), array_fill(0, 5, 0.6552)),
-            100.0,
-            0.05
-        );
+        return $this->signalHistory($startDate, 100.0, 0.05, 5.0, 3.0);
     }
 
     /**
-     * Espejo exacto de `winnerHistory()`: 91 velas bajistas (200,00 ->
-     * 196,00 en el indice 80, y despues a 186,20 y 180,614), con retornos
-     * forward de exactamente -5,00% y -3,00% en los indices 80 y 85.
+     * Espejo exacto de `winnerHistory()`: 92 velas propias bajistas (200,00
+     * -> 196,00 en el indice 80), con retornos forward de exactamente
+     * -5,00% y -3,00% en los indices 80 y 85.
      *
      * @return list<HistoricalQuote>
      */
     private function loserHistory(string $startDate = '2024-01-01'): array
     {
-        return $this->history(
-            $startDate,
-            array_merge(array_fill(0, 5, -1.96), array_fill(0, 5, -1.1172)),
-            200.0,
-            -0.05
-        );
+        return $this->signalHistory($startDate, 200.0, -0.05, -5.0, -3.0);
     }
 
     /**
@@ -207,10 +261,12 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
     /**
      * Caso contrario: el ranking elige justo lo peor.
      *
-     * Mismo universo de 4 tickers, pero con historicos de 86 velas (solo se
-     * muestrea el indice 80, 2024-03-21) en los que las dos series alcistas
-     * -las que el score elige- caen un 5,00% en el horizonte y las dos
-     * bajistas suben un 5,00%. La alpha de la unica fecha es
+     * Mismo universo de 4 tickers, pero con historicos de una sola señal
+     * (indice 80, 2024-03-21: con P0.1 el segundo tramo -indices 87-91- no
+     * se construye, asi que el indice 85 nunca llega a tener el margen que
+     * exige `sampleHistory()` y no se muestrea) en los que las dos series
+     * alcistas -las que el score elige- caen un 5,00% en el horizonte y las
+     * dos bajistas suben un 5,00%. La alpha de la unica fecha es
      * -5,00 - 0,00 = -5,00.
      *
      * Con una sola fecha no hay dispersion calculable, asi que la
@@ -226,8 +282,8 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
      */
     public function testTopNPeorQueElUniversoDaAlphaNegativa(): void
     {
-        $crashingWinner = $this->history('2024-01-01', array_fill(0, 5, -1.04), 100.0, 0.05);
-        $ralliedLoser = $this->history('2024-01-01', array_fill(0, 5, 1.96), 200.0, -0.05);
+        $crashingWinner = $this->signalHistory('2024-01-01', 100.0, 0.05, -5.0);
+        $ralliedLoser = $this->signalHistory('2024-01-01', 200.0, -0.05, 5.0);
 
         $result = $this->service([
             'AAA' => $crashingWinner,

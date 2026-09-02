@@ -73,10 +73,71 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  * construir el calculador para no depender del contenido de
  * config/risk_levels.php): ningun test de niveles de riesgo necesita
  * cambiar sus expectativas.
+ *
+ * **P0.1/P0.3 (`versions.md`, 2026-09-02)**: dos cambios de
+ * `BacktestingService` invalidan el fixture corto de 81 velas que este
+ * fichero usaba hasta ahora.
+ *
+ * - P0.3 descarta toda muestra cuyo `Momentum 12-1` sea `null`
+ *   (`TechnicalAnalyzer::momentumSkippingRecent()` necesita mas de 250
+ *   cierres), y un fixture de 81-91 velas nunca llega a esa profundidad:
+ *   TODAS las muestras se descartaban, dejando estos tests sin ninguna.
+ * - P0.1 mueve la entrada de la señal (cierre del dia `$index`) a la
+ *   apertura de la sesion SIGUIENTE (`$index + 1`), asi que hace falta una
+ *   vela mas de la que el fixture original ya traia.
+ *
+ * La solucion, verificada ejecutando `TechnicalAnalyzer::analyze()` y
+ * `ScoreCalculator::calculate()` directamente sobre el fixture nuevo (no
+ * solo calculado a mano) antes de escribir las aserciones: `baselineQuotes()`
+ * antepone 170 velas PLANAS (mismo precio en open/close, high/low a +-0,5,
+ * volumen 1.000.000) ANTES del patron de 81 dias ya existente, con fechas
+ * ANTERIORES a `2024-01-01` (no se insertan en medio, asi que el patron
+ * conserva exactamente sus fechas y precios de siempre). Esto desplaza la
+ * vela de SEÑAL del indice 80 al 250 (170+80), con suficiente profundidad
+ * (251 cierres) para que Momentum 12-1 deje de ser `null`.
+ *
+ * El precio plano del prefijo es 100.0 y no otro valor arbitrario, por dos
+ * motivos que hay que cumplir A LA VEZ:
+ *
+ * - **Continuidad del ATR14**: `TechnicalAnalyzer::atr()` calcula el true
+ *   range con el CIERRE DEL DIA ANTERIOR (`abs($highs[$i] -
+ *   $closes[$i-1])`) y lo suaviza (Wilder) sobre TODO el historico
+ *   recibido, no solo los ultimos 14. Si el prefijo terminase en un precio
+ *   distinto al primer cierre del patron (100.0), la vela de union tendria
+ *   un true range mucho mayor que 1.0 (el salto de precio, no el rango
+ *   diario) que Wilder arrastraria durante docenas de sesiones y el ATR14
+ *   en la vela de señal dejaria de ser exactamente 1.0 (verificado: con el
+ *   prefijo a 102.95 el ATR14 salia 1.0004658685350087, no 1.0 exacto).
+ *   Con el prefijo a 100.0 -mismo precio que el primer cierre del patron,
+ *   sin salto- el ATR14 en la señal vuelve a salir exactamente 1.0, que es
+ *   lo que necesitan los tests de stop-loss/objetivo (`expectedRiskLevels()`
+ *   usa la constante `ATR14 = 1.0`, no el valor calculado).
+ * - Con el prefijo a 100.0, Momentum 12-1 en la señal ya NO sale neutral
+ *   (sale +2,95%, no 0%): la puntuacion final sube de 82,12% a **82,42%**
+ *   (verificado por ejecucion real). Sigue siendo BUY con holgura de sobra,
+ *   y ningun test de este fichero hace `assertSame()` sobre el porcentaje
+ *   exacto (solo sobre `recommendation === 'BUY'`), asi que no hace falta
+ *   tocar ninguna asercion por este cambio.
+ *
+ * `historyWithPostEntryPath()` añade, justo despues de `baselineQuotes()` y
+ * antes de los `$postEntryDays`, UNA vela de entrada nueva (indice 251) con
+ * `open = ENTRY_PRICE` (104.0): es la apertura que P0.1 usa como precio de
+ * entrada real. Su high/low/close no importan para la simulacion (que
+ * empieza en `$entryIndex + 1`), solo se les da un valor razonable del
+ * mismo estilo que las velas "sin disparo" que ya usa este fichero.
  */
 final class BacktestingServiceTest extends TestCase
 {
+    use MomentumPrefixFixture;
+
     private const ENTRY_INDEX = 80;
+    /**
+     * Indice LOCAL (antes de anteponer MOMENTUM_PREFIX_LENGTH) del segundo
+     * regimen de volatilidad en mixedRiskLevelsRegimeHistory(). El indice
+     * real dentro del historico devuelto es
+     * MOMENTUM_PREFIX_LENGTH + MIXED_REGIME_SECOND_INDEX.
+     */
+    private const MIXED_REGIME_SECOND_INDEX = 200;
     private const ENTRY_PRICE = 104.0;
     private const ATR14 = 1.0;
     private const ATR_MULTIPLIER = 2.5;
@@ -120,21 +181,23 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
-     * 81 velas (indice 0..80). Ver el docblock de la clase para la
-     * justificacion completa de los dos tramos y sus deltas: dias 0-65
-     * suben +0.05/dia, dias 66-73 retroceden -0.125/dia, dias 74-80
-     * recuperan +0.25/dia. El dia de entrada (indice 80) cierra
-     * exactamente en 104.0 con ATR14 exactamente 1.0, y el volumen de ese
-     * dia se triplica (3.000.000 frente a 1.000.000 el resto) para que la
-     * señal de volumen puntue al maximo.
+     * MOMENTUM_PREFIX_LENGTH velas planas (MomentumPrefixFixture) + 81 velas (indice 0..80, ahora
+     * desplazadas a MOMENTUM_PREFIX_LENGTH..MOMENTUM_PREFIX_LENGTH+80). Ver
+     * el docblock de la clase para la justificacion completa del prefijo y
+     * de los dos tramos del patron y sus deltas: dias 0-65 suben +0.05/dia,
+     * dias 66-73 retroceden -0.125/dia, dias 74-80 recuperan +0.25/dia. El
+     * dia de entrada (ultimo del patron) cierra exactamente en 104.0 con
+     * ATR14 exactamente 1.0, y el volumen de ese dia se triplica
+     * (3.000.000 frente a 1.000.000 el resto) para que la señal de volumen
+     * puntue al maximo.
      *
      * @return list<HistoricalQuote>
      */
     private function baselineQuotes(): array
     {
-        $quotes = [];
         $close = 100.0;
         $date = new DateTimeImmutable('2024-01-01');
+        $quotes = $this->flatMomentumPrefix($date, $close);
 
         for ($i = 0; $i <= self::ENTRY_INDEX; $i++) {
             $volume = $i === self::ENTRY_INDEX ? 3_000_000 : 1_000_000;
@@ -152,8 +215,10 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
-     * Añade HORIZON_DAYS velas tras baselineQuotes(), una por cada
-     * [high, low, close] de $postEntryDays (debe tener exactamente
+     * Añade la vela de entrada de P0.1 (indice nuevo, `open = ENTRY_PRICE`:
+     * la apertura de la sesion siguiente a la señal, ver el docblock de la
+     * clase) y despues HORIZON_DAYS velas tras baselineQuotes(), una por
+     * cada [high, low, close] de $postEntryDays (debe tener exactamente
      * HORIZON_DAYS elementos, uno por cada dia relativo 1..HORIZON_DAYS).
      *
      * @param list<array{0: float, 1: float, 2: float}> $postEntryDays
@@ -165,6 +230,8 @@ final class BacktestingServiceTest extends TestCase
 
         $quotes = $this->baselineQuotes();
         $date = $quotes[count($quotes) - 1]->getDate()->modify('+1 day');
+        $quotes[] = new HistoricalQuote($date, self::ENTRY_PRICE, 104.5, 103.5, self::ENTRY_PRICE, 1_000_000);
+        $date = $date->modify('+1 day');
 
         foreach ($postEntryDays as $day) {
             [$high, $low, $close] = $day;
@@ -180,11 +247,13 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
-     * Ejecuta el backtest sobre un historico de exactamente
-     * ENTRY_INDEX + HORIZON_DAYS + 1 velas: con esa longitud, el bucle de
-     * backtestTicker() (step=5 desde el indice 80) solo produce UNA
-     * muestra (indice 80), lo que permite aislar sin ambiguedad el
-     * resultado del dia de entrada bajo prueba.
+     * Ejecuta el backtest sobre historyWithPostEntryPath(): el bucle de
+     * backtestTicker() (step=5 desde el indice 80) visita
+     * MOMENTUM_PREFIX_LENGTH+ENTRY_INDEX (250) junto con cada multiplo de 5
+     * anterior (80, 85, ..., 245), pero P0.3 descarta todos esos anteriores
+     * por no tener aun los 251 cierres que exige Momentum 12-1 -solo el
+     * indice 250 los tiene-, asi que sigue produciendose sin ambiguedad UNA
+     * unica muestra real, la del dia de entrada bajo prueba.
      *
      * @param list<HistoricalQuote> $history
      * @return array<string,mixed>
@@ -470,18 +539,30 @@ final class BacktestingServiceTest extends TestCase
      * exige RiskLevelsCalculator, asi que ninguna muestra real llega nunca
      * con menos historial del que ese guardarraya necesita.)
      *
+     * **P0.1/P0.3**: mismo prefijo de MOMENTUM_PREFIX_LENGTH velas planas
+     * que baselineQuotes() (ver el docblock de la clase), asi que el indice
+     * 80 de este comentario vive en realidad en
+     * MOMENTUM_PREFIX_LENGTH + ENTRY_INDEX (250) del array devuelto, y el
+     * indice 200 en MOMENTUM_PREFIX_LENGTH + MIXED_REGIME_SECOND_INDEX
+     * (370). A diferencia de baselineQuotes(), aqui NO hace falta una vela
+     * de entrada extra: el fixture ya continua de sobra mas alla de ambos
+     * indices (260 velas propias), asi que la apertura de la sesion
+     * siguiente que exige P0.1 ya existe. Reverificado por ejecucion real
+     * tras anteponer el prefijo: indice 250 sigue BUY con niveles de riesgo
+     * calculables, indice 370 sigue BUY sin ellos (ver el test).
+     *
      * @return list<HistoricalQuote>
      */
     private function mixedRiskLevelsRegimeHistory(): array
     {
-        $quotes = [];
         $close = 100.0;
         $date = new DateTimeImmutable('2024-01-01');
+        $quotes = $this->flatMomentumPrefix($date, $close);
         $totalDays = 260;
 
         for ($i = 0; $i < $totalDays; $i++) {
             $range = $i <= 120 ? 1.0 : 0.001;
-            $volume = ($i === self::ENTRY_INDEX || $i === 200) ? 3_000_000 : 1_000_000;
+            $volume = ($i === self::ENTRY_INDEX || $i === self::MIXED_REGIME_SECOND_INDEX) ? 3_000_000 : 1_000_000;
             $quotes[] = new HistoricalQuote($date, $close, $close + ($range / 2), $close - ($range / 2), $close, $volume);
             $date = $date->modify('+1 day');
 
@@ -511,9 +592,10 @@ final class BacktestingServiceTest extends TestCase
         self::assertSame([], $result['errors']);
         $ticker = $result['results'][0];
 
-        // Indice 200: ATR14/precio ya muy por debajo del 0,05% (segundo
-        // regimen), verificado por CLI antes de escribir este test.
-        $expectedDate = $history[200]->getDate()->format('Y-m-d');
+        // Indice 200 (local, MOMENTUM_PREFIX_LENGTH + 200 en el array real):
+        // ATR14/precio ya muy por debajo del 0,05% (segundo regimen),
+        // verificado por CLI antes de escribir este test.
+        $expectedDate = $history[self::MOMENTUM_PREFIX_LENGTH + self::MIXED_REGIME_SECOND_INDEX]->getDate()->format('Y-m-d');
         $sample = $this->findSampleByDate($ticker['recent_samples'], $expectedDate);
 
         self::assertSame('BUY', $sample['recommendation']);
@@ -588,21 +670,25 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
-     * Historico de 91 velas (indices 0..90) pensado para producir
-     * EXACTAMENTE 2 muestras con horizonte=5/step=5 (bucle de
-     * backtestTicker() desde el indice 80: 80 y 85 entran, 90 no porque
-     * 90 < count-horizon = 86 es falso): indices 0-80 son baselineQuotes()
-     * (tendencia alcista suave, BUY conocido al 85,34% en el indice 80, ver
-     * comentario de clase); indices 81-85 son una caida brusca (104 -> 75 en
-     * 5 dias) que, vista desde el indice 85, convierte la recomendacion en
-     * HOLD (64,01%, verificado ejecutando TechnicalAnalyzer::analyze() +
-     * ScoreCalculator::calculate() directamente sobre este fixture antes de
-     * escribir el test); indices 86-90 continuan la caida (75 -> 65) para
-     * fijar el forward_return de la muestra del indice 85.
+     * baselineQuotes() (con su prefijo de MOMENTUM_PREFIX_LENGTH velas
+     * planas, ver el docblock de la clase) seguida de una caida brusca
+     * (104 -> 63 en 11 dias) pensada para producir EXACTAMENTE 2 muestras
+     * con horizonte=5/step=5: la señal en MOMENTUM_PREFIX_LENGTH+80 (250,
+     * BUY conocido, mismo patron que baselineQuotes()) y la señal en
+     * MOMENTUM_PREFIX_LENGTH+85 (255, que la caida convierte en STRONG
+     * SELL -no cuenta como BUY, que es lo unico que le importa a
+     * testAlphaVsMediaDelUniversoConMezclaDeSenalesBuyYNoBuy()-).
      *
-     * Con estos valores exactos: forward_return(80)=(75/104-1)*100=-27,88,
-     * forward_return(85)=(65/75-1)*100=-13,33. Una sola muestra BUY (indice
-     * 80) y una HOLD (indice 85, no cuenta ni como BUY ni como SELL).
+     * **P0.1** desplaza la entrada de cada señal a la apertura de la
+     * sesion SIGUIENTE (no a su propio cierre), asi que este fixture
+     * necesita UN dia mas de caida (11 valores, no 10 como antes de P0.1)
+     * para que la segunda muestra (255) tenga tanto su entrada
+     * (indice 256) como su horizonte completo de 5 sesiones (hasta el
+     * indice 261) dentro del historico. Con la entrada desplazada,
+     * forward_return(250)=((73,0/95,0)-1)*100=-23,16 (entrada 95,0 en el
+     * indice 251, salida 73,0 en el 256) y
+     * forward_return(255)=((63,0/73,0)-1)*100=-13,70 (entrada 73,0 en el
+     * indice 256, salida 63,0 en el 261), verificado por ejecucion real.
      *
      * @return list<HistoricalQuote>
      */
@@ -611,7 +697,7 @@ final class BacktestingServiceTest extends TestCase
         $quotes = $this->baselineQuotes();
         $date = $quotes[count($quotes) - 1]->getDate()->modify('+1 day');
 
-        foreach ([95.0, 90.0, 85.0, 80.0, 75.0, 73.0, 71.0, 69.0, 67.0, 65.0] as $close) {
+        foreach ([95.0, 90.0, 85.0, 80.0, 75.0, 73.0, 71.0, 69.0, 67.0, 65.0, 63.0] as $close) {
             $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
             $date = $date->modify('+1 day');
         }
@@ -620,23 +706,28 @@ final class BacktestingServiceTest extends TestCase
     }
 
     /**
-     * Historico de 91 velas (indices 0..90) con una tendencia bajista suave
-     * y constante (R=1.0, d=-0.05, simetrico al de baselineQuotes() pero en
+     * MOMENTUM_PREFIX_LENGTH velas planas (mismo criterio que
+     * baselineQuotes(): precio continuo con el primer cierre del tramo que
+     * sigue, 200.0, para no distorsionar el ATR14) seguidas de 92 velas
+     * (indices 0..91, una mas que antes de P0.1 por el mismo motivo que
+     * crashAfterEntryHistory()) con una tendencia bajista suave y
+     * constante (R=1.0, d=-0.05, simetrico al de baselineQuotes() pero en
      * sentido contrario) durante todo el periodo, sin ningun tramo alcista:
      * produce recomendacion HOLD en ambas muestras del walk-forward
-     * (horizonte=5/step=5, indices 80 y 85), asi que buy_signals=0 en las
-     * dos, verificado ejecutando BacktestingService::run() directamente
-     * sobre este fixture antes de escribir el test.
+     * (horizonte=5/step=5, indices MOMENTUM_PREFIX_LENGTH+80 y
+     * MOMENTUM_PREFIX_LENGTH+85), asi que buy_signals=0 en las dos,
+     * verificado ejecutando BacktestingService::run() directamente sobre
+     * este fixture antes de escribir el test.
      *
      * @return list<HistoricalQuote>
      */
     private function steadyDeclineHistory(): array
     {
-        $quotes = [];
         $close = 200.0;
         $date = new DateTimeImmutable('2024-01-01');
+        $quotes = $this->flatMomentumPrefix($date, $close);
 
-        for ($i = 0; $i < 91; $i++) {
+        for ($i = 0; $i < 92; $i++) {
             $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
             $date = $date->modify('+1 day');
             $close -= 0.05;
@@ -648,13 +739,16 @@ final class BacktestingServiceTest extends TestCase
     /**
      * Caso 8: avg_all_days_forward_return/win_rate_all_days/
      * buy_alpha_vs_all_days sobre crashAfterEntryHistory() (2 muestras: una
-     * BUY en el indice 80 con forward_return=-27,88, una HOLD en el indice
-     * 85 con forward_return=-13,33 que cuenta en "todos los dias" pero no en
-     * "compras"). avg_all_days_forward_return debe ser la media de AMBAS
-     * muestras (-20,61, no solo la BUY), win_rate_all_days 0% (las dos son
-     * negativas) y buy_alpha_vs_all_days = avg_buy(-27,88) -
-     * avg_all_days(-20,61) = -7,27: la señal BUY se queda por debajo de la
-     * media de "cualquier dia" de este fixture.
+     * BUY en el indice 250 y una segunda señal, que la caida convierte en
+     * STRONG SELL en vez del HOLD de antes de P0.1 -no cuenta como
+     * "compra", que es lo unico que este test necesita-, que cuenta en
+     * "todos los dias" igual). Valores recalculados EJECUTANDO el servicio
+     * real sobre el fixture con P0.1 (entrada en la apertura de la sesion
+     * siguiente, no en el cierre de la señal): avg_buy_forward_return
+     * -23,16, avg_all_days_forward_return -18,43 (media de AMBAS muestras,
+     * no solo la BUY), win_rate_all_days 0% (las dos son negativas) y
+     * buy_alpha_vs_all_days = -23,16 - (-18,43) = -4,73: la señal BUY se
+     * queda por debajo de la media de "cualquier dia" de este fixture.
      */
     public function testAlphaVsMediaDelUniversoConMezclaDeSenalesBuyYNoBuy(): void
     {
@@ -664,10 +758,10 @@ final class BacktestingServiceTest extends TestCase
 
         self::assertSame(2, $ticker['samples']);
         self::assertSame(1, $ticker['buy_signals']);
-        self::assertSame(-27.88, $ticker['avg_buy_forward_return']);
-        self::assertSame(-20.61, $ticker['avg_all_days_forward_return']);
+        self::assertSame(-23.16, $ticker['avg_buy_forward_return']);
+        self::assertSame(-18.43, $ticker['avg_all_days_forward_return']);
         self::assertSame(0.0, $ticker['win_rate_all_days']);
-        self::assertSame(-7.27, $ticker['buy_alpha_vs_all_days']);
+        self::assertSame(-4.73, $ticker['buy_alpha_vs_all_days']);
     }
 
     /**

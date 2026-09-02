@@ -100,6 +100,17 @@ class BacktestingService
     private int $pointInTimeMisses = 0;
 
     /**
+     * P0.3 (`versions.md`, 2026-09-02): cuantas muestras de `sampleHistory()`
+     * se descartaron por no tener suficiente historico para Momentum 12-1
+     * (`TechnicalAnalyzer::momentumSkippingRecent()`, necesita mas de 250
+     * cierres). Se reinicia al EMPEZAR cada llamada a `sampleHistory()` (una
+     * llamada = un ticker, completa antes de devolver el control), no en
+     * `backtestTicker()`: `runCrossSectional()` tambien necesita leerlo, una
+     * vez por ticker, para publicar el total del universo.
+     */
+    private int $momentumNullDropped = 0;
+
+    /**
      * @param list<string> $tickers
      * @param int $step Tamaño del paso entre muestras consecutivas. Con el
      *        $step por defecto (5) y un horizonte tipico de 20 dias, cada
@@ -263,10 +274,21 @@ class BacktestingService
      *   construccion. Este filtro tambien descarta las fechas sueltas que
      *   aportan los tickers con historico corto, cuya rejilla de muestreo no
      *   coincide con la del resto del universo.
-     * - Entre dos fechas evaluadas deben pasar al menos $horizonDays dias
-     *   naturales. Es un suelo conservador (con $step sesiones de por medio
-     *   el hueco real es mayor), pensado para que un ticker desalineado no
-     *   cuele una fecha solapada con la anterior.
+     * - Entre dos fechas evaluadas deben pasar al menos $horizonDays SESIONES
+     *   bursatiles reales (P0.2, `versions.md` 2026-09-02, no dias naturales:
+     *   antes de esta version se comparaban dias naturales contra
+     *   $horizonDays, que en el resto de la clase se trata como sesiones. Con
+     *   el patron estandar del proyecto (horizonte 20) 20 sesiones ocupan
+     *   ~28 dias naturales por los fines de semana, asi que dos fechas
+     *   separadas 20-27 dias naturales se contaban como independientes sin
+     *   que sus ventanas de forward_return dejaran de solaparse. El
+     *   calendario bursatil real se construye con la UNION de las fechas de
+     *   `$history` de TODOS los tickers recorridos (ya se pide una vez por
+     *   ticker para las muestras, ver `collectSamplesWithHistory()`): dos
+     *   fechas cuentan como independientes solo si hay al menos
+     *   $horizonDays sesiones reales -- vistas por al menos un ticker del
+     *   universo -- entre ellas, no un numero de dias naturales que varia
+     *   por festivos/fines de semana.
      *
      * @param list<string> $tickers Universo candidato. Si $indexCode va
      *        acompañado de un `IndexMembershipCheckerInterface` conectado
@@ -318,10 +340,21 @@ class BacktestingService
         $errors = [];
         $droppedNotMember = 0;
         $samplesKept = 0;
+        $momentumNullDropped = 0;
+        // P0.2: calendario bursatil real, union de las fechas de $history de
+        // TODOS los tickers recorridos (ver el docblock de este metodo).
+        $tradingCalendar = [];
 
         foreach ($tickers as $ticker) {
             try {
-                foreach ($this->collectSamples($ticker, $horizonDays, $step, $mode) as $sample) {
+                $collected = $this->collectSamplesWithHistory($ticker, $horizonDays, $step, $mode);
+                $momentumNullDropped += $this->momentumNullDropped;
+
+                foreach ($collected['history'] as $quote) {
+                    $tradingCalendar[$quote->getDate()->format('Y-m-d')] = true;
+                }
+
+                foreach ($collected['samples'] as $sample) {
                     if ($membershipActive) {
                         $sampleDate = new \DateTimeImmutable((string) $sample['date']);
 
@@ -345,6 +378,8 @@ class BacktestingService
         }
 
         ksort($samplesByDate);
+        ksort($tradingCalendar);
+        $sessionIndex = array_flip(array_keys($tradingCalendar));
 
         $dates = [];
         $alphas = [];
@@ -354,7 +389,7 @@ class BacktestingService
         $universeReturns = [];
         $droppedLowBreadth = 0;
         $droppedOverlapping = 0;
-        $lastEvaluated = null;
+        $lastEvaluatedDate = null;
 
         foreach ($samplesByDate as $date => $daySamples) {
             if (count($daySamples) <= $topN) {
@@ -362,14 +397,16 @@ class BacktestingService
                 continue;
             }
 
-            $currentDate = new \DateTimeImmutable((string) $date);
+            if ($lastEvaluatedDate !== null) {
+                $sessionGap = $this->tradingSessionGap($lastEvaluatedDate, (string) $date, $sessionIndex);
 
-            if ($lastEvaluated !== null && (int) $lastEvaluated->diff($currentDate)->days < $horizonDays) {
-                $droppedOverlapping++;
-                continue;
+                if ($sessionGap === null || $sessionGap < $horizonDays) {
+                    $droppedOverlapping++;
+                    continue;
+                }
             }
 
-            $lastEvaluated = $currentDate;
+            $lastEvaluatedDate = (string) $date;
             $selected = array_slice($this->rankByPercentage($daySamples), 0, $topN);
             $selectedReturns = array_column($selected, 'forward_return');
             $dayReturns = array_column($daySamples, 'forward_return');
@@ -402,6 +439,12 @@ class BacktestingService
                 'dates_evaluated' => count($dates),
                 'dates_dropped_low_breadth' => $droppedLowBreadth,
                 'dates_dropped_overlapping' => $droppedOverlapping,
+                // P0.3: cuantas muestras del universo se descartaron por no
+                // tener suficiente historico para Momentum 12-1 (ver el
+                // docblock de $momentumNullDropped). Se publica igual que
+                // dates_dropped_low_breadth/dates_dropped_overlapping para
+                // que la merma sea visible, no implicita.
+                'samples_dropped_momentum_null' => $momentumNullDropped,
                 // Cobertura del universo point-in-time (roadmap.md,
                 // "Segundo bloque" punto 5): `point_in_time_universe` es
                 // `false` cuando no se pidio (`$indexCode` nulo) o no hay
@@ -502,6 +545,29 @@ class BacktestingService
         );
 
         return $daySamples;
+    }
+
+    /**
+     * Sesiones bursatiles REALES entre dos fechas ya evaluadas (P0.2, ver el
+     * docblock de `runCrossSectional()`). `$sessionIndex` es la posicion de
+     * cada fecha dentro del calendario bursatil real construido con la UNION
+     * de las fechas de `$history` de todos los tickers recorridos: no un
+     * calendario generico de mercado, sino literalmente los dias en los que
+     * al menos un ticker del universo tuvo una vela. `null` si alguna de las
+     * dos fechas no aparece en ese calendario (no deberia ocurrir nunca en la
+     * practica, ya que toda fecha de `$samplesByDate` viene de una vela real
+     * de algun ticker ya recorrido, pero se trata como "no se puede
+     * confirmar independencia" en vez de asumirla).
+     *
+     * @param array<string,int> $sessionIndex
+     */
+    private function tradingSessionGap(string $previousDate, string $currentDate, array $sessionIndex): ?int
+    {
+        if (!isset($sessionIndex[$previousDate], $sessionIndex[$currentDate])) {
+            return null;
+        }
+
+        return $sessionIndex[$currentDate] - $sessionIndex[$previousDate];
     }
 
     /**
@@ -633,22 +699,41 @@ class BacktestingService
      * recorrido para la segunda habria significado dos definiciones de
      * "muestra" que podrian divergir con el tiempo.
      *
-     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>
+     * Devuelve tambien `$history` (P0.2, ver el docblock de
+     * `runCrossSectional()`): esa fecha de la caller construye el calendario
+     * bursatil real del universo con el mismo historico que ya pedia, sin
+     * una segunda llamada al proveedor de mercado por ticker.
+     *
+     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>, history: list<HistoricalQuote>}
      */
-    private function collectSamples(string $ticker, int $horizonDays, int $step, string $mode): array
+    private function collectSamplesWithHistory(string $ticker, int $horizonDays, int $step, string $mode): array
     {
         $this->assertValidMode($mode);
 
-        return $this->sampleHistory(
-            $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker),
-            $this->marketDataProvider->getHistoricalQuotes($ticker),
-            $horizonDays,
-            $step,
-            $mode
-        );
+        $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
+        $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+
+        return [
+            'samples' => $this->sampleHistory($stock, $history, $horizonDays, $step, $mode),
+            'history' => $history,
+        ];
     }
 
     /**
+     * P0.1 (`versions.md`, 2026-09-02): la recomendacion se genera con el
+     * cierre de `$current` (el ultimo dato conocido al analizar), pero el
+     * cron real corre despues del cierre de EEUU -- ese precio no es
+     * operable. La entrada mas pronto ejecutable es la APERTURA de la sesion
+     * siguiente (`$history[$index + 1]`), y `forward_return`/el horizonte de
+     * `simulateManagedExit()` se miden `$horizonDays` sesiones DESDE ESA
+     * ENTRADA, no desde la señal: por eso el bucle exige una sesion mas de
+     * margen que antes (`$index + 1 + $horizonDays`, no `$index +
+     * $horizonDays`). Si `$current` fuese la ultima barra del historico no
+     * habria apertura siguiente conocida; el limite del bucle ya lo impide
+     * (nunca entra con menos margen del que exige `$entryIndex +
+     * $horizonDays < $count`), asi que esa muestra simplemente no se genera,
+     * sin necesidad de un descarte aparte.
+     *
      * @param list<HistoricalQuote> $history
      * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>
      */
@@ -657,15 +742,38 @@ class BacktestingService
         $samples = [];
         $minimumLookback = 80;
         $count = count($history);
+        // P0.3: se reinicia al EMPEZAR el recorrido de ESTE historico (una
+        // llamada = un ticker), ver el docblock de la propiedad.
+        $this->momentumNullDropped = 0;
 
-        for ($index = $minimumLookback; $index < $count - $horizonDays; $index += $step) {
+        for ($index = $minimumLookback; $index < $count - $horizonDays - 1; $index += $step) {
             $past = array_slice($history, 0, $index + 1);
             $current = $history[$index];
-            $future = $history[$index + $horizonDays];
+            $entryIndex = $index + 1;
+            $entry = $history[$entryIndex];
+            $entryPrice = $entry->getOpen();
+            $future = $history[$entryIndex + $horizonDays];
             $synthetic = $this->stockAt($stock, $current);
             $technical = $this->technicalAnalyzer->analyze($past);
+
+            // P0.3: Momentum 12-1 (TechnicalAnalyzer::momentumSkippingRecent(),
+            // 250 sesiones + 21 de salto) necesita mas de 250 cierres para no
+            // devolver null. Con menos, TechnicalScoreAnalyzer::momentum() lo
+            // rellenaba con un neutral SILENCIOSO (3,5 puntos, sin ningun
+            // Signal que avisara), que competia sin distincion en el ranking
+            // contra muestras con momentum real. Se descarta la muestra
+            // entera -- no se rellena con un valor inventado -- y se cuenta
+            // para que la merma quede visible (ver
+            // `samples_dropped_momentum_null`/`fundamentals_point_in_time_pct`,
+            // mismo criterio de "no ocultar lo que no se pudo medir").
+            if ($technical->getMomentum12m1() === null) {
+                ++$this->momentumNullDropped;
+
+                continue;
+            }
+
             $score = $this->scoreCalculator->calculate($synthetic, $technical)->getScore();
-            $forwardReturn = (($future->getClose() / $current->getClose()) - 1) * 100;
+            $forwardReturn = (($future->getClose() / $entryPrice) - 1) * 100;
 
             if ($mode === 'technical') {
                 $weights = $this->scoreCalculator->getWeights();
@@ -688,17 +796,17 @@ class BacktestingService
             $exitDay = null;
 
             if ($recommendation === 'BUY') {
-                $riskLevels = $this->riskLevelsCalculator->compute($technical, $current->getClose());
+                $riskLevels = $this->riskLevelsCalculator->compute($technical, $entryPrice);
 
                 if ($riskLevels !== null) {
                     [$exitReason, $exitPrice, $exitDay] = $this->simulateManagedExit(
                         $history,
-                        $index,
+                        $entryIndex,
                         $horizonDays,
                         $riskLevels,
                         $future
                     );
-                    $managedReturn = $this->netManagedReturn($current->getClose(), $exitPrice);
+                    $managedReturn = $this->netManagedReturn($entryPrice, $exitPrice);
                 }
             }
 

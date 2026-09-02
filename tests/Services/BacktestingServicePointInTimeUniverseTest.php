@@ -24,21 +24,27 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  */
 final class BacktestingServicePointInTimeUniverseTest extends TestCase
 {
+    use MomentumPrefixFixture;
+
     private const HORIZON_DAYS = 5;
     private const STEP = 5;
 
     /**
-     * 91 velas alcistas (81 de arranque + dos tramos de 5) con dos fechas de
-     * senal, mismo esqueleto que BacktestingServiceCrossSectionalTest:
-     * indice 80 -> 2024-03-21, indice 85 -> 2024-03-26.
+     * 92 velas propias alcistas (81 de arranque + dos tramos de 5, mas una
+     * vela de entrada P0.1, ver mas abajo), con el mismo prefijo de
+     * MOMENTUM_PREFIX_LENGTH velas planas que el resto de tests de
+     * `BacktestingService` (`MomentumPrefixFixture`: sin el, P0.3 descarta
+     * toda muestra por falta de Momentum 12-1). Dos fechas de señal, mismo
+     * esqueleto que `BacktestingServiceCrossSectionalTest`: indice 80 ->
+     * 2024-03-21, indice 85 -> 2024-03-26.
      *
      * @return list<HistoricalQuote>
      */
     private function history(): array
     {
-        $quotes = [];
-        $close = 100.0;
         $date = new DateTimeImmutable('2024-01-01');
+        $quotes = $this->flatMomentumPrefix($date, 100.0);
+        $close = 100.0;
 
         for ($i = 0; $i < 91; $i++) {
             if ($i > 0) {
@@ -48,6 +54,13 @@ final class BacktestingServicePointInTimeUniverseTest extends TestCase
             $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
             $date = $date->modify('+1 day');
         }
+
+        // P0.1 (`versions.md`, 2026-09-02): la entrada de cada señal pasa a
+        // ser la apertura de la sesion SIGUIENTE, asi que sampleHistory()
+        // exige una sesion mas de margen que antes. Se continua la misma
+        // progresion (+0,5) para no introducir ningun precio arbitrario.
+        $close += 0.5;
+        $quotes[] = new HistoricalQuote($date, $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
 
         return $quotes;
     }
