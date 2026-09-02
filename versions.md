@@ -5993,3 +5993,31 @@ Reproducido en ddev antes de corregir: `curl ".../?page=intraday&ticker=AAPL&int
 - **`CachedMarketDataProvider::logCacheFailure()`, `CachedMarketMoversProvider::logCacheFailure()`, `YahooCorporateProfileProvider::logCacheFailure()`**: `fwrite(STDERR, ...)` -> `error_log(...)`, que funciona igual en `bin/*.php` (SAPI `cli`) que bajo `php-fpm`. Mismo mensaje, sin la constante que solo existia en un SAPI.
 
 Verificado en ddev tras el arreglo: `intraday_15m` para AAPL devuelve velas reales y la fila de cache se escribe (`SELECT * FROM market_history_cache WHERE history_range='intraday_15m'` -> 1 fila, payload de 19.888 bytes). Repetido para `1m`/`5m`/`1h` con MSFT, los tres devuelven datos. `ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK. `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+---
+
+## 2026-09-02 (septima entrada) - Repetido el baseline con el motor P0-corregido: mismo veredicto nulo, sin ventaja oculta que el bug estuviera enmascarando
+
+Estado: hecho. Ultimo punto pendiente de "Prioridad cero-bis" (punto 4, `roadmap.md`): repetir la medicion tipo `v2.114` con `BacktestingService` ya corregido (P0.1+P0.2+P0.3), para saber si los tres bugs de metodologia estaban enmascarando una ventaja real. El usuario confirma que se lance.
+
+### Metodologia identica a la medicion anterior del mismo dia, solo cambia el motor
+
+Reutilizado `storage/scratch/run_point_in_time_backtest.php` (mismo script, mismo universo de 636 tickers en `point_in_time_universe.txt`: 507 miembros historicos reales del S&P 500 confirmados + 129 ex-miembros verificados uno a uno, `--horizon=20 --step=20 --top=10 --history=10y`, modos `full`/`technical` cruzados con universo `point_in_time`/`biased_today_list`). Anadidos al resumen `samples_dropped_momentum_null` y `dates_dropped_overlapping` (contadores nuevos de P0.2/P0.3) para que la comparacion sea completa. Resultado previo respaldado en `storage/scratch/point_in_time_backtest_results_pre_p0.json` antes de sobrescribir.
+
+| Metrica (universo point-in-time real, mode=full) | Motor sin corregir (misma entrada de hoy) | Motor con P0.1+P0.2+P0.3 |
+|---|---|---|
+| Fechas evaluadas | 121 | 112 |
+| Muestras usadas | 56.382 | 52.438 (+5.683 descartadas por Momentum 12-1 no calculable, P0.3) |
+| Alpha media top-10 | -0,58 pp | -0,62 pp |
+| t pareado por fecha (metrica principal) | -1,70 | -1,76 |
+| t de Welch (pooled, secundaria) | -2,54 | -2,56 |
+| Split primera/segunda mitad | t=-1,03 / t=-1,35 | t=-1,26 / t=-1,22 |
+| Win rate top-10 | 54,38% | 52,14% |
+
+`mode=full` y `mode=technical` vuelven a dar resultados identicos hasta el ultimo decimal (las 4 corridas): `config/weights.php` de produccion sigue con FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND a peso 0, no ha cambiado.
+
+**Lectura**: la cifra se mueve poco y en la misma direccion (alpha algo mas negativa, t pareado algo mas fuerte pero sin cruzar |t|>=1,96), y el split entre mitades se vuelve MAS consistente (-1,26/-1,22 frente a -1,03/-1,35), señal de que el motor corregido produce una medicion mas estable, no una distinta. **Conclusion clara: los tres bugs de P0 no estaban enmascarando ninguna ventaja oculta del score.** El veredicto nulo (sin evidencia de que el ranking supere al azar en este universo) se mantiene, ahora respaldado por una metodologia sin los fallos conocidos: entrada realmente operable, independencia de fechas por sesiones reales, y sin rellenar con un neutral inventado lo que no se pudo medir. Misma limitacion sin resolver de siempre: quedan 174 ex-miembros del S&P 500 genuinamente delistados sin fuente de precio fiable, el universo sigue sesgado hacia supervivientes.
+
+`config/measured_edge.php` actualizado con la cifra nueva (-0,62 pp, t=-1,76, `significant: false`), mismo criterio de siempre (poner `alpha` a `null` el dia que el score demuestre ventaja, no borrar el fichero). Verificado que ningun test fija los valores exactos del config (solo `MeasuredEdgeConfig` lo consume). `ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK (sin cambio, ningun codigo de produccion nuevo). `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+Con esto se cierra por completo "Prioridad cero-bis" (`roadmap.md`). Bloqueado el resto del plan de Codex a la espera de decision del usuario: `P3.4` (momentum-only con el lookback corregido) y `P3.3` (conectar `RelativeFundamentalScorer` al backtest transversal con los 628 tickers), siguiente prioridad segun el consenso del equipo del `2026-09-02`.
