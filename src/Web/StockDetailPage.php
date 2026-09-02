@@ -86,11 +86,16 @@ class StockDetailPage
         // La version de una linea del aviso de ventaja medida (v2.94): aqui
         // la recomendacion ya sale destacada arriba, asi que el aviso
         // acompaña en vez de competir con ella.
-        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div>%s%s</section>',
+        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div>%s%s%s</section>',
             Layout::escape($company->getTicker()),
             Layout::escape($recommendation),
             Layout::escape($explanation->getSummary()),
             MeasuredEdgeNotice::renderInline(),
+            // Separa "no abrir posicion" de "mantener/reducir/vigilar" (ver
+            // roadmap.md, "Cuarto bloque", y versions.md 2026-09-02): solo
+            // aqui se sabe con certeza si el usuario tiene $position abierta
+            // en este ticker.
+            PositionRecommendationNotice::renderInline($recommendation, $position),
             EarningsProximityNotice::renderInline($corporateEvents, $recommendation)
         );
 

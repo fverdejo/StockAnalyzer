@@ -646,10 +646,31 @@ HTML;
         }
 
         return sprintf(
-            '<span class="recommendation %s">%s</span>',
+            '<span class="recommendation %s">%s</span>%s',
             Layout::recommendationClass($recommendation),
-            Layout::escape($recommendation)
+            Layout::escape($recommendation),
+            self::sellContextNote($recommendation)
         );
+    }
+
+    /**
+     * Esta tabla es "Posiciones abiertas": a diferencia del ranking del
+     * Home o la watchlist, aqui el usuario SIEMPRE tiene la posicion por
+     * definicion de la fila. Un SELL/STRONG SELL no ordena por si solo
+     * liquidarla (ver roadmap.md, "Cuarto bloque", y
+     * `PositionRecommendationNotice` en la ficha de detalle, mismo
+     * criterio). El badge no cambia de color/clase, solo se matiza con una
+     * segunda linea reutilizando `.cell-sub` (v2.87, "dato secundario de
+     * una celda"), pensado para justo este caso: una anotacion corta debajo
+     * del dato principal sin ensanchar la tabla.
+     */
+    private static function sellContextNote(string $recommendation): string
+    {
+        if (!in_array($recommendation, ['SELL', 'STRONG SELL'], true)) {
+            return '';
+        }
+
+        return '<span class="cell-sub">valora reducir o vigilar de cerca</span>';
     }
 
     /**

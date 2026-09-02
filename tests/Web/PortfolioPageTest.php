@@ -360,6 +360,61 @@ final class PortfolioPageTest extends TestCase
     }
 
     /**
+     * "Posiciones abiertas" es una tabla donde el usuario SIEMPRE tiene la
+     * posicion por definicion de la fila: un SELL/STRONG SELL aqui no
+     * ordena por si solo liquidarla (ver roadmap.md "Cuarto bloque" y
+     * `StockDetailPageTest`/`PositionRecommendationNoticeTest`, mismo
+     * criterio en la ficha de detalle). El badge no cambia de color/clase,
+     * solo se matiza con una segunda linea.
+     */
+    public function testSellMuestraAvisoDeContextoDeReducirOVigilar(): void
+    {
+        $html = $this->renderWithRecommendation('SELL');
+
+        self::assertStringContainsString('<span class="cell-sub">valora reducir o vigilar de cerca</span>', $html);
+    }
+
+    public function testStrongSellTambienMuestraElAvisoDeContexto(): void
+    {
+        $html = $this->renderWithRecommendation('STRONG SELL');
+
+        self::assertStringContainsString('<span class="cell-sub">valora reducir o vigilar de cerca</span>', $html);
+    }
+
+    public function testBuyYHoldNoMuestranElAvisoDeContexto(): void
+    {
+        self::assertStringNotContainsString('valora reducir o vigilar de cerca', $this->renderWithRecommendation('BUY'));
+        self::assertStringNotContainsString('valora reducir o vigilar de cerca', $this->renderWithRecommendation('HOLD'));
+    }
+
+    private function renderWithRecommendation(string $recommendation): string
+    {
+        $holding = new Holding('ADBE', 5.0, 250.41, 265.21);
+
+        $portfolio = new Portfolio(
+            [$holding],
+            [],
+            0.0,
+            ['ADBE' => 265.21],
+            ['ADBE' => 'USD'],
+            0.8649,
+            ['USD' => 0.8649],
+            0.0,
+            null
+        );
+
+        return PortfolioPage::render(
+            $this->user(),
+            $portfolio,
+            'token',
+            null,
+            null,
+            ['labels' => [], 'values' => []],
+            ['ADBE' => $recommendation]
+        );
+    }
+
+    /**
      * Las cifras de la tabla se comparan entre filas, asi que van alineadas
      * a la derecha y con digitos de ancho fijo (`v2.87`).
      */
