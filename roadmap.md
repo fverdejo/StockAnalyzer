@@ -198,6 +198,7 @@ Pendiente aparte, no bloqueante:
 ## Prioridad baja
 
 - IA (explicar el porqué de una puntuación con un modelo, más allá de las explicaciones fijas de `v1.8`)
+- **Grafico de precio (velas, `2026-09-02`): pan vertical y aprovechar mejor el ancho.** Anotado a peticion del usuario, sin implementar. Dos mejoras pendientes sobre `chartjs-plugin-zoom` (`versions.md`, novena y decima entrada del `2026-09-02`): (1) hoy el arrastre solo desplaza en horizontal (`pan.mode: 'x'`); el usuario pide poder arrastrar tambien en vertical para navegar tras hacer zoom a zonas que quedan fuera de la vista — cambio pequeño (`pan.mode: 'xy'`), pendiente decidir si conviene limitar el rango vertical (`limits.y`) para no desplazarse a una zona vacia sin velas. (2) El usuario señala (captura adjunta en la conversacion) huecos visibles antes de la primera vela y despues de la ultima en varios rangos (p.ej. `6M`): el eje no aprovecha todo el ancho disponible. Pendiente de investigar si es el `offset: true` por defecto del controlador de velas (`chartjs-chart-financial`) u otra causa — el hueco observado parece mayor que el margen tipico de media vela a cada lado.
 
 ---
 

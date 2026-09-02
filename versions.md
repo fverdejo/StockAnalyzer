@@ -5996,20 +5996,6 @@ Verificado en ddev tras el arreglo: `intraday_15m` para AAPL devuelve velas real
 
 ---
 
-## 2026-09-02 (novena entrada) - Zoom y desplazamiento sobre las velas del grafico de precio
-
-Estado: hecho. El usuario, tras ver las velas del punto anterior, comenta que con muchas velas visibles (por ejemplo velas de 1 minuto en un dia entero) se ven demasiado pequeñas para distinguir detalle, y pide alguna forma de hacer zoom.
-
-Añadido `chartjs-plugin-zoom@2.2.0` (mismo autor/equipo que Chart.js y que el plugin de velas del punto anterior, peer dep compatible). A diferencia del plugin de velas, este NO se auto-registra: hace falta `Chart.register(ChartZoom)` explicito (nombre del global UMD, verificado leyendo el bundle: `window.ChartZoom`, no `window.chartjsPluginZoom` ni similar). Configurado solo para el grafico de precio (`plugins.zoom` en sus `options`): rueda del raton/pellizco para zoom, arrastrar para desplazar, ambos en modo `x` (el eje `linear` por indice que ya se uso para las velas encaja sin cambios); `limits.x.min/max: 'original'` evita alejar el zoom o desplazarse mas alla de los datos cargados. Deliberadamente sin `hammerjs` (solo hace falta para gestos tactiles multi-dedo; verificado leyendo el bundle que Hammer es un parametro mas del factory UMD, no una dependencia dura si no esta presente, y wheel+drag no lo necesitan).
-
-Cada cambio de rango o de intradia llama a `priceChart.resetZoom()` dentro de `setPriceDatasets()`: sin esto, un usuario que hiciera zoom y luego cambiara de "1A" a "1M" se quedaria viendo un recorte del zoom antiguo que ya no encaja con los ~20 puntos nuevos. Añadido tambien un boton visible "Restablecer zoom" (nunca solo el gesto de rueda invertida, que no todos los usuarios conocen).
-
-Verificado en Chrome headless via CDP (mismo mecanismo que el punto anterior): `typeof window.ChartZoom === 'object'` tras cargar los tres scripts: confirma registro correcto. Simulados 8 eventos de rueda sobre el centro del canvas (`Input.dispatchMouseEvent` tipo `mouseWheel`): `chart.scales.x.{min,max}` pasa de `{0, 300}` (rango completo) a `{82.47, 211.61}` (zoom real, no solo visual), confirmado leyendo los valores numericos de la escala, no solo mirando la captura (una primera comprobacion visual parecia mostrar el mismo rango completo antes y despues del zoom; era el mismo artefacto de animacion del punto anterior, no reproducible con `Chart.defaults.animation = false`). Clic en "Restablecer zoom": `chart.scales.x.{min,max}` vuelve exactamente a `{0, 300}`. Sin errores en consola.
-
-`ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK (el cambio es solo de front-end, sin PHP nuevo mas alla del boton y su wiring). `ddev exec vendor/bin/phpstan analyse`: sin errores.
-
----
-
 ## 2026-09-02 (septima entrada) - Repetido el baseline con el motor P0-corregido: mismo veredicto nulo, sin ventaja oculta que el bug estuviera enmascarando
 
 Estado: hecho. Ultimo punto pendiente de "Prioridad cero-bis" (punto 4, `roadmap.md`): repetir la medicion tipo `v2.114` con `BacktestingService` ya corregido (P0.1+P0.2+P0.3), para saber si los tres bugs de metodologia estaban enmascarando una ventaja real. El usuario confirma que se lance.
@@ -6057,3 +6043,28 @@ Sustituidas las lineas "Maximo"/"Minimo"/"Precio" (3 datasets) por un unico data
 Chrome headless (`--remote-debugging-port`) contra `ddev`, pilotado con un cliente CDP minimo en Python (sin Playwright/Selenium instalados, ninguno disponible en el entorno): capturas de la vista diaria por defecto (1A), del cambio de rango a 1M, y de las velas intradia de 15 minutos (que ahora tambien reciben OHLC real del endpoint ampliado, antes solo `closes`). Las tres renderizan velas rojas/verdes correctamente proporcionadas y en la posicion correcta; sin errores en consola (`Runtime.exceptionThrown`/`Runtime.consoleAPICalled` monitorizados). Una primera captura salio con las velas apelotonadas en el borde izquierdo del grafico — no era un bug: acabo siendo un artefacto de la animacion de transicion de Chart.js entre el rango antiguo (252 puntos) y el nuevo (20 puntos) capturado a medio camino; desactivando la animacion para la comprobacion, la misma vista renderiza correctamente.
 
 `ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK. `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+---
+
+## 2026-09-02 (novena entrada) - Zoom y desplazamiento sobre las velas del grafico de precio
+
+Estado: hecho. El usuario, tras ver las velas del punto anterior, comenta que con muchas velas visibles (por ejemplo velas de 1 minuto en un dia entero) se ven demasiado pequeñas para distinguir detalle, y pide alguna forma de hacer zoom.
+
+Añadido `chartjs-plugin-zoom@2.2.0` (mismo autor/equipo que Chart.js y que el plugin de velas del punto anterior, peer dep compatible). A diferencia del plugin de velas, este NO se auto-registra: hace falta `Chart.register(ChartZoom)` explicito (nombre del global UMD, verificado leyendo el bundle: `window.ChartZoom`, no `window.chartjsPluginZoom` ni similar). Configurado solo para el grafico de precio (`plugins.zoom` en sus `options`): rueda del raton/pellizco para zoom, arrastrar para desplazar, ambos en modo `x` (el eje `linear` por indice que ya se uso para las velas encaja sin cambios); `limits.x.min/max: 'original'` evita alejar el zoom o desplazarse mas alla de los datos cargados. Deliberadamente sin `hammerjs` (solo hace falta para gestos tactiles multi-dedo; verificado leyendo el bundle que Hammer es un parametro mas del factory UMD, no una dependencia dura si no esta presente, y wheel+drag no lo necesitan).
+
+Cada cambio de rango o de intradia llama a `priceChart.resetZoom()` dentro de `setPriceDatasets()`: sin esto, un usuario que hiciera zoom y luego cambiara de "1A" a "1M" se quedaria viendo un recorte del zoom antiguo que ya no encaja con los ~20 puntos nuevos. Añadido tambien un boton visible "Restablecer zoom" (nunca solo el gesto de rueda invertida, que no todos los usuarios conocen).
+
+Verificado en Chrome headless via CDP (mismo mecanismo que el punto anterior): `typeof window.ChartZoom === 'object'` tras cargar los tres scripts: confirma registro correcto. Simulados 8 eventos de rueda sobre el centro del canvas (`Input.dispatchMouseEvent` tipo `mouseWheel`): `chart.scales.x.{min,max}` pasa de `{0, 300}` (rango completo) a `{82.47, 211.61}` (zoom real, no solo visual), confirmado leyendo los valores numericos de la escala, no solo mirando la captura (una primera comprobacion visual parecia mostrar el mismo rango completo antes y despues del zoom; era el mismo artefacto de animacion del punto anterior, no reproducible con `Chart.defaults.animation = false`). Clic en "Restablecer zoom": `chart.scales.x.{min,max}` vuelve exactamente a `{0, 300}`. Sin errores en consola.
+
+`ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK (el cambio es solo de front-end, sin PHP nuevo mas alla del boton y su wiring). `ddev exec vendor/bin/phpstan analyse`: sin errores.
+
+---
+
+## 2026-09-02 (decima entrada) - Anotadas dos mejoras pendientes del grafico de velas: pan vertical y huecos en los bordes
+
+Estado: anotado, sin implementar (a peticion explicita del usuario: "no hagas nada solo deja anotado"). Tras ver el zoom en funcionamiento, el usuario señala dos limitaciones con una captura de pantalla real (rango `6M` de WFC, huecos visibles antes de la primera vela y despues de la ultima):
+
+1. El arrastre del punto anterior solo desplaza en horizontal (`pan.mode: 'x'`). Pide poder arrastrar tambien en vertical para llegar a zonas que quedan fuera de la vista tras hacer zoom.
+2. El grafico deja hueco sin aprovechar a los dos lados (antes de la primera vela y despues de la ultima) en vez de usar todo el ancho disponible; pide mostrar mas velas o ajustar el espaciado.
+
+Detalle y contexto completo de cada punto en `roadmap.md`, seccion "Prioridad baja".
