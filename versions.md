@@ -5919,3 +5919,13 @@ Los cinco agentes, trabajando en paralelo y sin verse entre si, llegan a la mism
 3. Decidir con el resultado de (2) si se invierte en `P3.4`/`P3.3` mientras dura la suscripcion.
 
 No se ha implementado nada de esto todavia — la ronda de hoy es consenso, no ejecucion.
+
+### Punto 1 de la recomendacion, ejecutado: datos crudos de EODHD sincronizados con la Pi
+
+El usuario confirma la recomendacion y pide proceder. Primero lo mas urgente por plazo: `eodhd_raw_fundamentals` (938 filas), `eodhd_raw_index_membership` (4) e `index_membership` (819), que solo existian en `ddev`, se sincronizan con la Pi (mismo patron de siempre: `mysqldump --no-create-info`, `scp`, carga directa — las tablas ya existian vacias en la Pi desde las migraciones aplicadas el `2026-09-01`/`02`, no hizo falta tabla intermedia).
+
+**Incidencia real durante la carga**: la primera carga fallo a mitad (`ERROR 2006: Server has gone away`) justo al empezar `eodhd_raw_index_membership` — el payload de `GSPC.INDX` (819 miembros en un unico JSON) supera el `max_allowed_packet` por defecto de la Pi (16 MB) combinado con el `INSERT` extendido de `mysqldump`. `eodhd_raw_fundamentals` (938 filas) ya habia cargado entero antes del fallo. Subido `max_allowed_packet` a 256 MB (`SET GLOBAL`, solo en memoria — vuelve a 16 MB si se reinicia MariaDB, no persiste en `my.cnf`) y reintentada la carga solo de las dos tablas que faltaban. Verificado: los tres recuentos en la Pi coinciden exactamente con `ddev` (938/4/819). Ficheros temporales borrados en ambos lados.
+
+Con esto, los datos de EODHD ya no dependen exclusivamente de que la suscripcion siga activa ni de que `ddev` siga teniendo el disco intacto — estan en los dos sitios.
+
+Siguiente paso en marcha: arreglo de `BacktestingService` (P0.1+P0.2+P0.3), encargado a `desarrollador-php` con la especificacion exacta de `auditor-estadistico`.
