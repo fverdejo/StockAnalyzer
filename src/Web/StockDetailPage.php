@@ -132,7 +132,7 @@ class StockDetailPage
             : '';
 
         $technicalValues = sprintf(
-            '<section class="panel"><h2>Indicadores tecnicos</h2><div class="values-grid">%s</div>%s</section>',
+            '<section class="panel"><h2>Indicadores técnicos</h2><div class="values-grid">%s</div>%s</section>',
             implode('', array_merge([
                 self::valueBox('Precio', Layout::formatMoney($quote->getPrice(), $currency)),
                 self::valueBox('SMA 20', Layout::formatNullableMoney($technical->getSma20(), $currency)),
@@ -203,7 +203,7 @@ class StockDetailPage
         $positionPanel = self::renderPositionPanel($position, $positionTransactions, $company->getCurrency());
 
         $body = sprintf(
-            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s<section class="panel"><h2>Puntuacion por categoria (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s<section class="panel"><h2>Puntuación por categoría (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             $messageHtml,
             $errorHtml,
@@ -495,7 +495,7 @@ class StockDetailPage
                     .then(function (response) { return response.json(); })
                     .then(function (data) {
                         if (!data || !data.buy_managed_samples) {
-                            body.innerHTML = '<div class="muted">Este valor no ha tenido senales de compra con niveles de riesgo calculables en el historico disponible.</div>';
+                            body.innerHTML = '<div class="muted">Este valor no ha tenido señales de compra con niveles de riesgo calculables en el historico disponible.</div>';
                         } else {
                             var stop = data.stop_loss_rate;
                             var target = data.target_rate;
@@ -517,7 +517,7 @@ class StockDetailPage
                                     '<li><span class="dot dot-target"></span>Alcanzo objetivo: ' + target + '%</li>' +
                                     '<li><span class="dot dot-horizon"></span>Sin disparo en ' + data.horizon_days + ' sesiones: ' + horizon + '%</li>' +
                                 '</ul>' +
-                                '<p class="muted panel-note">Basado en ' + data.buy_managed_samples + ' senales historicas' + (lowSample ? ' (muestra pequena, interpretar con cautela)' : '') + '.</p>';
+                                '<p class="muted panel-note">Basado en ' + data.buy_managed_samples + ' señales historicas' + (lowSample ? ' (muestra pequena, interpretar con cautela)' : '') + '.</p>';
 
                             if (data.peer_group) {
                                 var peerRet = data.peer_group.avg_buy_managed_return;
@@ -526,7 +526,7 @@ class StockDetailPage
 
                                 body.innerHTML +=
                                     '<p class="signal-history-return ' + peerRetClass + '">Retorno medio gestionado del grupo sectorial (' + data.peer_group.sector_label + '): ' + peerRetText + '</p>' +
-                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' senales historicas de todo el grupo sectorial. Cifra ampliada a todo el grupo sectorial de esta accion (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta accion en particular.</p>';
+                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' señales historicas de todo el grupo sectorial. Cifra ampliada a todo el grupo sectorial de esta accion (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta accion en particular.</p>';
                             }
                         }
 
@@ -535,7 +535,7 @@ class StockDetailPage
                         button.textContent = 'Ocultar historial';
                     })
                     .catch(function () {
-                        body.innerHTML = '<div class="muted">No se pudo calcular el historial de esta senal.</div>';
+                        body.innerHTML = '<div class="muted">No se pudo calcular el historial de esta señal.</div>';
                         loaded = true;
                         body.hidden = false;
                         button.textContent = 'Ocultar historial';

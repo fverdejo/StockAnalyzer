@@ -1558,7 +1558,7 @@ class Layout
         <div class="shell header-shell">
             <div class="brand-block">
                 <h1>Stock Analyzer</h1>
-                <p class="subtitle">Ranking diario con datos reales, indicadores tecnicos y puntuacion objetiva.</p>
+                <p class="subtitle">Ranking diario con datos reales, indicadores técnicos y puntuación objetiva.</p>
             </div>
             <div class="topbar-meta">{$topbarRight}</div>
         </div>
@@ -1572,7 +1572,7 @@ class Layout
     <footer class="app-footer">
         <div class="shell footer-shell">
             <span>Stock Analyzer</span>
-            <span>Demo educativa. Sin operaciones reales ni conexion con broker.</span>
+            <span>Demo educativa. Sin operaciones reales ni conexión con broker.</span>
         </div>
     </footer>
     <script>
