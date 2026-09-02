@@ -120,8 +120,23 @@ class EodhdFiscalPeriodProvider
      *
      * Comparte la misma proteccion de la API key que `fetch()`: nunca en
      * el mensaje de error.
+     *
+     * $eodhdSymbolOverride (roadmap.md, "Segundo bloque" punto 3,
+     * 2026-09-02): para "antiguos componentes" cuyo `Code` en
+     * `HistoricalTickerComponents` lleva el sufijo de desambiguacion de
+     * EODHD (`_old`, `_old1`...) cuando el ticker se reutilizo despues para
+     * una empresa NO relacionada (p.ej. `APC_old` para la Anadarko
+     * Petroleum original, distinta de la `APC`/`ARKO Petroleum Corp.` que
+     * cotiza hoy con el mismo simbolo). Confirmado en vivo el 2026-09-02:
+     * el sufijo es SENSIBLE A MAYUSCULAS en la API real
+     * (`APC_old.US` -> 200 con datos; `APC_OLD.US` -> 401), asi que NO se
+     * puede derivar subiendolo a mayusculas como el resto del ticker --
+     * cuando se pasa este parametro se usa EXACTAMENTE tal cual, sin
+     * `toEodhdSymbol()` ni `strtoupper()`. `$ticker` sigue siendo la clave
+     * de archivado/almacenamiento (normalizada como siempre), separada del
+     * simbolo real que se pide a la red.
      */
-    public function fetchRawJson(string $ticker): string
+    public function fetchRawJson(string $ticker, ?string $eodhdSymbolOverride = null): string
     {
         $rawTicker = strtoupper(trim($ticker));
 
@@ -129,7 +144,9 @@ class EodhdFiscalPeriodProvider
             throw new MarketDataException('Ticker cannot be empty.');
         }
 
-        $eodhdSymbol = $this->toEodhdSymbol($rawTicker);
+        $eodhdSymbol = $eodhdSymbolOverride !== null && trim($eodhdSymbolOverride) !== ''
+            ? trim($eodhdSymbolOverride)
+            : $this->toEodhdSymbol($rawTicker);
         $body = $this->requestBody($eodhdSymbol, $rawTicker);
 
         // Se valida que decodifica como JSON antes de darlo por archivable

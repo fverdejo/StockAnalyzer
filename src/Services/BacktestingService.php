@@ -11,6 +11,7 @@ use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Enums\ScoreCategory;
+use StockAnalyzer\Interfaces\IndexMembershipCheckerInterface;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\Fundamentals;
@@ -59,7 +60,33 @@ class BacktestingService
          * (los fundamentales de hoy en toda fecha pasada), que es lo que
          * necesitan los tests que no hablan con base de datos.
          */
-        private readonly ?FundamentalsHistoryRepository $fundamentalsHistory = null
+        private readonly ?FundamentalsHistoryRepository $fundamentalsHistory = null,
+        /**
+         * Universo point-in-time (roadmap.md, "Segundo bloque" punto 5,
+         * 2026-09-02): quien era miembro de que indice en que fecha.
+         * Opcional a proposito, mismo criterio que `$fundamentalsHistory`:
+         * sin el, `runCrossSectional()` se comporta como siempre (la lista
+         * de tickers que se le pasa es el universo en TODAS las fechas, con
+         * el sesgo de supervivencia que este bloque existe para poder
+         * eliminar cuando se le conecta uno).
+         *
+         * **Limitacion real, no de este mecanismo sino de los datos
+         * disponibles hoy** (investigado y confirmado en vivo el
+         * 2026-09-02, ver versions.md): el filtro de membresia por si solo
+         * NO basta para un backtest real de "antiguos componentes" del S&P
+         * 500 -- ademas hace falta precio historico, y ni EODHD (el plan
+         * "Fundamentals Data Feed" contratado da 401/403 en
+         * `/api/eod`, `/api/div` y `/api/splits`, para CUALQUIER ticker, no
+         * solo delisted) ni Yahoo (reutiliza simbolos de empresas
+         * delistadas para compañias NO relacionadas -- confirmado con
+         * `APC`, `LEH`, `EMC`, entre otros: pedir su historico HOY devuelve
+         * precios reales pero de una empresa distinta) sirven ese precio de
+         * forma fiable y automatizable. Este parametro deja el MOTOR listo
+         * y probado (ver `BacktestingServicePointInTimeUniverseTest`); un
+         * backtest real de "S&P 500 desde 2012 con antiguos miembros" sigue
+         * bloqueado por ese hueco de precio, no por este filtro.
+         */
+        private readonly ?IndexMembershipCheckerInterface $indexMembership = null
     ) {
     }
 
@@ -241,10 +268,23 @@ class BacktestingService
      *   el hueco real es mayor), pensado para que un ticker desalineado no
      *   cuele una fecha solapada con la anterior.
      *
-     * @param list<string> $tickers
+     * @param list<string> $tickers Universo candidato. Si $indexCode va
+     *        acompañado de un `IndexMembershipCheckerInterface` conectado
+     *        (ver constructor), esta lista puede ser AMPLIA (todos los
+     *        miembros historicos conocidos de un indice, activos y ya no
+     *        activos): el filtro point-in-time decide, fecha a fecha, cual
+     *        de ellos "existia" de verdad ese dia. Sin `$indexCode` (o sin
+     *        repositorio conectado) el comportamiento es el de siempre: la
+     *        lista se trata como el universo COMPLETO en TODAS las fechas,
+     *        con el sesgo de supervivencia conocido si viene de
+     *        `config/universes.php` (lista de HOY aplicada al pasado).
      * @param int $topN Cuantas acciones se "compran" cada fecha, las de mayor
      *        puntuacion, igual que el Top del dashboard.
      * @param string $mode 'full' o 'technical', mismo significado que en `run()`.
+     * @param ?string $indexCode Codigo de indice (roadmap.md, "Segundo
+     *        bloque" punto 5, 2026-09-02) contra el que se comprueba
+     *        membresia point-in-time va `IndexMembershipCheckerInterface`.
+     *        Sin efecto si el servicio no tiene uno conectado (constructor).
      * @return array<string,mixed>
      */
     public function runCrossSectional(
@@ -252,7 +292,8 @@ class BacktestingService
         int $horizonDays = 20,
         int $step = 20,
         int $topN = 10,
-        string $mode = 'full'
+        string $mode = 'full',
+        ?string $indexCode = null
     ): array {
         $this->assertValidMode($mode);
 
@@ -266,12 +307,32 @@ class BacktestingService
             );
         }
 
+        // El filtro point-in-time solo se activa si SE PIDIO (indexCode no
+        // nulo) Y hay con que comprobarlo (repositorio conectado): mismo
+        // criterio de "opcional, sin romper nada existente" que
+        // $fundamentalsHistory en stockAt(). Sin uno de los dos, ningun
+        // ticker se descarta por membresia -- comportamiento identico al de
+        // antes de este parametro.
+        $membershipActive = $indexCode !== null && $this->indexMembership instanceof IndexMembershipCheckerInterface;
         $samplesByDate = [];
         $errors = [];
+        $droppedNotMember = 0;
+        $samplesKept = 0;
 
         foreach ($tickers as $ticker) {
             try {
                 foreach ($this->collectSamples($ticker, $horizonDays, $step, $mode) as $sample) {
+                    if ($membershipActive) {
+                        $sampleDate = new \DateTimeImmutable((string) $sample['date']);
+
+                        if (!$this->indexMembership->isMemberAt($ticker, (string) $indexCode, $sampleDate)) {
+                            $droppedNotMember++;
+
+                            continue;
+                        }
+                    }
+
+                    $samplesKept++;
                     $samplesByDate[$sample['date']][] = [
                         'ticker' => strtoupper($ticker),
                         'percentage' => $sample['percentage'],
@@ -341,6 +402,16 @@ class BacktestingService
                 'dates_evaluated' => count($dates),
                 'dates_dropped_low_breadth' => $droppedLowBreadth,
                 'dates_dropped_overlapping' => $droppedOverlapping,
+                // Cobertura del universo point-in-time (roadmap.md,
+                // "Segundo bloque" punto 5): `point_in_time_universe` es
+                // `false` cuando no se pidio (`$indexCode` nulo) o no hay
+                // repositorio conectado -- ahi los dos contadores de abajo
+                // son irrelevantes (0/0, no se llego a comprobar nada) y no
+                // deben leerse como "cobertura del 100%".
+                'point_in_time_universe' => $membershipActive,
+                'index_code' => $membershipActive ? strtoupper((string) $indexCode) : null,
+                'samples_kept' => $samplesKept,
+                'samples_dropped_not_member' => $droppedNotMember,
             ],
             $this->crossSectionalStatistics($alphas, $topAverages, $universeAverages, $topReturns, $universeReturns),
             [
