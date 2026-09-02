@@ -601,6 +601,10 @@ class StockDetailPage
                 <button type="button" data-interval="5m">Velas 5m</button>
                 <button type="button" data-interval="1m">Velas 1m (ultimo dia)</button>
             </div>
+            <p class="muted panel-note">Rueda del raton o gesto de pellizco para hacer zoom sobre las velas; arrastrar para desplazar.</p>
+            <div class="chart-toolbar">
+                <button type="button" data-reset-zoom="{$canvasId}">Restablecer zoom</button>
+            </div>
             <div class="chart-canvas-tall">
                 <canvas id="{$canvasId}"></canvas>
             </div>
@@ -627,8 +631,13 @@ class StockDetailPage
         </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
         <script>
         (function () {
+            if (window.Chart && window.ChartZoom) {
+                Chart.register(ChartZoom);
+            }
+
             var full = {
                 labels: {$labels},
                 closes: {$closes},
@@ -792,6 +801,15 @@ class StockDetailPage
                                         return items.length ? priceAxisLabel(items[0].parsed.x) : '';
                                     }
                                 }
+                            },
+                            zoom: {
+                                limits: { x: { min: 'original', max: 'original' } },
+                                pan: { enabled: true, mode: 'x' },
+                                zoom: {
+                                    wheel: { enabled: true },
+                                    pinch: { enabled: true },
+                                    mode: 'x'
+                                }
                             }
                         }
                     }
@@ -883,6 +901,16 @@ class StockDetailPage
                 }
 
                 priceChart.update();
+
+                // Cada cambio de rango/intradia trae una serie distinta: un
+                // zoom aplicado sobre la vista anterior ya no tiene sentido
+                // (limits.x.min/max='original' de mas arriba se recalcula
+                // solo en la siguiente llamada a zoom/pan, no aqui, asi que
+                // sin este reset el usuario podria quedarse viendo un tramo
+                // vacio tras cambiar de rango con zoom aplicado).
+                if (typeof priceChart.resetZoom === 'function') {
+                    priceChart.resetZoom();
+                }
             }
 
             function setVolumeDataset(labels, volumes) {
@@ -1007,6 +1035,15 @@ class StockDetailPage
                     button.addEventListener('click', function () {
                         applyIntraday(button.getAttribute('data-interval'), button);
                     });
+                });
+            }
+
+            var resetZoomButton = document.querySelector('[data-reset-zoom="{$canvasId}"]');
+            if (resetZoomButton) {
+                resetZoomButton.addEventListener('click', function () {
+                    if (priceChart && typeof priceChart.resetZoom === 'function') {
+                        priceChart.resetZoom();
+                    }
                 });
             }
         })();
