@@ -28,24 +28,34 @@ declare(strict_types=1);
  * algun dia el score demuestra ventaja, no borrar el fichero.
  */
 return [
-    // Medicion del 2026-08-15, en la rama feature/solo-tecnico: el score
-    // ya no lleva FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND (maxScore 0), asi
-    // que esta cifra describe TECHNICAL+MOMENTUM+RISK solo. Sustituye a la
-    // del 2026-08-14 (-0,62 pp con fundamentales), que ya no es lo que el
-    // usuario ve en pantalla. Mismos 34 tickers usados en la investigacion
-    // del mismo dia (32 de v2.94 mas HCA/MRNA, incorporados hoy al techo
-    // del plan gratuito de FMP), mismo horizonte y top-N, para que la
-    // comparacion con la cifra anterior sea de verdad como-con-como.
-    'measured_at' => '2026-08-15',
-    'sample' => '34 grandes valores de EEUU (whitelist gratuita de FMP), 5 años, 58 fechas independientes',
+    // Medicion del 2026-09-02 (roadmap.md, "Tercer bloque" version
+    // reducida): sustituye a la del 2026-08-15 (34 tickers, whitelist
+    // gratuita de FMP) por la primera con universo point-in-time REAL, no
+    // la lista de hoy aplicada al pasado. 636 tickers = 507 de los
+    // universos actuales confirmados como miembros historicos reales del
+    // S&P 500 + 129 ex-miembros que salieron del indice pero siguen
+    // cotizando, verificados uno a uno contra Yahoo para descartar
+    // reciclaje de ticker (7 descartados: EMC, BEAM, MMI, S, STI, VAL,
+    // SBNY). El score sigue siendo TECHNICAL+MOMENTUM+RISK: confirmado en
+    // la misma medicion que config/weights.php de produccion ya tiene
+    // FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND a peso 0 (mode=full y
+    // mode=technical dieron resultados identicos).
+    //
+    // Limitacion que sigue sin resolverse, y por eso esta cifra tampoco es
+    // la ultima palabra: quedan 174 ex-miembros del S&P 500 genuinamente
+    // delistados sin fuente de precio fiable (ni EODHD con el plan
+    // contratado, ni Yahoo por reciclaje de tickers), asi que el universo
+    // sigue sesgado hacia empresas que sobrevivieron, solo que menos que
+    // antes (ver versions.md, 2026-09-02).
+    'measured_at' => '2026-09-02',
+    'sample' => '636 tickers, universo point-in-time real del S&P 500 (507 actuales + 129 ex-miembros verificados), 10 años, 121 fechas independientes',
     'horizon_days' => 20,
     'top_n' => 10,
-    'alpha' => -0.33,
-    'stderr' => 0.38,
-    // Sin significancia estadistica (|t| = 0,88 < 1,96): no se puede
-    // afirmar que el ranking sea peor que el azar, solo que NO hay
-    // evidencia de que sea mejor. Mejora frente al score completo (-0,62,
-    // t=-1,51) pero sigue dentro del ruido: no es una victoria, es "no se
-    // puede distinguir de comprar al azar en este universo".
+    'alpha' => -0.58,
+    'stderr' => 0.34,
+    // t pareado por fecha (metrica principal de este proyecto) = -1,70,
+    // sin significancia estadistica (|t| < 1,96): igual que en la
+    // medicion anterior, no hay evidencia de que el ranking sea mejor NI
+    // peor que el azar en este universo.
     'significant' => false,
 ];
