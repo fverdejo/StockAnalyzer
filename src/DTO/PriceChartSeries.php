@@ -25,6 +25,7 @@ class PriceChartSeries
      * @param list<float|null> $macdSignal
      * @param list<float|null> $macdHistogram
      * @param list<float|null> $rsi14
+     * @param list<float> $opens Vacio en llamadas antiguas (parametro añadido en v2.115 para las velas japonesas del grafico de precio).
      */
     public function __construct(
         private readonly array $labels,
@@ -39,7 +40,8 @@ class PriceChartSeries
         private readonly array $macd = [],
         private readonly array $macdSignal = [],
         private readonly array $macdHistogram = [],
-        private readonly array $rsi14 = []
+        private readonly array $rsi14 = [],
+        private readonly array $opens = []
     ) {
     }
 
@@ -145,5 +147,13 @@ class PriceChartSeries
     public function getRsi14(): array
     {
         return $this->rsi14;
+    }
+
+    /**
+     * @return list<float>
+     */
+    public function getOpens(): array
+    {
+        return $this->opens;
     }
 }

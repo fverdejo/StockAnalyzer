@@ -68,6 +68,7 @@ class TechnicalAnalyzer
     public function buildChartSeries(array $quotes): PriceChartSeries
     {
         $closes = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getClose());
+        $opens = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getOpen());
         $highs = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getHigh());
         $lows = $this->column($quotes, static fn (HistoricalQuote $q): float => $q->getLow());
         $labels = $this->column($quotes, static fn (HistoricalQuote $q): string => $q->getDate()->format('Y-m-d'));
@@ -89,7 +90,8 @@ class TechnicalAnalyzer
             macd: $macd['macd'],
             macdSignal: $macd['signal'],
             macdHistogram: $macd['histogram'],
-            rsi14: $rsi14
+            rsi14: $rsi14,
+            opens: $opens
         );
     }
 

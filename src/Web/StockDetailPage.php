@@ -556,6 +556,7 @@ class StockDetailPage
 
         $labels = self::jsonFor($series->getLabels());
         $closes = self::jsonFor($series->getCloses());
+        $opens = self::jsonFor($series->getOpens());
         $highs = self::jsonFor($series->getHighs());
         $lows = self::jsonFor($series->getLows());
         $sma20 = self::jsonFor($series->getSma20());
@@ -625,11 +626,13 @@ class StockDetailPage
             </div>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
         <script>
         (function () {
             var full = {
                 labels: {$labels},
                 closes: {$closes},
+                opens: {$opens},
                 highs: {$highs},
                 lows: {$lows},
                 sma20: {$sma20},
@@ -657,6 +660,7 @@ class StockDetailPage
                 return {
                     labels: full.labels.slice(start),
                     closes: full.closes.slice(start),
+                    opens: full.opens.slice(start),
                     highs: full.highs.slice(start),
                     lows: full.lows.slice(start),
                     sma20: full.sma20.slice(start),
@@ -709,29 +713,69 @@ class StockDetailPage
                 return labels.map(function () { return value; });
             }
 
+            // El grafico de precio usa velas japonesas (chartjs-chart-financial)
+            // sobre un eje X numerico ('linear', indice 0..n-1 de la serie
+            // visible), no 'category': asi los huecos de fin de semana/festivo
+            // no dejan un tramo vacio, igual que hacia antes el grafico de
+            // lineas con las mismas fechas. El controlador de velas registra
+            // 'timeseries' como eje X por defecto (necesita un adaptador de
+            // fechas); scales.x.type='linear' de mas abajo lo sustituye.
+            function toCandles(next) {
+                return next.labels.map(function (_, i) {
+                    return { x: i, o: next.opens[i], h: next.highs[i], l: next.lows[i], c: next.closes[i] };
+                });
+            }
+
+            function toPoints(values) {
+                return values.map(function (value, i) {
+                    return { x: i, y: value };
+                });
+            }
+
+            function flatPoints(labels, value) {
+                return labels.map(function (_, i) {
+                    return { x: i, y: value };
+                });
+            }
+
+            function priceAxisLabel(value) {
+                var labels = priceChart ? priceChart.data.labels : current.labels;
+
+                return labels && labels[value] !== undefined ? labels[value] : '';
+            }
+
             if (priceCtx && window.Chart) {
                 var priceDatasets = [
-                    { label: 'Maximo', data: current.highs, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                    { label: 'Minimo', data: current.lows, borderColor: 'rgba(23,33,43,0.18)', backgroundColor: 'rgba(15,107,119,0.08)', borderWidth: 1, pointRadius: 0, tension: 0.15, fill: '-1' },
-                    { label: 'Precio', data: current.closes, borderColor: '#0f6b77', borderWidth: 2, pointRadius: 0, tension: 0.15 },
-                    { label: 'SMA20', data: current.sma20, borderColor: '#9a6500', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                    { label: 'SMA50', data: current.sma50, borderColor: '#a23b35', borderWidth: 1, pointRadius: 0, tension: 0.15 },
-                    { label: 'Bollinger sup.', data: current.bbUpper, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 },
-                    { label: 'Bollinger inf.', data: current.bbLower, borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 }
+                    {
+                        type: 'candlestick',
+                        label: 'Precio',
+                        data: toCandles(current),
+                        // Los nombres up/down del plugin estan invertidos
+                        // respecto a la convencion habitual: 'up' es el color
+                        // cuando close < open (bajista) y 'down' cuando
+                        // close > open (alcista). Mapeados aqui a rojo/verde,
+                        // los mismos colores que ya usan Stop/Objetivo.
+                        backgroundColors: { up: '#b42318', down: '#147a46', unchanged: '#9aa5ab' },
+                        borderColors: { up: '#b42318', down: '#147a46', unchanged: '#9aa5ab' }
+                    },
+                    { type: 'line', label: 'SMA20', data: toPoints(current.sma20), borderColor: '#9a6500', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                    { type: 'line', label: 'SMA50', data: toPoints(current.sma50), borderColor: '#a23b35', borderWidth: 1, pointRadius: 0, tension: 0.15 },
+                    { type: 'line', label: 'Bollinger sup.', data: toPoints(current.bbUpper), borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 },
+                    { type: 'line', label: 'Bollinger inf.', data: toPoints(current.bbLower), borderColor: '#b6c1c9', borderWidth: 1, pointRadius: 0, borderDash: [4, 4], tension: 0.15 }
                 ];
 
                 if (full.stopLoss !== null) {
                     stopDatasetIndex = priceDatasets.length;
-                    priceDatasets.push({ label: 'Stop sugerido', data: flatLine(current.labels, full.stopLoss), borderColor: '#b42318', borderWidth: 1.5, pointRadius: 0, borderDash: [6, 4], tension: 0 });
+                    priceDatasets.push({ type: 'line', label: 'Stop sugerido', data: flatPoints(current.labels, full.stopLoss), borderColor: '#b42318', borderWidth: 1.5, pointRadius: 0, borderDash: [6, 4], tension: 0 });
                 }
 
                 if (full.target !== null) {
                     targetDatasetIndex = priceDatasets.length;
-                    priceDatasets.push({ label: 'Objetivo sugerido', data: flatLine(current.labels, full.target), borderColor: '#147a46', borderWidth: 1.5, pointRadius: 0, borderDash: [6, 4], tension: 0 });
+                    priceDatasets.push({ type: 'line', label: 'Objetivo sugerido', data: flatPoints(current.labels, full.target), borderColor: '#147a46', borderWidth: 1.5, pointRadius: 0, borderDash: [6, 4], tension: 0 });
                 }
 
                 priceChart = new Chart(priceCtx, {
-                    type: 'line',
+                    type: 'candlestick',
                     data: {
                         labels: current.labels,
                         datasets: priceDatasets
@@ -740,7 +784,16 @@ class StockDetailPage
                         responsive: true,
                         maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
-                        scales: { x: { ticks: { maxTicksLimit: 12 } } }
+                        scales: { x: { type: 'linear', ticks: { maxTicksLimit: 12, callback: priceAxisLabel } } },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    title: function (items) {
+                                        return items.length ? priceAxisLabel(items[0].parsed.x) : '';
+                                    }
+                                }
+                            }
+                        }
                     }
                 });
             }
@@ -815,20 +868,18 @@ class StockDetailPage
                 }
 
                 priceChart.data.labels = next.labels;
-                priceChart.data.datasets[0].data = next.highs;
-                priceChart.data.datasets[1].data = next.lows;
-                priceChart.data.datasets[2].data = next.closes;
-                priceChart.data.datasets[3].data = next.sma20;
-                priceChart.data.datasets[4].data = next.sma50;
-                priceChart.data.datasets[5].data = next.bbUpper;
-                priceChart.data.datasets[6].data = next.bbLower;
+                priceChart.data.datasets[0].data = toCandles(next);
+                priceChart.data.datasets[1].data = toPoints(next.sma20);
+                priceChart.data.datasets[2].data = toPoints(next.sma50);
+                priceChart.data.datasets[3].data = toPoints(next.bbUpper);
+                priceChart.data.datasets[4].data = toPoints(next.bbLower);
 
                 if (stopDatasetIndex >= 0) {
-                    priceChart.data.datasets[stopDatasetIndex].data = flatLine(next.labels, full.stopLoss);
+                    priceChart.data.datasets[stopDatasetIndex].data = flatPoints(next.labels, full.stopLoss);
                 }
 
                 if (targetDatasetIndex >= 0) {
-                    priceChart.data.datasets[targetDatasetIndex].data = flatLine(next.labels, full.target);
+                    priceChart.data.datasets[targetDatasetIndex].data = flatPoints(next.labels, full.target);
                 }
 
                 priceChart.update();
@@ -910,8 +961,9 @@ class StockDetailPage
 
                         setPriceDatasets({
                             labels: data.labels,
-                            highs: [],
-                            lows: [],
+                            opens: data.opens,
+                            highs: data.highs,
+                            lows: data.lows,
                             closes: data.closes,
                             sma20: [],
                             sma50: [],

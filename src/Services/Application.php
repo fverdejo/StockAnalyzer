@@ -1163,6 +1163,9 @@ class Application
                 static fn ($quote) => $quote->getDate()->format($multiDay ? 'd/m H:i' : 'H:i'),
                 $quotes
             ),
+            'opens' => array_map(static fn ($quote) => $quote->getOpen(), $quotes),
+            'highs' => array_map(static fn ($quote) => $quote->getHigh(), $quotes),
+            'lows' => array_map(static fn ($quote) => $quote->getLow(), $quotes),
             'closes' => array_map(static fn ($quote) => $quote->getClose(), $quotes),
             'volumes' => array_map(static fn ($quote) => $quote->getVolume(), $quotes),
         ];

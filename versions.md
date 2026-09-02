@@ -6021,3 +6021,25 @@ Reutilizado `storage/scratch/run_point_in_time_backtest.php` (mismo script, mism
 `config/measured_edge.php` actualizado con la cifra nueva (-0,62 pp, t=-1,76, `significant: false`), mismo criterio de siempre (poner `alpha` a `null` el dia que el score demuestre ventaja, no borrar el fichero). Verificado que ningun test fija los valores exactos del config (solo `MeasuredEdgeConfig` lo consume). `ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK (sin cambio, ningun codigo de produccion nuevo). `ddev exec vendor/bin/phpstan analyse`: sin errores.
 
 Con esto se cierra por completo "Prioridad cero-bis" (`roadmap.md`). Bloqueado el resto del plan de Codex a la espera de decision del usuario: `P3.4` (momentum-only con el lookback corregido) y `P3.3` (conectar `RelativeFundamentalScorer` al backtest transversal con los 628 tickers), siguiente prioridad segun el consenso del equipo del `2026-09-02`.
+
+---
+
+## 2026-09-02 (octava entrada) - El grafico de precio pasa de lineas a velas japonesas
+
+Estado: hecho y verificado en navegador (no solo con tests). El usuario pregunta si el grafico de precio de `StockDetailPage` se podria dibujar con velas en vez de con lineas (Maximo/Minimo/Precio como tres lineas separadas, como se ha dibujado siempre) y pide implementarlo.
+
+### Datos: ya existian, solo faltaba exponer `open`
+
+`HistoricalQuote` ya tenia `getOpen()` (usado por el arreglo P0.1 de hoy mismo), pero `PriceChartSeries` (el DTO que alimenta el grafico diario) nunca lo recogia, y el endpoint `?page=intraday` tampoco lo devolvia (ni `high`/`low`). Añadido: `PriceChartSeries::getOpens()` (parametro nuevo del constructor, con valor por defecto `[]` para no romper los dos tests que construyen el DTO por posicion con arrays vacios), `TechnicalAnalyzer::buildChartSeries()` lo calcula igual que `highs`/`lows`, y `Application::renderIntraday()` añade `opens`/`highs`/`lows` al JSON junto a `closes`/`volumes` que ya tenia.
+
+### Front-end: `chartjs-chart-financial@0.2.1` sobre un eje X `linear`, no `category` ni `timeseries`
+
+Chart.js no dibuja velas de forma nativa. El plugin oficial (`chartjs-chart-financial`, mismo autor que Chart.js, peer dep `chart.js: ^4.0.0`, coincide con la version `4.4.4` ya cargada) se auto-registra con solo cargar el script (`Chart.register(...)` interno, sin nada que llamar a mano) y expone `type: 'candlestick'` para el dataset. Verificado leyendo el fuente del plugin (no solo la documentacion): sus datasets por defecto usan `scales.x.type: 'timeseries'`, que exige un adaptador de fechas (Luxon en el ejemplo oficial) — evitado a proposito: en vez de eso, `scales.x.type: 'linear'` explicito en la configuracion del grafico (que Chart.js respeta por encima del override del controlador) con el indice de la serie visible (0..n-1) como valor `x`, no una fecha real. Es ademas MAS correcto para este caso que un eje de tiempo real: los huecos de fin de semana/festivo no dejan hueco vacio en el grafico, exactamente el mismo comportamiento que ya tenia el grafico de lineas con las mismas fechas (y el mismo principio que P0.2 de hoy: sesiones bursatiles reales, no dias naturales).
+
+Sustituidas las lineas "Maximo"/"Minimo"/"Precio" (3 datasets) por un unico dataset `candlestick`; SMA20/SMA50/Bollinger sup./inf./Stop sugerido/Objetivo siguen superpuestos como lineas, ahora como puntos `{x: indice, y: valor}` en vez de arrays planos (obligado por compartir el mismo eje `linear`). Colores mapeados a rojo/verde ya usados en la app (`backgroundColors`/`borderColors` del plugin: `up` es el color cuando `close < open` pese al nombre — verificado leyendo `CandlestickElement.draw()` en el fuente minificado, no asumido).
+
+### Verificado en navegador real, no solo con PHPUnit
+
+Chrome headless (`--remote-debugging-port`) contra `ddev`, pilotado con un cliente CDP minimo en Python (sin Playwright/Selenium instalados, ninguno disponible en el entorno): capturas de la vista diaria por defecto (1A), del cambio de rango a 1M, y de las velas intradia de 15 minutos (que ahora tambien reciben OHLC real del endpoint ampliado, antes solo `closes`). Las tres renderizan velas rojas/verdes correctamente proporcionadas y en la posicion correcta; sin errores en consola (`Runtime.exceptionThrown`/`Runtime.consoleAPICalled` monitorizados). Una primera captura salio con las velas apelotonadas en el borde izquierdo del grafico — no era un bug: acabo siendo un artefacto de la animacion de transicion de Chart.js entre el rango antiguo (252 puntos) y el nuevo (20 puntos) capturado a medio camino; desactivando la animacion para la comprobacion, la misma vista renderiza correctamente.
+
+`ddev exec vendor/bin/phpunit`: 493/493, 1.351 assertions, OK. `ddev exec vendor/bin/phpstan analyse`: sin errores.
