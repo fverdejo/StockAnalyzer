@@ -6068,3 +6068,88 @@ Estado: anotado, sin implementar (a peticion explicita del usuario: "no hagas na
 2. El grafico deja hueco sin aprovechar a los dos lados (antes de la primera vela y despues de la ultima) en vez de usar todo el ancho disponible; pide mostrar mas velas o ajustar el espaciado.
 
 Detalle y contexto completo de cada punto en `roadmap.md`, seccion "Prioridad baja".
+
+---
+
+## 2026-09-02 (undecima entrada) - P3.4: modo `momentum` en `runCrossSectional()`, con marca de procedencia del marketCap
+
+Estado: implementado y revisado a mano linea a linea; **verificacion en `ddev` (`vendor/bin/phpunit`/`vendor/bin/phpstan`) y ejecucion del script de medicion pendientes de confirmar en un entorno real** -- este sandbox no tiene PHP ni Docker disponibles (mismo hueco de entorno que la cuarta entrada de hoy), asi que no se pudo ejecutar nada, solo revisar el codigo con cuidado extra (balance de llaves/parentesis comprobado por script, aritmetica de los fixtures de test recalculada a mano).
+
+Objetivo: siguiente prioridad del consenso del equipo tras cerrar "Prioridad cero-bis" (ver septima entrada de hoy) -- evaluar el Momentum 12-1 SOLO, mediante ranks transversales neutralizados por sector y por tamaño, en vez de como los 7/50 puntos que hoy aporta dentro del score completo (`REVISION_MOTOR_CODEX_2026-09-02.md`, seccion P3.4).
+
+### 1. Marca de procedencia del market cap (prerrequisito bloqueante)
+
+`BacktestingService::fundamentalsAt()` ya contaba `pointInTimeHits`/`pointInTimeMisses` de forma AGREGADA, pero ninguna muestra individual sabia si su propio `marketCap` vino de un snapshot real o del fallback silencioso a los fundamentales de hoy. Nueva propiedad `$lastMarketCapWasPointInTime` (mismo patron que `$momentumNullDropped`: se sobrescribe en cada llamada, `fundamentalsAt()`/`stockAt()` se invocan una unica vez por muestra dentro de `sampleHistory()`, sin llamadas anidadas), capturada en variable local justo despues de `stockAt()` para que la siguiente iteracion no la pise antes de usarla.
+
+### 2. Datos nuevos expuestos por muestra
+
+`sampleHistory()` añade a cada muestra: `momentum12m1` (crudo, de `TechnicalAnalyzer::getMomentum12m1()`, ya calculado -- solo se expone), `sector` (`Company::getSector()`, documentado en el propio codigo como el sector ACTUAL, no historico -- el modelo no trackea reclasificaciones GICS por fecha, misma clase de aproximacion ya aceptada para `dividendGrowth5y`), `market_cap` y `market_cap_is_point_in_time` (del punto 1). `runCrossSectional()` copia estos cuatro campos a `$samplesByDate` siempre, no solo con `mode='momentum'`, para no bifurcar esa recopilacion por modo.
+
+### 3. Nuevo modo `momentum`
+
+`assertValidMode()` acepta ahora `'full'`, `'technical'`, `'momentum'`. Nuevo metodo privado `rankByMomentumNeutral()`, invocado solo dentro del bucle por fecha de `runCrossSectional()` cuando `$mode === 'momentum'` (el resto del pipeline -- `run()`/`backtestTicker()` -- valida `'momentum'` sin error pero no tiene ranking especial propio, se comporta como `'full'`, documentado explicitamente en el docblock de `run()`):
+
+a. Agrupa las muestras de la fecha por sector; cualquier sector con menos de `MIN_SECTOR_SAMPLES_MOMENTUM` (20) muestras ese dia queda excluido POR COMPLETO (contador `samples_dropped_thin_sector`).
+b. De las restantes, cualquiera sin `market_cap_is_point_in_time === true` (o con `market_cap` null) tambien se descarta (contador `samples_dropped_no_marketcap_pit`).
+c. `momentum_sector_neutral` = `momentum12m1` menos la mediana del mismo sector, misma fecha, entre las supervivientes de (a)+(b).
+d. Terciles de `market_cap` cross-sectional (rango 0/1/2 por posicion relativa `intdiv(rank*3, n)`, no un umbral de valor fijo) entre las supervivientes; `momentum_neutral` = `momentum_sector_neutral` menos la mediana del mismo tercil.
+e. Top-N por `momentum_neutral` descendente, mismo desempate alfabetico que `rankByPercentage()`.
+
+Decisiones de arquitectura: todo el resto de `runCrossSectional()` (breadth check, independencia de fechas P0.2, agregacion estadistica de `crossSectionalStatistics()`) se reutiliza sin duplicar -- el unico cambio real es el criterio de seleccion del top-N y dos contadores de descarte nuevos, publicados en el resultado igual que `samples_dropped_momentum_null` (0/0 fuera de `mode='momentum'`, mismo criterio que `point_in_time_universe`). Si la neutralizacion deja 0 supervivientes en una fecha (extremo improbable con cientos de tickers), esa fecha se descarta como si tuviera amplitud insuficiente, sin dividir por cero.
+
+Mediana calculada con un metodo privado nuevo (`median()`), reimplementado localmente en vez de compartido -- mismo criterio que `DividendGrowthCalculator::median()`, no existe todavia un sitio comun de utilidades numericas en el proyecto.
+
+### 4. Script de medicion: `storage/scratch/run_momentum_only_backtest.php`
+
+Adaptado de `run_point_in_time_backtest.php` (mismo patron de conexion/instanciacion, mismo universo point-in-time de 636 tickers, `--top=10 --history=10y`, `indexCode='GSPC'`). Ejecuta `mode='momentum'` en exactamente dos configuraciones: `horizon=20/step=20` (comparable al baseline de hoy) y `horizon=60/step=60` (el motor P0.2-corregido exige `step >= horizonDays`, asi que `step=20` con `horizon=60` habria lanzado una excepcion -- se sube el paso, no el criterio de independencia). No calcula Bonferroni ni declara significancia, solo reporta los numeros crudos (`dates_evaluated`, `samples_kept`, los tres contadores de descarte, `avg_alpha`, `alpha_stderr`, `alpha_t_stat`, `pooled_alpha_t_stat`) en JSON (`momentum_only_backtest_results.json`).
+
+### Tests nuevos: `tests/Services/BacktestingServiceMomentumModeTest.php`
+
+Tres tests con fixtures sinteticos deterministas (`momentumTickerHistory()`: mismo prefijo de `MomentumPrefixFixture` que el resto de `BacktestingService*Test`, mas un tramo interpolado que deja `momentum12m1`/`forward_return` en valores EXACTOS conocidos) y dos dobles nuevos (`PerTickerStockAndHistoryProvider`, `Stock` distinto por ticker -- hacia falta variar sector/marketCap, cosa que `PerTickerHistoryProvider` no permite; `InMemoryFundamentalsHistoryRepository`, mismo patron que `InMemoryTickerAlertStateRepository`, decide ticker a ticker si hay snapshot):
+
+- `testSectorConMenosDe20MuestrasQuedaExcluidoYElContadorLoRefleja`: un sector de 5 tickers con momentum RAW enorme (1000%+) queda completamente excluido del top-N pese a que dominaria sin el filtro; `samples_dropped_thin_sector` lo refleja.
+- `testMuestraSinMarketCapPointInTimeQuedaExcluidaYElContadorLoRefleja`: el ticker con el momentum RAW mas alto de su sector se queda sin snapshot registrado (fallback a hoy) y nunca aparece en el top-N; `samples_dropped_no_marketcap_pit` lo refleja.
+- `testNeutralizacionPorSectorYTamanoProduceElRankingEsperado`: caso calculable a mano con margenes amplios a proposito (no empates exactos, para no depender del ultimo decimal de la interpolacion de coma flotante) -- un sector con momentum RAW 50% identico para 20 tickers (mediana=50, sector-neutral=0 para todos) contra un sector con 19 tickers al 10% y uno (`BSTAR`) al 30% (mediana=10, sector-neutral de `BSTAR`=+20): sin neutralizar ganaria cualquier ticker del primer sector (50%>30%), neutralizado gana `BSTAR` por una diferencia de dos ordenes de magnitud (20 contra 0), demostrando que el criterio de ranking realmente cambio el resultado.
+
+Ficheros nuevos: `tests/Services/BacktestingServiceMomentumModeTest.php`, `tests/Services/PerTickerStockAndHistoryProvider.php`, `tests/Services/InMemoryFundamentalsHistoryRepository.php`, `storage/scratch/run_momentum_only_backtest.php`. Modificado: `src/Services/BacktestingService.php` (propiedad `$lastMarketCapWasPointInTime`, `fundamentalsAt()`, `sampleHistory()`, `assertValidMode()`, `runCrossSectional()`, `rankByMomentumNeutral()` y `median()` nuevos). Sin cambios en `config/weights.php` ni en `bin/backtest.php` (su validacion de `--mode` en CLI sigue restringida a `full`/`technical` a proposito, sin pedirselo esta tarea).
+
+Verificado en ddev con...: **pendiente** -- sandbox sin PHP/Docker. Revision manual: `php -l` sustituido por un chequeo de balance de llaves/parentesis/corchetes sobre los cinco ficheros tocados (sin discrepancias nuevas respecto al fichero original, que ya tenia un desequilibrio de un parentesis preexistente dentro de un comentario en prosa, verificado con `git show HEAD:...` antes y despues del cambio: +99/+99, balanceado). Aritmetica de Momentum 12-1/forward_return de los tres tests nuevos recalculada a mano formula por formula (documentado en los docblocks de cada test). El usuario debe ejecutar `ddev exec vendor/bin/phpunit`, `ddev exec vendor/bin/phpstan analyse` y `ddev exec php storage/scratch/run_momentum_only_backtest.php` antes de dar esto por cerrado.
+
+Resultado esperado: `mode='full'`/`mode='technical'` de `runCrossSectional()` siguen dando exactamente los mismos resultados de siempre (cambio aditivo, verificado a mano que el unico reordenamiento de codigo -- mover `$lastEvaluatedDate = (string) $date;` unas lineas mas abajo -- no tiene efecto observable fuera de `mode='momentum'`); `mode='momentum'` permite medir Momentum 12-1 como baseline serio, sector/tamaño-neutral, separado del score de 50 puntos, sin reactivar ninguna otra señal.
+
+---
+
+## 2026-09-02 (duodecima entrada) - P3.4 medido: veredicto nulo, ni cerca del umbral, y el signo se invierte entre mitades
+
+Estado: cerrado. Verificacion independiente de la entrada anterior (el agente que implemento `mode='momentum'` no tenia PHP/Docker en su sandbox) mas la medicion real y el veredicto final de `auditor-estadistico`.
+
+### Verificacion del codigo: un error real de PHPStan, no visto por el agente sin sandbox
+
+`ddev exec vendor/bin/phpunit`: **496/496 tests, 1.373 assertions, OK** (sube de 493 a 496, los tres tests nuevos de `mode='momentum'`). Revisados a mano los tres tests y los dos test doubles nuevos antes de ejecutar nada: el caso calculable de `testNeutralizacionPorSectorYTamanoProduceElRankingEsperado` (20 tickers "tech" a momentum 50% identico, 20 "health" a 10% con una excepcion `BSTAR` a 30%) recalculado entero a mano -- mediana de sector, neutralizacion, terciles de tamaño (irrelevantes aqui por marketCap identico) -- confirma que `BSTAR` debe ganar el ranking con `momentum_neutral=+20` frente a 0 del resto, exactamente lo que afirma el test.
+
+`ddev exec vendor/bin/phpstan analyse` si encontro un error real (el agente no pudo ejecutarlo): en `rankByMomentumNeutral()`, pre-sembrar `$tercileMomentums = [[], [], []]` antes del bucle que rellena por indice dinamico hacia que PHPStan infiriera (incorrectamente) que cualquier entrada acumulada era siempre `non-empty-list`, marcando como codigo muerto la comprobacion `!== []` que SI hace falta en la practica (un tercil puede quedar vacio con muy pocas supervivientes). Arreglado quitando el pre-sembrado y usando `isset()` sobre las tres claves posibles en vez de iterar el array directamente -- mismo comportamiento en tiempo de ejecucion, inferencia de tipos que PHPStan si puede seguir. `ddev exec vendor/bin/phpstan analyse`: sin errores tras el arreglo.
+
+### Medicion: las dos corridas predeclaradas, universo point-in-time real de 636 tickers
+
+| | horizon=20 (comparable al baseline de hoy) | horizon=60 (medio plazo academico) |
+|---|---|---|
+| Fechas evaluadas | 112 | 37 |
+| Fechas descartadas por completo (sector fino + sin marketCap PIT) | 1.028 de 1.241 candidatas (83%) | 409 de 480 (85%) |
+| Alpha media top-10 | +0,54 pp | +0,85 pp |
+| **t pareado por fecha** (metrica principal) | **1,02** | **0,68** |
+| t de Welch (pooled, secundaria) | 1,56 | 0,93 |
+| IC95% | [-0,50, 1,58] | [-1,61, 3,32] |
+
+Comprobado antes de reportar nada: el 83-85% de fechas descartadas no concentra la muestra superviviente en años recientes (por si la cobertura point-in-time de marketCap fuese mas densa ahi) -- las 112/37 fechas se reparten razonablemente uniformes por año en toda la ventana 2017-2026.
+
+### Veredicto de `auditor-estadistico`: nulo, sin necesidad siquiera de Bonferroni
+
+Con N=2 comparaciones predeclaradas, Bonferroni exige |t|>=2,24 (en vez de 1,96). **Ninguna de las dos corridas cruza siquiera el umbral SIN corregir**: horizon=20 con t=1,02 es un 52% del umbral nominal; horizon=60 con t=0,68, un 35%. La correccion formal no cambia el veredicto, solo lo confirma con mas margen.
+
+Split cronologico primera/segunda mitad (mismo criterio que el resto del proyecto, horizon=20, n=56/56 equilibrado): primera mitad (2017-09-14 a 2022-01-27) da t=**-0,87**; segunda mitad (2022-02-25 a 2026-07-17) da t=**+1,78**. **El signo se invierte entre mitades del mismo tamaño** -- el punto estimado global, ya de por si no significativo, esta ademas tirado por el tramo posterior a 2022, no es un efecto estable en las dos mitades del periodo. Lectura del auditor: un efecto real no deberia invertir de signo entre dos mitades comparables; este patron es el mismo mecanismo por el que un ajuste a un regimen concreto cuela como señal generica.
+
+**Limitacion abierta, no bloqueante hoy** (senalada por el auditor, pendiente si algun dia una corrida similar SI cruzara el umbral): dentro de las fechas que sobreviven los filtros de sector fino/marketCap point-in-time, no se ha comprobado si la composicion sector/tamaño de las muestras supervivientes es representativa de la seccion cruzada completa del dia, o si esta sesgada hacia los sectores mejor cubiertos por el proveedor de fundamentales historicos -- las medianas de neutralizacion se calculan sobre ese subconjunto, no sobre el universo completo. Transparente via los contadores publicados (`samples_dropped_thin_sector`/`samples_dropped_no_marketcap_pit`), pero no verificado como neutral.
+
+**Conclusion: Momentum 12-1 evaluado solo, neutral por sector y tamaño, no muestra ventaja demostrable en este universo/horizonte. `config/weights.php` no se toca (el momentum ya vive ahi con su peso actual, sin cambios). `config/measured_edge.php` tampoco, esta medicion es una investigacion separada del score completo, no lo sustituye.**
+
+El modo `momentum` de `runCrossSectional()` se queda como capacidad permanente del motor (igual que el resto de infraestructura de investigacion de este proyecto: el resultado de hoy es nulo, pero la herramienta para volver a preguntarlo con mas datos o distinta especificacion queda construida y verificada).

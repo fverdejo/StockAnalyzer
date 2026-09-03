@@ -111,6 +111,19 @@ class BacktestingService
     private int $momentumNullDropped = 0;
 
     /**
+     * Si el `marketCap` que acaba de devolver `fundamentalsAt()` vino de un
+     * snapshot historico real point-in-time o del fallback a los
+     * fundamentales de HOY (P3.4, `REVISION_MOTOR_CODEX_2026-09-02.md`,
+     * seccion "1. Marca de procedencia del market cap"). Se sobrescribe en
+     * CADA llamada -- `stockAt()`/`fundamentalsAt()` se invocan una unica vez
+     * por muestra dentro de `sampleHistory()`, sin llamadas anidadas ni
+     * paralelas, asi que leerlo justo despues de `stockAt()` (antes de que la
+     * siguiente iteracion lo sobrescriba) siempre describe la muestra que se
+     * esta construyendo.
+     */
+    private bool $lastMarketCapWasPointInTime = false;
+
+    /**
      * @param list<string> $tickers
      * @param int $step Tamaño del paso entre muestras consecutivas. Con el
      *        $step por defecto (5) y un horizonte tipico de 20 dias, cada
@@ -121,7 +134,12 @@ class BacktestingService
      *        en el resultado de cada ticker).
      * @param string $mode 'full' (score completo, el que ve el usuario real)
      *        o 'technical' (solo TECHNICAL+MOMENTUM+RISK, herramienta de
-     *        investigacion via CLI que no afecta al pipeline real).
+     *        investigacion via CLI que no afecta al pipeline real). Tambien
+     *        acepta 'momentum' (P3.4) por compartir validacion con
+     *        `runCrossSectional()`, pero aqui no tiene ningun efecto propio:
+     *        el ranking neutralizado por sector/tamaño solo existe dentro de
+     *        `runCrossSectional()`, asi que en un backtest de un unico
+     *        ticker se comporta identico a 'full'.
      * @return array<string,mixed>
      */
     public function run(array $tickers, int $horizonDays = 20, int $step = 5, string $mode = 'full'): array
@@ -301,8 +319,14 @@ class BacktestingService
      *        con el sesgo de supervivencia conocido si viene de
      *        `config/universes.php` (lista de HOY aplicada al pasado).
      * @param int $topN Cuantas acciones se "compran" cada fecha, las de mayor
-     *        puntuacion, igual que el Top del dashboard.
-     * @param string $mode 'full' o 'technical', mismo significado que en `run()`.
+     *        puntuacion (o de mayor Momentum 12-1 neutralizado con
+     *        $mode='momentum', ver `rankByMomentumNeutral()`), igual que el
+     *        Top del dashboard.
+     * @param string $mode 'full' o 'technical', mismo significado que en
+     *        `run()`. 'momentum' (P3.4, `REVISION_MOTOR_CODEX_2026-09-02.md`)
+     *        rankea cada fecha por Momentum 12-1 neutralizado por sector y
+     *        por tamaño en vez de por `percentage` (el score de 50 puntos):
+     *        ver `rankByMomentumNeutral()` para el criterio exacto.
      * @param ?string $indexCode Codigo de indice (roadmap.md, "Segundo
      *        bloque" punto 5, 2026-09-02) contra el que se comprueba
      *        membresia point-in-time va `IndexMembershipCheckerInterface`.
@@ -370,6 +394,14 @@ class BacktestingService
                         'ticker' => strtoupper($ticker),
                         'percentage' => $sample['percentage'],
                         'forward_return' => $sample['forward_return'],
+                        // P3.4: expuestos siempre (no solo con
+                        // $mode='momentum') para no bifurcar esta
+                        // recopilacion por modo -- full/technical
+                        // simplemente no los leen.
+                        'momentum12m1' => $sample['momentum12m1'],
+                        'sector' => $sample['sector'],
+                        'market_cap' => $sample['market_cap'],
+                        'market_cap_is_point_in_time' => $sample['market_cap_is_point_in_time'],
                     ];
                 }
             } catch (\Throwable $exception) {
@@ -389,6 +421,12 @@ class BacktestingService
         $universeReturns = [];
         $droppedLowBreadth = 0;
         $droppedOverlapping = 0;
+        // P3.4: contadores de descarte de la neutralizacion momentum (ver
+        // `rankByMomentumNeutral()`). Se quedan en 0 fuera de
+        // $mode='momentum' -- irrelevantes ahi, mismo criterio que
+        // `samples_dropped_not_member` cuando no hay universo point-in-time.
+        $droppedThinSector = 0;
+        $droppedNoMarketCapPit = 0;
         $lastEvaluatedDate = null;
 
         foreach ($samplesByDate as $date => $daySamples) {
@@ -406,8 +444,29 @@ class BacktestingService
                 }
             }
 
+            if ($mode === 'momentum') {
+                $ranking = $this->rankByMomentumNeutral($daySamples, $topN);
+                $droppedThinSector += $ranking['dropped_thin_sector'];
+                $droppedNoMarketCapPit += $ranking['dropped_no_marketcap_pit'];
+
+                if ($ranking['selected'] === []) {
+                    // Ninguna muestra sobrevivio a la neutralizacion
+                    // sector/tamaño ese dia (sectores todos demasiado
+                    // pequeños, o ninguna con marketCap point-in-time): sin
+                    // candidatos que ordenar no hay alpha que calcular.
+                    // Mismo criterio que "amplitud insuficiente" de arriba;
+                    // en la practica, muy improbable con un universo de
+                    // cientos de tickers.
+                    $droppedLowBreadth++;
+                    continue;
+                }
+
+                $selected = $ranking['selected'];
+            } else {
+                $selected = array_slice($this->rankByPercentage($daySamples), 0, $topN);
+            }
+
             $lastEvaluatedDate = (string) $date;
-            $selected = array_slice($this->rankByPercentage($daySamples), 0, $topN);
             $selectedReturns = array_column($selected, 'forward_return');
             $dayReturns = array_column($daySamples, 'forward_return');
             $topAverage = array_sum($selectedReturns) / count($selectedReturns);
@@ -445,6 +504,12 @@ class BacktestingService
                 // dates_dropped_low_breadth/dates_dropped_overlapping para
                 // que la merma sea visible, no implicita.
                 'samples_dropped_momentum_null' => $momentumNullDropped,
+                // P3.4: descartes propios de la neutralizacion momentum
+                // (ver `rankByMomentumNeutral()`), publicados igual que el
+                // resto de contadores de merma -- 0/0 cuando $mode no es
+                // 'momentum', no se llego a comprobar nada.
+                'samples_dropped_thin_sector' => $droppedThinSector,
+                'samples_dropped_no_marketcap_pit' => $droppedNoMarketCapPit,
                 // Cobertura del universo point-in-time (roadmap.md,
                 // "Segundo bloque" punto 5): `point_in_time_universe` es
                 // `false` cuando no se pidio (`$indexCode` nulo) o no hay
@@ -545,6 +610,190 @@ class BacktestingService
         );
 
         return $daySamples;
+    }
+
+    /**
+     * P3.4 (`REVISION_MOTOR_CODEX_2026-09-02.md`, seccion "3. Nuevo modo
+     * 'momentum'"): cualquier sector con menos de este numero de muestras
+     * elegibles en una fecha queda fuera de la neutralizacion ese dia
+     * (`rankByMomentumNeutral()`) -- con pocos pares no hay con que
+     * neutralizar de forma fiable.
+     */
+    private const MIN_SECTOR_SAMPLES_MOMENTUM = 20;
+
+    /**
+     * Selecciona el top-N de una fecha para $mode='momentum': ranking por
+     * Momentum 12-1 NEUTRALIZADO por sector y por tamaño, no por
+     * `percentage` (el score de 50 puntos). Se calcula DENTRO de la fecha
+     * (informacion transversal del dia, no por ticker aislado), en cuatro
+     * pasos:
+     *
+     * a. Agrupa `$daySamples` por sector; cualquier sector con menos de
+     *    `MIN_SECTOR_SAMPLES_MOMENTUM` muestras ese dia queda excluido POR
+     *    COMPLETO de la neutralizacion (no solo de su propia mediana).
+     * b. De las restantes, cualquiera sin `market_cap_is_point_in_time`
+     *    real tambien se descarta: sin eso no se puede confiar en su bucket
+     *    de tamaño (tercil).
+     * c. `momentum_sector_neutral` = `momentum12m1` menos la mediana del
+     *    mismo sector, misma fecha, entre las supervivientes de (a)+(b).
+     * d. Terciles de `market_cap` cross-sectional entre las supervivientes
+     *    (rango 0/1/2 por posicion relativa, no por cuantil fijo de valor);
+     *    `momentum_neutral` = `momentum_sector_neutral` menos la mediana
+     *    del mismo tercil, misma fecha.
+     * e. Top-N por `momentum_neutral` descendente, mismo desempate
+     *    alfabetico que `rankByPercentage()`.
+     *
+     * @param list<array{ticker: string, percentage: float, forward_return: float, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}> $daySamples
+     * @return array{selected: list<array{ticker: string, forward_return: float}>, dropped_thin_sector: int, dropped_no_marketcap_pit: int}
+     */
+    private function rankByMomentumNeutral(array $daySamples, int $topN): array
+    {
+        $bySector = [];
+
+        foreach ($daySamples as $sample) {
+            $bySector[$sample['sector']][] = $sample;
+        }
+
+        // a. Sectores demasiado pequeños ese dia, fuera por completo.
+        $eligible = [];
+        $droppedThinSector = 0;
+
+        foreach ($bySector as $sectorSamples) {
+            if (count($sectorSamples) < self::MIN_SECTOR_SAMPLES_MOMENTUM) {
+                $droppedThinSector += count($sectorSamples);
+
+                continue;
+            }
+
+            foreach ($sectorSamples as $sample) {
+                $eligible[] = $sample;
+            }
+        }
+
+        // b. Sin marketCap point-in-time no se puede confiar en su tercil.
+        $survivors = [];
+        $droppedNoMarketCapPit = 0;
+
+        foreach ($eligible as $sample) {
+            if ($sample['market_cap_is_point_in_time'] !== true || $sample['market_cap'] === null) {
+                $droppedNoMarketCapPit++;
+
+                continue;
+            }
+
+            $survivors[] = $sample;
+        }
+
+        if ($survivors === []) {
+            return [
+                'selected' => [],
+                'dropped_thin_sector' => $droppedThinSector,
+                'dropped_no_marketcap_pit' => $droppedNoMarketCapPit,
+            ];
+        }
+
+        // c. Neutralizacion sectorial: momentum menos la mediana de su
+        // propio sector, misma fecha, entre las supervivientes de (a)+(b).
+        $momentumsBySector = [];
+
+        foreach ($survivors as $sample) {
+            $momentumsBySector[$sample['sector']][] = $sample['momentum12m1'];
+        }
+
+        $sectorMedians = [];
+
+        foreach ($momentumsBySector as $sector => $momentums) {
+            $sectorMedians[$sector] = $this->median($momentums);
+        }
+
+        foreach ($survivors as &$sample) {
+            $sample['momentum_sector_neutral'] = $sample['momentum12m1'] - $sectorMedians[$sample['sector']];
+        }
+
+        unset($sample);
+
+        // d. Terciles de tamaño cross-sectional entre las supervivientes
+        // (ordenadas por marketCap ascendente, bucket = posicion relativa
+        // dentro del dia, no un umbral de valor fijo).
+        $byMarketCap = $survivors;
+        usort(
+            $byMarketCap,
+            static fn (array $left, array $right): int => $left['market_cap'] <=> $right['market_cap']
+        );
+        $survivorCount = count($byMarketCap);
+        /** @var array<int,list<float>> $tercileMomentums Sin pre-sembrar con [] por indice: PHPStan infiere despues (erroneamente) que toda entrada acumulada en el bucle de abajo es non-empty-list, y marca como codigo muerto la comprobacion de vacio que sigue -- ver el comentario de mas abajo, un tercil SI puede quedar sin ninguna muestra. */
+        $tercileMomentums = [];
+
+        foreach ($byMarketCap as $rank => &$sample) {
+            $sample['size_tercile'] = min(intdiv($rank * 3, $survivorCount), 2);
+            $tercileMomentums[$sample['size_tercile']][] = $sample['momentum_sector_neutral'];
+        }
+
+        unset($sample);
+
+        // Con muy pocas supervivientes (self::MIN_SECTOR_SAMPLES_MOMENTUM ya
+        // garantiza >=20 por sector superviviente, pero un dia con un unico
+        // sector elegible podria dejar algun tercil vacio) un tercil puede
+        // no recibir ninguna muestra: 0,0 de relleno, nunca leido de verdad
+        // porque ningun `size_tercile` apunta a el (`median()` con un array
+        // vacio no es un caso valido, ver su docblock).
+        $tercileMedians = [0 => 0.0, 1 => 0.0, 2 => 0.0];
+
+        foreach ([0, 1, 2] as $tercile) {
+            if (isset($tercileMomentums[$tercile])) {
+                $tercileMedians[$tercile] = $this->median($tercileMomentums[$tercile]);
+            }
+        }
+
+        foreach ($byMarketCap as &$sample) {
+            $sample['momentum_neutral'] = $sample['momentum_sector_neutral'] - $tercileMedians[$sample['size_tercile']];
+        }
+
+        unset($sample);
+
+        // e. Top-N por momentum_neutral descendente.
+        usort(
+            $byMarketCap,
+            static fn (array $left, array $right): int
+                => [$right['momentum_neutral'], $left['ticker']] <=> [$left['momentum_neutral'], $right['ticker']]
+        );
+
+        $selected = array_map(
+            static fn (array $sample): array => [
+                'ticker' => $sample['ticker'],
+                'forward_return' => $sample['forward_return'],
+            ],
+            array_slice($byMarketCap, 0, $topN)
+        );
+
+        return [
+            'selected' => $selected,
+            'dropped_thin_sector' => $droppedThinSector,
+            'dropped_no_marketcap_pit' => $droppedNoMarketCapPit,
+        ];
+    }
+
+    /**
+     * Mediana simple (posicion, no varianza): promedio de los dos valores
+     * centrales si el numero de elementos es par, el valor central si es
+     * impar. Reimplementada aqui en vez de compartida porque no hay un
+     * lugar comun de utilidades numericas en el proyecto todavia -- mismo
+     * criterio que `DividendGrowthCalculator::median()`, cada clase que
+     * necesita una mediana la calcula localmente.
+     *
+     * @param list<float> $values
+     */
+    private function median(array $values): float
+    {
+        sort($values);
+        $count = count($values);
+        $middle = intdiv($count, 2);
+
+        if ($count % 2 === 0) {
+            return ($values[$middle - 1] + $values[$middle]) / 2;
+        }
+
+        return $values[$middle];
     }
 
     /**
@@ -704,7 +953,7 @@ class BacktestingService
      * bursatil real del universo con el mismo historico que ya pedia, sin
      * una segunda llamada al proveedor de mercado por ticker.
      *
-     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>, history: list<HistoricalQuote>}
+     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}>, history: list<HistoricalQuote>}
      */
     private function collectSamplesWithHistory(string $ticker, int $horizonDays, int $step, string $mode): array
     {
@@ -735,7 +984,7 @@ class BacktestingService
      * sin necesidad de un descarte aparte.
      *
      * @param list<HistoricalQuote> $history
-     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int}>
+     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}>
      */
     private function sampleHistory(Stock $stock, array $history, int $horizonDays, int $step, string $mode): array
     {
@@ -754,7 +1003,15 @@ class BacktestingService
             $entryPrice = $entry->getOpen();
             $future = $history[$entryIndex + $horizonDays];
             $synthetic = $this->stockAt($stock, $current);
+            // P3.4 (`REVISION_MOTOR_CODEX_2026-09-02.md`): `stockAt()` (via
+            // `fundamentalsAt()`) acaba de decidir si el marketCap de ESTA
+            // muestra vino de un snapshot historico real o del fallback a
+            // hoy (ver el docblock de $lastMarketCapWasPointInTime).
+            // Capturado en variable local antes de que la siguiente
+            // iteracion lo sobrescriba.
+            $marketCapIsPointInTime = $this->lastMarketCapWasPointInTime;
             $technical = $this->technicalAnalyzer->analyze($past);
+            $momentum12m1 = $technical->getMomentum12m1();
 
             // P0.3: Momentum 12-1 (TechnicalAnalyzer::momentumSkippingRecent(),
             // 250 sesiones + 21 de salto) necesita mas de 250 cierres para no
@@ -766,7 +1023,7 @@ class BacktestingService
             // para que la merma quede visible (ver
             // `samples_dropped_momentum_null`/`fundamentals_point_in_time_pct`,
             // mismo criterio de "no ocultar lo que no se pudo medir").
-            if ($technical->getMomentum12m1() === null) {
+            if ($momentum12m1 === null) {
                 ++$this->momentumNullDropped;
 
                 continue;
@@ -818,6 +1075,21 @@ class BacktestingService
                 'managed_return' => $managedReturn,
                 'exit_reason' => $exitReason,
                 'exit_day' => $exitDay,
+                // P3.4 (`REVISION_MOTOR_CODEX_2026-09-02.md`): datos crudos
+                // para poder rankear por Momentum 12-1 neutralizado en vez de
+                // por `percentage` (ver `BacktestingService::rankByMomentumNeutral()`),
+                // sin recalcular nada -- `runCrossSectional()` los toma tal cual.
+                'momentum12m1' => $momentum12m1,
+                // Sector ACTUAL de la empresa (Company::getSector()), no
+                // historico: el modelo no trackea reclasificaciones GICS por
+                // fecha. Aproximacion aceptada explicitamente (mismo tipo de
+                // limitacion ya asumida para dividendGrowth5y, ver el
+                // docblock de enrichWithDividendGrowth()): no hay snapshot
+                // historico de sector, asi que se usa el de hoy en todas las
+                // fechas pasadas.
+                'sector' => $stock->getCompany()->getSector(),
+                'market_cap' => $synthetic->getFundamentals()->getMarketCap(),
+                'market_cap_is_point_in_time' => $marketCapIsPointInTime,
             ];
         }
 
@@ -826,8 +1098,8 @@ class BacktestingService
 
     private function assertValidMode(string $mode): void
     {
-        if (!in_array($mode, ['full', 'technical'], true)) {
-            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical'.");
+        if (!in_array($mode, ['full', 'technical', 'momentum'], true)) {
+            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical', 'momentum'.");
         }
     }
 
@@ -1076,10 +1348,19 @@ class BacktestingService
      * lo trae: se calcula aparte en `withDividendGrowth()` a partir del
      * historial de dividendos, que tampoco es reconstruible hacia atras
      * (limitacion ya documentada en `v2.64`).
+     *
+     * P3.4: tambien deja constancia en `$lastMarketCapWasPointInTime` de si
+     * el `marketCap` devuelto vino del snapshot o del fallback a hoy -- ver
+     * su docblock. Es la misma decision que ya cuentan
+     * `pointInTimeHits`/`pointInTimeMisses` (el snapshot es un unico
+     * objeto, no hay forma de que unos campos vengan point-in-time y otros
+     * no), expuesta por MUESTRA en vez de solo agregada.
      */
     private function fundamentalsAt(string $ticker, DateTimeImmutable $date, Fundamentals $today): Fundamentals
     {
         if (!$this->fundamentalsHistory instanceof FundamentalsHistoryRepository) {
+            $this->lastMarketCapWasPointInTime = false;
+
             return $today;
         }
 
@@ -1094,11 +1375,13 @@ class BacktestingService
 
         if ($snapshot === null) {
             ++$this->pointInTimeMisses;
+            $this->lastMarketCapWasPointInTime = false;
 
             return $today;
         }
 
         ++$this->pointInTimeHits;
+        $this->lastMarketCapWasPointInTime = true;
         $historical = FundamentalsHistoryRepository::fromArray($snapshot);
 
         return $historical->getDividendGrowth5y() === null
