@@ -41,19 +41,23 @@ final class FundamentalsHistorySnapshotTest extends TestCase
             netMargin: 22.0,
             revenueGrowth: 8.0,
             currentRatio: 1.8,
-            dividendGrowth5y: 6.0
+            dividendGrowth5y: 6.0,
+            earningsYield: 0.05,
+            cashConversion: 1.1
         );
     }
 
-    public function testGuardaLos18CamposConSuValor(): void
+    public function testGuardaLos20CamposConSuValor(): void
     {
         $payload = FundamentalsHistoryRepository::toArray($this->fullFundamentals());
 
-        self::assertCount(18, $payload);
+        self::assertCount(20, $payload);
         self::assertSame(20.0, $payload['per']);
         self::assertSame(0.4, $payload['debtToEquity']);
         self::assertSame(6.0, $payload['dividendGrowth5y']);
         self::assertSame(1.8, $payload['currentRatio']);
+        self::assertSame(0.05, $payload['earningsYield']);
+        self::assertSame(1.1, $payload['cashConversion']);
     }
 
     /**
@@ -75,7 +79,7 @@ final class FundamentalsHistorySnapshotTest extends TestCase
     {
         $payload = FundamentalsHistoryRepository::toArray(Fundamentals::empty());
 
-        self::assertCount(18, $payload);
+        self::assertCount(20, $payload);
         self::assertArrayHasKey('roic', $payload);
         self::assertNull($payload['roic']);
         self::assertNull($payload['per']);

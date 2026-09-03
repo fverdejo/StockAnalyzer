@@ -43,6 +43,16 @@ class FundamentalsHistoryRepository
      *
      * `freeCashFlowYield` no esta porque es derivado (FCF/capitalizacion) y
      * se puede recalcular de los dos que si estan.
+     *
+     * `earningsYield`/`cashConversion` (P3.3, `REVISION_MOTOR_CODEX_2026-09-02.md`)
+     * añadidos aqui: sin esto, `PointInTimeFundamentalsBuilder` los calcularia
+     * en vano -- `toArray()` los descartaria al guardar el snapshot y
+     * `fromArray()` nunca los leeria de vuelta, dejandolos permanentemente
+     * `null` para cualquier backtest que lea de esta tabla en vez de en
+     * vivo. Snapshots ya guardados ANTES de este cambio simplemente no
+     * traen estas dos claves en su payload; `fromArray()` ya es tolerante
+     * con claves ausentes (ver su docblock), asi que se leen como `null`
+     * hasta que ese ticker/fecha se regenere.
      */
     private const FIELDS = [
         'per' => 'getPer',
@@ -63,6 +73,8 @@ class FundamentalsHistoryRepository
         'revenueGrowth' => 'getRevenueGrowth',
         'currentRatio' => 'getCurrentRatio',
         'dividendGrowth5y' => 'getDividendGrowth5y',
+        'earningsYield' => 'getEarningsYield',
+        'cashConversion' => 'getCashConversion',
     ];
 
     private readonly string $table;
@@ -215,7 +227,9 @@ class FundamentalsHistoryRepository
             netMargin: $value('netMargin'),
             revenueGrowth: $value('revenueGrowth'),
             currentRatio: $value('currentRatio'),
-            dividendGrowth5y: $value('dividendGrowth5y')
+            dividendGrowth5y: $value('dividendGrowth5y'),
+            earningsYield: $value('earningsYield'),
+            cashConversion: $value('cashConversion')
         );
     }
 }

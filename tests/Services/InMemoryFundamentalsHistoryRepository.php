@@ -37,6 +37,22 @@ final class InMemoryFundamentalsHistoryRepository extends FundamentalsHistoryRep
     }
 
     /**
+     * Version general de `withMarketCapSnapshot()` (P3.3): deja fijar
+     * cualquier subconjunto de campos del payload (mismas claves que
+     * `FundamentalsHistoryRepository::toArray()`), necesaria para los tests
+     * de `mode='fundamental'` que varian varios de los siete factores
+     * fundamentales por ticker, no solo `marketCap`.
+     *
+     * @param array<string,float|null> $fields
+     */
+    public function withFundamentalsSnapshot(string $ticker, array $fields): self
+    {
+        $this->snapshotsByTicker[strtoupper($ticker)] = $fields;
+
+        return $this;
+    }
+
+    /**
      * @return array<string,float|null>|null
      */
     public function findAsOf(string $ticker, DateTimeImmutable $date): ?array

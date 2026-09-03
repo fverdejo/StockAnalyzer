@@ -809,6 +809,105 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
         self::assertEqualsWithDelta(20.08, $despues->getPer(), 0.05);
     }
 
+    // ---------------------------------------------------------------
+    // 5. earningsYield y cashConversion (P3.3,
+    //    `REVISION_MOTOR_CODEX_2026-09-02.md`, seccion P3.3)
+    // ---------------------------------------------------------------
+
+    public function testEarningsYieldEsElInversoDelPer(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([$this->periodo('2025-09-27', '2025-10-31')]))
+            ->buildFor(new DateTimeImmutable('2025-11-05'), 150.0);
+
+        self::assertNotNull($f);
+        self::assertNotNull($f->getPer());
+        // PER = 150/7.46 = 20.11 (ver testLosRatiosDePrecioSeMuevenConLaCotizacion).
+        self::assertEqualsWithDelta(7.46 / 150.0, $f->getEarningsYield(), 0.0001);
+        self::assertEqualsWithDelta(1 / $f->getPer(), $f->getEarningsYield(), 0.0001);
+    }
+
+    /**
+     * A diferencia de `per` (que exige beneficio TTM positivo, ver la
+     * guarda de `buildFor()`), `earningsYield` SI admite EPS negativo: es
+     * el punto de tenerlo por separado (P3.3), para no perder de vista las
+     * empresas con perdidas en un ranking por percentil.
+     */
+    public function testEarningsYieldAdmiteBeneficioNegativoADiferenciaDelPer(): void
+    {
+        $periodo = new FiscalPeriod(
+            ticker: 'LOSS',
+            endDate: new DateTimeImmutable('2025-12-31'),
+            filingDate: new DateTimeImmutable('2026-02-15'),
+            periodType: FiscalPeriodType::Annual,
+            revenue: 10_000_000_000.0,
+            grossProfit: 3_000_000_000.0,
+            operatingIncome: -1_000_000_000.0,
+            netIncome: -2_000_000_000.0,
+            ebitda: -500_000_000.0,
+            ebit: -1_000_000_000.0,
+            incomeBeforeTax: -1_000_000_000.0,
+            incomeTaxExpense: 0.0,
+            epsDiluted: -1.50,
+            sharesDiluted: 1_333_333_333.0,
+            totalStockholdersEquity: 5_000_000_000.0,
+            totalDebt: 3_000_000_000.0,
+            netDebt: 2_500_000_000.0,
+            totalCurrentAssets: 4_000_000_000.0,
+            totalCurrentLiabilities: 3_000_000_000.0,
+            freeCashFlow: -300_000_000.0,
+            commonDividendsPaid: null
+        );
+
+        $f = (new PointInTimeFundamentalsBuilder([$periodo]))->buildFor(new DateTimeImmutable('2026-03-01'), 20.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getPer(), 'Con EPS negativo el PER no se calcula, ver la guarda de buildFor().');
+        self::assertEqualsWithDelta(-1.50 / 20.0, $f->getEarningsYield(), 0.0001);
+        self::assertLessThan(0.0, $f->getEarningsYield());
+    }
+
+    public function testCashConversionEsElFlujoDeCajaLibreEntreElBeneficioNeto(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([$this->periodo('2025-09-27', '2025-10-31')]))
+            ->buildFor(new DateTimeImmutable('2025-11-05'), 150.0);
+
+        self::assertNotNull($f);
+        // FCF TTM 98.767M / netIncome TTM 112.010M (ver periodo()).
+        self::assertEqualsWithDelta(98_767_000_000.0 / 112_010_000_000.0, $f->getCashConversion(), 0.0001);
+    }
+
+    public function testCashConversionEsNuloConBeneficioNetoCero(): void
+    {
+        $periodo = new FiscalPeriod(
+            ticker: 'BREAKEVEN',
+            endDate: new DateTimeImmutable('2025-12-31'),
+            filingDate: new DateTimeImmutable('2026-02-15'),
+            periodType: FiscalPeriodType::Annual,
+            revenue: 10_000_000_000.0,
+            grossProfit: 3_000_000_000.0,
+            operatingIncome: 500_000_000.0,
+            netIncome: 0.0,
+            ebitda: 800_000_000.0,
+            ebit: 500_000_000.0,
+            incomeBeforeTax: 500_000_000.0,
+            incomeTaxExpense: 500_000_000.0,
+            epsDiluted: 0.0,
+            sharesDiluted: 1_000_000_000.0,
+            totalStockholdersEquity: 5_000_000_000.0,
+            totalDebt: 3_000_000_000.0,
+            netDebt: 2_500_000_000.0,
+            totalCurrentAssets: 4_000_000_000.0,
+            totalCurrentLiabilities: 3_000_000_000.0,
+            freeCashFlow: 300_000_000.0,
+            commonDividendsPaid: null
+        );
+
+        $f = (new PointInTimeFundamentalsBuilder([$periodo]))->buildFor(new DateTimeImmutable('2026-03-01'), 20.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getCashConversion(), 'Beneficio neto cero: la division no significa nada.');
+    }
+
     public function testMezclarPeriodosAnualesYTrimestralesLanzaExcepcion(): void
     {
         $this->expectException(InvalidArgumentException::class);

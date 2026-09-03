@@ -6242,3 +6242,33 @@ Ficheros nuevos: `tests/Services/BacktestingServiceFundamentalModeTest.php`, `st
 `ddev exec vendor/bin/phpunit`: **502 tests, 1.398 assertions, OK** (sube desde 496/1.373; +6: 4 de `PointInTimeFundamentalsBuilderTest`, 2 de `BacktestingServiceFundamentalModeTest`; 1 skip preexistente sin relacion, ya documentado). `ddev exec vendor/bin/phpstan analyse`: sin errores (234 ficheros), limpio en el primer intento. `ddev exec php storage/scratch/run_fundamental_only_backtest.php`: ejecutado de punta a punta, resultados guardados en `storage/scratch/fundamental_only_backtest_results.json`.
 
 **Conclusion: el score fundamental de tres familias (percentil por sector), con las limitaciones de datos historicos documentadas arriba, no muestra ventaja demostrable en este universo/horizonte. `config/weights.php` no se toca. `config/measured_edge.php` tampoco, es una investigacion separada del score completo.** Con esto se cierra el plan completo de Codex del `2026-09-02` (P0 a P3.4): los tres bugs de metodologia (P0.1-P0.3) se arreglaron, y las dos investigaciones nuevas que el consenso del equipo priorizo (Momentum 12-1 solo y el score fundamental de tres familias) se midieron ambas con veredicto nulo, sin ventaja demostrable en el universo point-in-time real de este proyecto.
+
+(Nota de higiene: esta entrada quedo commiteada por error dentro de `3dcabc3`, el commit de la paginacion del historial de operaciones -- edicion concurrente de este fichero entre un agente en segundo plano y el trabajo de paginacion en primer plano. El contenido es correcto, solo el mensaje del commit no lo menciona. Sin arreglar a proposito: no se reescribe historial ya empujado a `origin/dev` por un problema de mensaje, no de contenido.)
+
+---
+
+## 2026-09-03 (segunda entrada) - P3.3: split de mitades y veredicto final de `auditor-estadistico`, con dos notas de higiene para todo el plan
+
+Estado: cerrado. Verificacion final de la entrada anterior: split cronologico primera/segunda mitad (mismo criterio que P3.4, obligatorio segun el protocolo que `auditor-estadistico` fijo antes de medir) y veredicto explicito con Bonferroni aplicado.
+
+### Split de mitades
+
+| | horizon=20 (n=56/56) | horizon=60 (n=18/19) |
+|---|---|---|
+| Primera mitad | t=**0,01** (2017-09-14 a 2022-01-27) | t=**-0,32** (2017-09-14 a 2021-10-04) |
+| Segunda mitad | t=**1,21** (2022-02-25 a 2026-07-17) | t=**0,95** (2021-12-29 a 2026-04-21) |
+
+Sin la inversion de signo violenta que si tuvo P3.4 (-0,87/+1,78), pero el patron de fondo es el mismo: la primera mitad no aporta nada (t=0,01 es ruido puro) y la segunda, aun siendo la mas favorable, no se acerca a significancia por si sola.
+
+### Veredicto de `auditor-estadistico`, con verificacion cruzada propia (no solo el resumen que se le dio)
+
+Replico la aritmetica de las dos corridas de forma independiente (0,19/0,21=0,905≈0,90; 0,23/0,73=0,315≈0,31, IC95% cuadran) y confirmo en el codigo (`crossSectionalStatistics()`, `BacktestingService.php`) que `alpha_stderr` se calcula sobre alphas agregados POR FECHA, la misma disciplina de independencia que el resto del proyecto. Con N=2 predeclaradas, Bonferroni exige |t|>=2,24: horizon=20 (t=0,90) es un 40% del umbral corregido, horizon=60 (t=0,31) un 14%. **Nulo, sin ambiguedad.**
+
+**¿La dilucion de `earningsYield`/`cashConversion` a neutral (2 de 7 factores, ~22% del peso total) cambia la lectura?** Razonamiento cuantitativo del auditor: para que horizon=20 cruzara el umbral con el mismo error estandar observado, la alpha media tendria que mas que duplicarse (de 0,19pp a ~0,47pp) -- es decir, esos dos factores tendrian que aportar, ellos solos y con menos de un cuarto del peso del score, mas señal que la que los otros cinco lograron juntos. No imposible, pero improbable dado el patron ya visto (t≈0,01 en la primera mitad de horizon=20). **No justifica por si sola una regeneracion de `fundamentals_history`** (1,5M filas, escritura masiva sobre produccion): quedaria como opcion solo si en el futuro alguien quiere probar esos dos factores de forma aislada, no para repetir esta medicion tal cual.
+
+### Dos notas de higiene para TODO el plan, no solo esta investigacion (a peticion explicita de `auditor-estadistico`, añadidas a `roadmap.md`)
+
+1. **Regla nueva sobre combinar hallazgos sub-umbral**: `versions.md` (entradas anteriores) ya deja anotados casos que no sobreviven Bonferroni individualmente pero muestran consistencia de signo llamativa (bucket de spread SMA 24/30 mismo signo, frog-in-the-pan 11/12 mismo signo). Si en el futuro se combinan dos señales así en una nueva, esa combinacion es una **hipotesis nueva** que necesita su propio test predeclarado con su propio umbral -- no vale sumar dos señales que fallaron el corte individualmente y tratar la combinacion como si ya estuviera validada.
+2. **Limitacion de regimen unico**: el plan completo (P0 a P3.4) se ha medido casi enteramente sobre 2016-2026 (ventana point-in-time real concentrada en 2017-2026), con una unica correccion incompleta (2022) y sin una recesion completa. El veredicto acumulado "ninguna señal probada muestra ventaja demostrable" es una afirmacion sobre esta muestra/regimen concreto, no una prueba general de eficiencia de mercado.
+
+Con esto, el plan de Codex del `2026-09-02` (P0 a P3.4) queda cerrado del todo, incluida su verificacion final.

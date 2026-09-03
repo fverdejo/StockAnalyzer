@@ -86,7 +86,16 @@ class BacktestingService
          * backtest real de "S&P 500 desde 2012 con antiguos miembros" sigue
          * bloqueado por ese hueco de precio, no por este filtro.
          */
-        private readonly ?IndexMembershipCheckerInterface $indexMembership = null
+        private readonly ?IndexMembershipCheckerInterface $indexMembership = null,
+        /**
+         * P3.3 (`REVISION_MOTOR_CODEX_2026-09-02.md`): puntua un factor
+         * fundamental por su posicion relativa dentro del sector, no contra
+         * un umbral fijo. Pura (sin red ni base de datos, ver su propio
+         * docblock), mismo patron de "instanciar por defecto" que
+         * `$dividendGrowthCalculator`/`$backtestingConfig` -- ningun test
+         * que no use `mode='fundamental'` necesita inyectar nada distinto.
+         */
+        private readonly RelativeFundamentalScorer $fundamentalScorer = new RelativeFundamentalScorer()
     ) {
     }
 
@@ -135,11 +144,12 @@ class BacktestingService
      * @param string $mode 'full' (score completo, el que ve el usuario real)
      *        o 'technical' (solo TECHNICAL+MOMENTUM+RISK, herramienta de
      *        investigacion via CLI que no afecta al pipeline real). Tambien
-     *        acepta 'momentum' (P3.4) por compartir validacion con
-     *        `runCrossSectional()`, pero aqui no tiene ningun efecto propio:
-     *        el ranking neutralizado por sector/tamaño solo existe dentro de
-     *        `runCrossSectional()`, asi que en un backtest de un unico
-     *        ticker se comporta identico a 'full'.
+     *        acepta 'momentum' (P3.4) y 'fundamental' (P3.3) por compartir
+     *        validacion con `runCrossSectional()`, pero aqui ninguno de los
+     *        dos tiene efecto propio: los dos rankings neutralizados
+     *        (sector/tamaño para momentum, sector para fundamental) solo
+     *        existen dentro de `runCrossSectional()`, asi que en un
+     *        backtest de un unico ticker se comportan identico a 'full'.
      * @return array<string,mixed>
      */
     public function run(array $tickers, int $horizonDays = 20, int $step = 5, string $mode = 'full'): array
@@ -327,6 +337,9 @@ class BacktestingService
      *        rankea cada fecha por Momentum 12-1 neutralizado por sector y
      *        por tamaño en vez de por `percentage` (el score de 50 puntos):
      *        ver `rankByMomentumNeutral()` para el criterio exacto.
+     *        'fundamental' (P3.3, misma referencia) rankea cada fecha por un
+     *        score fundamental de tres familias (Valor/Calidad/Solidez)
+     *        percentil-por-sector: ver `rankByFundamentalNeutral()`.
      * @param ?string $indexCode Codigo de indice (roadmap.md, "Segundo
      *        bloque" punto 5, 2026-09-02) contra el que se comprueba
      *        membresia point-in-time va `IndexMembershipCheckerInterface`.
@@ -402,6 +415,17 @@ class BacktestingService
                         'sector' => $sample['sector'],
                         'market_cap' => $sample['market_cap'],
                         'market_cap_is_point_in_time' => $sample['market_cap_is_point_in_time'],
+                        // P3.3: expuestos siempre, mismo criterio que los
+                        // campos de momentum de arriba -- full/technical/
+                        // momentum simplemente no los leen.
+                        'free_cash_flow_yield' => $sample['free_cash_flow_yield'],
+                        'ev_to_ebitda' => $sample['ev_to_ebitda'],
+                        'roic' => $sample['roic'],
+                        'operating_margin' => $sample['operating_margin'],
+                        'debt_to_equity' => $sample['debt_to_equity'],
+                        'earnings_yield' => $sample['earnings_yield'],
+                        'cash_conversion' => $sample['cash_conversion'],
+                        'fundamentals_is_point_in_time' => $sample['fundamentals_is_point_in_time'],
                     ];
                 }
             } catch (\Throwable $exception) {
@@ -427,6 +451,10 @@ class BacktestingService
         // `samples_dropped_not_member` cuando no hay universo point-in-time.
         $droppedThinSector = 0;
         $droppedNoMarketCapPit = 0;
+        // P3.3: descarte propio de `rankByFundamentalNeutral()` (ver su
+        // docblock), mismo criterio de "0 fuera de $mode='fundamental'"
+        // que los dos contadores de arriba.
+        $droppedNoFundamentalsPit = 0;
         $lastEvaluatedDate = null;
 
         foreach ($samplesByDate as $date => $daySamples) {
@@ -457,6 +485,20 @@ class BacktestingService
                     // Mismo criterio que "amplitud insuficiente" de arriba;
                     // en la practica, muy improbable con un universo de
                     // cientos de tickers.
+                    $droppedLowBreadth++;
+                    continue;
+                }
+
+                $selected = $ranking['selected'];
+            } elseif ($mode === 'fundamental') {
+                $ranking = $this->rankByFundamentalNeutral($daySamples, $topN);
+                $droppedNoFundamentalsPit += $ranking['dropped_no_fundamentals_pit'];
+
+                if ($ranking['selected'] === []) {
+                    // Mismo criterio que 'momentum' arriba: sin
+                    // supervivientes con fundamentales point-in-time ese
+                    // dia (muy improbable con un universo de cientos de
+                    // tickers), no hay alpha que calcular.
                     $droppedLowBreadth++;
                     continue;
                 }
@@ -510,6 +552,10 @@ class BacktestingService
                 // 'momentum', no se llego a comprobar nada.
                 'samples_dropped_thin_sector' => $droppedThinSector,
                 'samples_dropped_no_marketcap_pit' => $droppedNoMarketCapPit,
+                // P3.3: descarte propio de `rankByFundamentalNeutral()`,
+                // publicado igual que el resto -- 0 cuando $mode no es
+                // 'fundamental', no se llego a comprobar nada.
+                'samples_dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
                 // Cobertura del universo point-in-time (roadmap.md,
                 // "Segundo bloque" punto 5): `point_in_time_universe` es
                 // `false` cuando no se pidio (`$indexCode` nulo) o no hay
@@ -774,6 +820,198 @@ class BacktestingService
     }
 
     /**
+     * P3.3 (`REVISION_MOTOR_CODEX_2026-09-02.md`, seccion P3.3, mas la
+     * especificacion de `inversor-fundamental`/`auditor-estadistico`):
+     * los siete factores fundamentales que entran en
+     * `rankByFundamentalNeutral()`, agrupados en las tres familias con peso
+     * igual en el calculo. Cada entrada es la clave de la muestra
+     * (`sampleHistory()`) y si un valor MAYOR es mejor para
+     * `RelativeFundamentalScorer::percentileRank()`.
+     *
+     * Deliberadamente sin la familia "Cambio" (mejora YoY de margen, ROIC,
+     * deuda, ventas, FCF): exige una segunda consulta point-in-time por
+     * muestra (fecha - 365 dias) para cada campo, que no existe hoy y no es
+     * un cambio trivial -- queda como pendiente explicito, no implementado
+     * en este lote.
+     *
+     * @var array<string,list<array{field: string, higher_is_better: bool}>>
+     */
+    private const FUNDAMENTAL_FACTORS = [
+        'value' => [
+            ['field' => 'free_cash_flow_yield', 'higher_is_better' => true],
+            ['field' => 'ev_to_ebitda', 'higher_is_better' => false],
+            ['field' => 'earnings_yield', 'higher_is_better' => true],
+        ],
+        'quality' => [
+            ['field' => 'roic', 'higher_is_better' => true],
+            ['field' => 'operating_margin', 'higher_is_better' => true],
+            ['field' => 'cash_conversion', 'higher_is_better' => true],
+        ],
+        'soundness' => [
+            ['field' => 'debt_to_equity', 'higher_is_better' => false],
+        ],
+    ];
+
+    /**
+     * Selecciona el top-N de una fecha para $mode='fundamental': ranking
+     * por un score fundamental de tres familias (Valor/Calidad/Solidez,
+     * `self::FUNDAMENTAL_FACTORS`), cada una puntuada por posicion
+     * PERCENTIL dentro del propio sector el mismo dia
+     * (`RelativeFundamentalScorer`), no por umbrales absolutos tipo Graham.
+     *
+     * a. Descarta muestras sin fundamentales point-in-time reales
+     *    (`fundamentals_is_point_in_time !== true`): sin eso no se puede
+     *    confiar en ningun factor de la muestra, el snapshot entero viene
+     *    del fallback a hoy.
+     * b. Con las supervivientes, agrupa por sector -- los peers de cada
+     *    factor son SOLO del mismo sector, MISMO DIA, nunca todo el
+     *    universo.
+     * c. Por cada uno de los siete factores: si la propia muestra no tiene
+     *    dato para ese factor, o si el sector no llega a
+     *    `RelativeFundamentalScorer::MIN_PEERS` (8) peers con dato no nulo
+     *    para ese factor concreto, el percentil es `null` y
+     *    `pointsFor(null, 100)` cae automaticamente al punto medio (50) --
+     *    a diferencia de `rankByMomentumNeutral()`, aqui NO se excluye el
+     *    sector entero por tener pocas muestras, es un diseño deliberado
+     *    (especificado por `inversor-fundamental`/`auditor-estadistico`,
+     *    2026-09-03): con un numero reducido de sectores y un universo de
+     *    cientos de tickers, excluir el sector completo dejaria demasiado
+     *    pocas muestras utilizables, a diferencia del filtro de tamaño
+     *    minimo que si tiene sentido para Momentum 12-1.
+     * d. `valor_familia` = media de `pointsFor()` de los factores de esa
+     *    familia (Solidez tiene un unico factor: su "media" es el sí
+     *    mismo). `fundamental_score` = media de las tres `valor_familia`
+     *    (peso igual, sin inclinar hacia ninguna familia).
+     * e. Top-N por `fundamental_score` descendente, mismo desempate
+     *    alfabetico que `rankByPercentage()`/`rankByMomentumNeutral()`.
+     *
+     * @param list<array{ticker: string, percentage: float, forward_return: float, sector: string, fundamentals_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float}> $daySamples
+     * @return array{selected: list<array{ticker: string, forward_return: float}>, dropped_no_fundamentals_pit: int}
+     */
+    private function rankByFundamentalNeutral(array $daySamples, int $topN): array
+    {
+        // a. Sin fundamentales point-in-time reales, fuera.
+        $survivors = [];
+        $droppedNoFundamentalsPit = 0;
+
+        foreach ($daySamples as $sample) {
+            if ($sample['fundamentals_is_point_in_time'] !== true) {
+                $droppedNoFundamentalsPit++;
+
+                continue;
+            }
+
+            $survivors[] = $sample;
+        }
+
+        if ($survivors === []) {
+            return [
+                'selected' => [],
+                'dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+            ];
+        }
+
+        // b. Peers por sector, MISMO DIA -- copia tomada antes de anotar
+        // fundamental_score en cada muestra, para que un peer nunca se
+        // compare consigo mismo con datos ya mutados.
+        $bySector = [];
+
+        foreach ($survivors as $sample) {
+            $bySector[$sample['sector']][] = $sample;
+        }
+
+        foreach ($survivors as &$sample) {
+            $sectorPeers = $bySector[$sample['sector']];
+            $sampleValues = $this->fundamentalFactorValues($sample);
+            $familyScores = [];
+
+            // c. + d. Percentil por factor, media por familia.
+            foreach (self::FUNDAMENTAL_FACTORS as $family => $factors) {
+                $points = [];
+
+                foreach ($factors as $factor) {
+                    $field = $factor['field'];
+                    $value = $sampleValues[$field];
+
+                    if ($value === null) {
+                        // Sin dato para ESTA muestra en este factor: neutro,
+                        // mismo criterio que "sin peers suficientes".
+                        $points[] = $this->fundamentalScorer->pointsFor(null, 100.0);
+
+                        continue;
+                    }
+
+                    $peerValues = [];
+
+                    foreach ($sectorPeers as $peer) {
+                        if ($peer['ticker'] === $sample['ticker']) {
+                            continue;
+                        }
+
+                        $peerValue = $this->fundamentalFactorValues($peer)[$field];
+
+                        if ($peerValue !== null) {
+                            $peerValues[] = $peerValue;
+                        }
+                    }
+
+                    $percentile = $this->fundamentalScorer->percentileRank($value, $peerValues, $factor['higher_is_better']);
+                    $points[] = $this->fundamentalScorer->pointsFor($percentile, 100.0);
+                }
+
+                $familyScores[$family] = array_sum($points) / count($points);
+            }
+
+            $sample['fundamental_score'] = array_sum($familyScores) / count($familyScores);
+        }
+
+        unset($sample);
+
+        // e. Top-N por fundamental_score descendente.
+        usort(
+            $survivors,
+            static fn (array $left, array $right): int
+                => [$right['fundamental_score'], $left['ticker']] <=> [$left['fundamental_score'], $right['ticker']]
+        );
+
+        $selected = array_map(
+            static fn (array $sample): array => [
+                'ticker' => $sample['ticker'],
+                'forward_return' => $sample['forward_return'],
+            ],
+            array_slice($survivors, 0, $topN)
+        );
+
+        return [
+            'selected' => $selected,
+            'dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+        ];
+    }
+
+    /**
+     * Los siete valores fundamentales crudos de una muestra en un mapa
+     * plano (campo => valor), para poder indexar por el `field` de
+     * `self::FUNDAMENTAL_FACTORS` (una cadena que PHPStan no puede acotar a
+     * un literal fijo) sin arriesgar un acceso de indice dinamico sobre el
+     * array-shape estricto de `$daySamples`/`$survivors`.
+     *
+     * @param array{free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float} $sample
+     * @return array<string,?float>
+     */
+    private function fundamentalFactorValues(array $sample): array
+    {
+        return [
+            'free_cash_flow_yield' => $sample['free_cash_flow_yield'],
+            'ev_to_ebitda' => $sample['ev_to_ebitda'],
+            'roic' => $sample['roic'],
+            'operating_margin' => $sample['operating_margin'],
+            'debt_to_equity' => $sample['debt_to_equity'],
+            'earnings_yield' => $sample['earnings_yield'],
+            'cash_conversion' => $sample['cash_conversion'],
+        ];
+    }
+
+    /**
      * Mediana simple (posicion, no varianza): promedio de los dos valores
      * centrales si el numero de elementos es par, el valor central si es
      * impar. Reimplementada aqui en vez de compartida porque no hay un
@@ -953,7 +1191,7 @@ class BacktestingService
      * bursatil real del universo con el mismo historico que ya pedia, sin
      * una segunda llamada al proveedor de mercado por ticker.
      *
-     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}>, history: list<HistoricalQuote>}
+     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>, history: list<HistoricalQuote>}
      */
     private function collectSamplesWithHistory(string $ticker, int $horizonDays, int $step, string $mode): array
     {
@@ -984,7 +1222,7 @@ class BacktestingService
      * sin necesidad de un descarte aparte.
      *
      * @param list<HistoricalQuote> $history
-     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}>
+     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>
      */
     private function sampleHistory(Stock $stock, array $history, int $horizonDays, int $step, string $mode): array
     {
@@ -1090,6 +1328,27 @@ class BacktestingService
                 'sector' => $stock->getCompany()->getSector(),
                 'market_cap' => $synthetic->getFundamentals()->getMarketCap(),
                 'market_cap_is_point_in_time' => $marketCapIsPointInTime,
+                // P3.3 (`REVISION_MOTOR_CODEX_2026-09-02.md`): los siete
+                // factores fundamentales crudos que consume
+                // `rankByFundamentalNeutral()`, expuestos siempre (no solo
+                // con $mode='fundamental') por el mismo motivo que los
+                // campos de momentum de arriba -- no bifurcar esta
+                // recopilacion por modo.
+                'free_cash_flow_yield' => $synthetic->getFundamentals()->getFreeCashFlowYield(),
+                'ev_to_ebitda' => $synthetic->getFundamentals()->getEvToEbitda(),
+                'roic' => $synthetic->getFundamentals()->getRoic(),
+                'operating_margin' => $synthetic->getFundamentals()->getOperatingMargin(),
+                'debt_to_equity' => $synthetic->getFundamentals()->getDebtToEquity(),
+                'earnings_yield' => $synthetic->getFundamentals()->getEarningsYield(),
+                'cash_conversion' => $synthetic->getFundamentals()->getCashConversion(),
+                // Mismo flag que `market_cap_is_point_in_time` (el snapshot
+                // de Fundamentals es un unico objeto: no hay forma de que
+                // unos campos vengan point-in-time y otros del fallback a
+                // hoy, ver el docblock de `$lastMarketCapWasPointInTime`),
+                // expuesto con su propio nombre para que
+                // `rankByFundamentalNeutral()` no dependa de un nombre
+                // pensado originalmente solo para marketCap.
+                'fundamentals_is_point_in_time' => $marketCapIsPointInTime,
             ];
         }
 
@@ -1098,8 +1357,8 @@ class BacktestingService
 
     private function assertValidMode(string $mode): void
     {
-        if (!in_array($mode, ['full', 'technical', 'momentum'], true)) {
-            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical', 'momentum'.");
+        if (!in_array($mode, ['full', 'technical', 'momentum', 'fundamental'], true)) {
+            throw new \InvalidArgumentException("Modo de backtest desconocido: '$mode'. Valores validos: 'full', 'technical', 'momentum', 'fundamental'.");
         }
     }
 

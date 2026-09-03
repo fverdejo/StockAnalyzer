@@ -169,10 +169,21 @@ class PointInTimeFundamentalsBuilder
 
         $epsTtm = $this->figure($ttm, 'epsDiluted');
         $per = ($epsTtm !== null && $epsTtm > 0.0 && $price > 0.0) ? $price / $epsTtm : null;
+        // Inverso del PER, pero SIN la guarda de positividad de $per: un
+        // beneficio negativo es exactamente el caso que earningsYield tiene
+        // que poder representar (P3.3, ver el docblock de Fundamentals).
+        $earningsYield = ($epsTtm !== null && $price > 0.0) ? $epsTtm / $price : null;
         $netIncomeTtm = $this->figure($ttm, 'netIncome');
         $earningsGrowth = $this->growth($netIncomeTtm, $this->figure($previousTtm, 'netIncome'));
         $dividendPerShareTtm = $this->dividendPerShareTtm($ttm, $shares);
         $ebitdaTtm = $this->positive($this->figure($ttm, 'ebitda'));
+        $freeCashFlowTtm = $this->figure($ttm, 'freeCashFlow');
+        // FCF/beneficio neto: cuanto del beneficio contable se convirtio de
+        // verdad en caja. Null con beneficio neto cero (division sin
+        // sentido) o si falta cualquiera de los dos, nunca inventado.
+        $cashConversion = ($freeCashFlowTtm !== null && $netIncomeTtm !== null && $netIncomeTtm != 0.0)
+            ? $freeCashFlowTtm / $netIncomeTtm
+            : null;
 
         return new Fundamentals(
             per: $per,
@@ -191,7 +202,7 @@ class PointInTimeFundamentalsBuilder
             debtToEquity: ($current->totalDebt !== null && $equity !== null)
                 ? $current->totalDebt / $equity
                 : null,
-            freeCashFlow: $this->figure($ttm, 'freeCashFlow'),
+            freeCashFlow: $freeCashFlowTtm,
             // EV = capitalizacion + deuda neta (balance de cierre). Con
             // EBITDA TTM negativo el multiplo no significa nada.
             evToEbitda: ($marketCap !== null && $current->netDebt !== null && $ebitdaTtm !== null)
@@ -210,7 +221,9 @@ class PointInTimeFundamentalsBuilder
             currentRatio: ($current->totalCurrentAssets !== null && $this->positive($current->totalCurrentLiabilities) !== null)
                 ? $current->totalCurrentAssets / $current->totalCurrentLiabilities
                 : null,
-            dividendGrowth5y: $this->dividendGrowth($filed, $current)
+            dividendGrowth5y: $this->dividendGrowth($filed, $current),
+            earningsYield: $earningsYield,
+            cashConversion: $cashConversion
         );
     }
 

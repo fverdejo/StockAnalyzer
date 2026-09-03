@@ -31,6 +31,16 @@ class Fundamentals
      *                      no paga dividendo como si tiene menos de 5 años de historial:
      *                      ver DividendGrowthCalculator::calculate() para el criterio
      *                      exacto, tratado como "sin dato" (neutro) en FundamentalAnalyzer.
+     * @param ?float $earningsYield Beneficio/precio (ratio, inverso del PER, ej. 0.05 =
+     *                      EPS es el 5% del precio). A diferencia de `per` (que exige
+     *                      beneficio positivo), ADMITE beneficio negativo: es justo el
+     *                      punto de tenerlo por separado (P3.3,
+     *                      `REVISION_MOTOR_CODEX_2026-09-02.md`), para no perder de vista
+     *                      las empresas con perdidas en un ranking por percentil.
+     * @param ?float $cashConversion Flujo de caja libre TTM entre beneficio neto TTM
+     *                      (ratio, ej. 1.1 = el flujo de caja libre superó el beneficio
+     *                      contable un 10%). Null si el beneficio neto es cero (division
+     *                      sin sentido) o si no hay dato de alguno de los dos.
      */
     public function __construct(
         private readonly ?float $per,
@@ -50,7 +60,9 @@ class Fundamentals
         private readonly ?float $netMargin = null,
         private readonly ?float $revenueGrowth = null,
         private readonly ?float $currentRatio = null,
-        private readonly ?float $dividendGrowth5y = null
+        private readonly ?float $dividendGrowth5y = null,
+        private readonly ?float $earningsYield = null,
+        private readonly ?float $cashConversion = null
     ) {
     }
 
@@ -155,6 +167,16 @@ class Fundamentals
         return $this->dividendGrowth5y;
     }
 
+    public function getEarningsYield(): ?float
+    {
+        return $this->earningsYield;
+    }
+
+    public function getCashConversion(): ?float
+    {
+        return $this->cashConversion;
+    }
+
     /**
      * Reconstruye este objeto con dividendGrowth5y actualizado, sin tocar
      * el resto de campos. Fundamentals se construye a partir del payload de
@@ -183,7 +205,9 @@ class Fundamentals
             $this->netMargin,
             $this->revenueGrowth,
             $this->currentRatio,
-            $dividendGrowth5y
+            $dividendGrowth5y,
+            $this->earningsYield,
+            $this->cashConversion
         );
     }
 
