@@ -37,7 +37,8 @@ class PortfolioPage
         array $riskLevels = [],
         array $suggestedPositions = [],
         ?PortfolioConcentration $concentration = null,
-        ?PortfolioHeat $heat = null
+        ?PortfolioHeat $heat = null,
+        int $transactionsPageNum = 1
     ): string {
         $token = Layout::escape($csrfToken);
         $messageHtml = $message !== null && $message !== '' ? sprintf('<div class="form-success">%s</div>', Layout::escape($message)) : '';
@@ -49,7 +50,7 @@ class PortfolioPage
         $valueChart = self::renderValueHistoryChart($valueHistory);
         $watched = array_fill_keys($watchedTickers, true);
         $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels, $suggestedPositions);
-        $transactions = self::renderTransactions($portfolio);
+        $transactions = self::renderTransactions($portfolio, $transactionsPageNum);
 
         // Orden de los paneles (v2.87): tarjetas -> posiciones abiertas ->
         // evolucion -> concentracion -> historial. Las posiciones son el
@@ -699,17 +700,35 @@ HTML;
         );
     }
 
-    private static function renderTransactions(Portfolio $portfolio): string
+    /**
+     * Filas por pagina (mismo valor que `DashboardPage::PAGE_SIZE`, mismo
+     * parametro de query `page_num` -- no hay colision posible, cada pagina
+     * (`?page=portfolio` vs `?page=dashboard`) tiene su propio espacio de
+     * query string).
+     */
+    private const TRANSACTIONS_PAGE_SIZE = 20;
+
+    private static function renderTransactions(Portfolio $portfolio, int $pageNum): string
     {
-        $transactions = $portfolio->getTransactions();
+        // `Portfolio::getTransactions()` viene ASC por fecha (TransactionRepository):
+        // ese orden es el que necesita el calculo de coste FIFO, no se toca.
+        // Para mostrar se invierte (mas reciente primero, lo habitual en un
+        // historial) SOLO aqui, en la vista -- getTransactionProfit() busca
+        // por id de transaccion, no depende del orden de iteracion.
+        $transactions = array_reverse($portfolio->getTransactions());
 
         if ($transactions === []) {
             return '<div class="muted">Sin operaciones registradas.</div>';
         }
 
+        $totalPages = max(1, (int) ceil(count($transactions) / self::TRANSACTIONS_PAGE_SIZE));
+        $pageNum = max(1, min($pageNum, $totalPages));
+        $pagedTransactions = array_slice($transactions, ($pageNum - 1) * self::TRANSACTIONS_PAGE_SIZE, self::TRANSACTIONS_PAGE_SIZE);
+        $pagination = Layout::renderPagination($pageNum, $totalPages, '?page=portfolio');
+
         $rows = [];
 
-        foreach ($transactions as $transaction) {
+        foreach ($pagedTransactions as $transaction) {
             $type = $transaction->getType();
             $profit = $portfolio->getTransactionProfit($transaction);
             $percent = $portfolio->getTransactionProfitPercent($transaction);
@@ -729,7 +748,9 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Beneficio</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">El precio de cada operacion se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operacion en euros no lleva equivalencia porque seria el mismo importe repetido). La columna de beneficio es el resultado REALIZADO de cada operacion: una compra siempre muestra 0 (comprar no genera ganancia ni perdida por si sola); una venta muestra lo ganado o perdido de verdad frente a lo que costaron esas acciones. El rendimiento de una posicion todavia abierta se ve en "Beneficio latente", en las tarjetas de arriba. Importe y porcentaje entre parentesis en la misma celda.</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Beneficio</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>'
+            . $pagination
+            . '<p class="muted panel-note">El precio de cada operacion se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operacion en euros no lleva equivalencia porque seria el mismo importe repetido). La columna de beneficio es el resultado REALIZADO de cada operacion: una compra siempre muestra 0 (comprar no genera ganancia ni perdida por si sola); una venta muestra lo ganado o perdido de verdad frente a lo que costaron esas acciones. El rendimiento de una posicion todavia abierta se ve en "Beneficio latente", en las tarjetas de arriba. Importe y porcentaje entre parentesis en la misma celda. Las mas recientes primero.</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a> (siempre el historial completo, no solo esta pagina).</p>';
     }
 
     /**

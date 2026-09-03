@@ -6153,3 +6153,92 @@ Split cronologico primera/segunda mitad (mismo criterio que el resto del proyect
 **Conclusion: Momentum 12-1 evaluado solo, neutral por sector y tamaño, no muestra ventaja demostrable en este universo/horizonte. `config/weights.php` no se toca (el momentum ya vive ahi con su peso actual, sin cambios). `config/measured_edge.php` tampoco, esta medicion es una investigacion separada del score completo, no lo sustituye.**
 
 El modo `momentum` de `runCrossSectional()` se queda como capacidad permanente del motor (igual que el resto de infraestructura de investigacion de este proyecto: el resultado de hoy es nulo, pero la herramienta para volver a preguntarlo con mas datos o distinta especificacion queda construida y verificada).
+
+---
+
+## 2026-09-02 (decimotercera entrada) - Historial de operaciones paginado
+
+Estado: hecho. El usuario reporta que el historial de operaciones de "Mi cartera" muestra todas las operaciones sin paginar, cada vez mas largo con el tiempo.
+
+`PortfolioPage::renderTransactions()` reutiliza `Layout::renderPagination()` (ya existente, usada por el Ranking del Home y `BacktestPage`, mismo parametro `page_num` en la query string) en vez de construir una paginacion propia. 20 operaciones por pagina (`TRANSACTIONS_PAGE_SIZE`, mismo valor que `DashboardPage::PAGE_SIZE`). Las mas recientes primero: `Portfolio::getTransactions()`/`TransactionRepository` devuelven ASC por fecha porque asi lo necesita el calculo de coste FIFO (`accumulatePositions()`), pero eso es orden de CALCULO, no de lectura -- se invierte solo en la vista (`array_reverse()`), sin tocar el repositorio ni el calculo. Verificado que `getTransactionProfit()`/`getTransactionProfitPercent()` buscan por id de transaccion en un mapa ya precalculado, no dependen del orden de iteracion: invertir para mostrar es seguro. La exportacion CSV (`PortfolioCsvExporter`, ruta separada) no se toca, sigue exportando el historial completo.
+
+Tests nuevos en `PortfolioPageTest`: con 25 operaciones, la pagina 1 muestra las 20 mas recientes y no las 5 mas antiguas (ni al reves en la pagina 2), y una pagina fuera de rango (99) se acota a la ultima sin romper nada.
+
+`ddev exec vendor/bin/phpunit`: 504/504, 1.409 assertions, OK. `ddev exec vendor/bin/phpstan analyse`: sin errores. No verificado en navegador real (a diferencia de las velas/zoom de hoy): requeriria una sesion autenticada con >20 operaciones reales, mas montaje que el resto de cambios de hoy; la cobertura de test es exacta sobre el comportamiento exacto (que pagina muestra que filas), asi que se acepta sin captura de pantalla.
+
+---
+
+## 2026-09-03 - P3.3: modo `fundamental` en `runCrossSectional()`, conecta `RelativeFundamentalScorer` al backtest transversal, medido y cerrado
+
+Estado: implementado, verificado en `ddev` (tests y medicion reales, no revision manual sin sandbox) y cerrado con veredicto nulo. Ultimo punto pendiente del plan de Codex (`REVISION_MOTOR_CODEX_2026-09-02.md`), consenso del equipo del `2026-09-02`: conectar `RelativeFundamentalScorer` (prototipo ya existente desde `2026-08-15`, nunca conectado a nada) al backtest transversal, ahora que el universo point-in-time de 636 tickers por fin cumple el propio umbral `MIN_PEERS=8` del proyecto.
+
+Objetivo: `roadmap.md`, "Prioridad P3" -- evaluar un score fundamental de tres familias (Valor/Calidad/Solidez), cada factor puntuado por posicion PERCENTIL dentro del propio sector el mismo dia (no por umbrales absolutos tipo Graham), como baseline separado del score de 50 puntos -- mismo patron que `mode='momentum'` (P3.4, `versions.md` de ayer).
+
+### Alcance recortado respecto a la propuesta original del equipo, con su razon (decisiones tomadas antes de empezar, no renegociadas aqui)
+
+- **3 familias, no 4**: Valor (`freeCashFlowYield`, `evToEbitda`, `earningsYield`), Calidad (`roic`, `operatingMargin`, `cashConversion`), Solidez (`debtToEquity`, unico factor -- `accruals` fuera, `FiscalPeriod` no trae `operatingCashFlow`/`totalAssets` hoy). La familia "Cambio" (mejora YoY de margen/ROIC/deuda/ventas/FCF) queda FUERA: exige una segunda consulta point-in-time por muestra (fecha - 365d) para cada campo, logica nueva no trivial, documentada como pendiente explicito.
+- **Horizontes 20 y 60 sesiones, no 252** (recorte sobre la propuesta inicial de `inversor-fundamental`): con `step=252` sobre 10 años de historico solo hay ~10 fechas candidatas ANTES de cualquier filtro de calidad/point-in-time, ya por debajo del minimo de ~30 fechas que `auditor-estadistico` fija como umbral de potencia utilizable -- no tiene sentido medir algo infrapotenciado de antemano. Mismos dos horizontes que P3.4 para comparabilidad directa.
+- **P3.2 (look-ahead residual de `dividendGrowth5y`) FUERA de este lote**: ninguno de los tres factores elegidos lo usa, y el arreglo real (mover el calculo dentro del bucle de `sampleHistory()`, no solo cambiar la fecha de referencia de una llamada que ya se hace una unica vez por ticker) es mas trabajo del que vale la pena aqui.
+
+### Dos campos nuevos en `Fundamentals`/`PointInTimeFundamentalsBuilder`
+
+`earningsYield` (inverso del PER, `epsTtm/price`, pero **sin la guarda de positividad que tiene `per`**: admite beneficio negativo a proposito, es el punto de tenerlo por separado) y `cashConversion` (`freeCashFlowTtm/netIncomeTtm`, `null` con beneficio neto cero o si falta cualquiera de los dos). Parametros opcionales al final del constructor de `Fundamentals` (mismo patron que el resto de campos añadidos despues de `v2.64`), asi que ningun constructor existente se rompe. `YahooParser` no se toca: quedan `null` fuera del backtest historico point-in-time, mismo criterio ya aceptado para otros campos que Yahoo no expone en vivo (p.ej. `roic`).
+
+**`FundamentalsHistoryRepository::FIELDS`/`toArray()`/`fromArray()` tambien ampliados** (no pedido explicitamente en la especificacion, pero necesario para que los dos campos nuevos sobrevivan el viaje ida y vuelta por `fundamentals_history`: sin esto, `PointInTimeFundamentalsBuilder` los calcularia en vano, `toArray()` los descartaria al guardar el snapshot y `fromArray()` nunca los leeria de vuelta). `fromArray()` ya era tolerante con claves ausentes desde su diseño original (`v2.91`): los snapshots guardados ANTES de hoy simplemente no traen estas dos claves y se leen como `null`, sin romper nada -- ver la limitacion real mas abajo.
+
+### Nuevo modo `fundamental` en `BacktestingService`
+
+Mismo patron exacto que `mode='momentum'` de ayer: `assertValidMode()` acepta `'fundamental'`; `sampleHistory()` expone los siete factores crudos por muestra (`free_cash_flow_yield`, `ev_to_ebitda`, `roic`, `operating_margin`, `debt_to_equity`, `earnings_yield`, `cash_conversion`) mas `fundamentals_is_point_in_time` (reutiliza literalmente `$lastMarketCapWasPointInTime` -- verificado en el codigo, ese flag ya representa "todo el snapshot de `Fundamentals` vino de un snapshot historico real o del fallback a hoy", no solo `marketCap`, un unico objeto no puede tener unos campos point-in-time y otros no); `runCrossSectional()` copia estos campos a `$samplesByDate` siempre (no solo con `mode='fundamental'`, mismo criterio que los campos de momentum: no bifurcar la recopilacion por modo).
+
+**`rankByFundamentalNeutral()`** (nuevo metodo privado, mismo formato de retorno que `rankByMomentumNeutral()`):
+
+1. Descarta muestras con `fundamentals_is_point_in_time !== true` (contador `samples_dropped_no_fundamentals_pit`).
+2. Con las supervivientes, agrupa por sector -- los peers de cada factor son SOLO del mismo sector, mismo dia, nunca todo el universo.
+3. Por cada uno de los siete factores, `RelativeFundamentalScorer::percentileRank()` (ya tenia `MIN_PEERS=8` interno, sin tocar): si el sector no llega a 8 peers con dato no-null para ese factor, o si la propia muestra no tiene dato para ese factor, el percentil es `null` y `pointsFor(null, 100)` cae al punto medio (50). **Decision deliberadamente distinta de `rankByMomentumNeutral()`**: aqui NO se excluye el sector entero por tener pocas muestras (especificado por `inversor-fundamental`/`auditor-estadistico`, no cuestionado en esta implementacion).
+4. `valor_familia` = media de `pointsFor()` de los factores de esa familia (Solidez, con un unico factor, es el si mismo). `fundamental_score` = media de las tres familias, peso igual.
+5. Top-N por `fundamental_score` descendente, mismo desempate alfabetico que `rankByPercentage()`/`rankByMomentumNeutral()`.
+
+Para evitar un acceso de indice dinamico sobre el array-shape estricto de las muestras (arriesgado con PHPStan en modo estricto), los siete valores de una muestra se extraen primero a un mapa plano (`fundamentalFactorValues()`, `array<string,?float>`) antes de indexar por el nombre de campo de `self::FUNDAMENTAL_FACTORS` -- confirmado que hacia falta: `ddev exec vendor/bin/phpstan analyse` paso limpio con este diseño en el primer intento.
+
+### Filtro de calidad P3.1, a nivel de universo, no dentro de `BacktestingService`
+
+`storage/scratch/run_fundamental_only_backtest.php` recorre el universo ANTES de llamar a `runCrossSectional()` (mismo patron que `bin/audit-fundamentals-quality.php`: `EodhdRawFundamentalsRepository` + `EodhdFiscalPeriodProvider::parse()` + `FundamentalsQualityAuditor`) y excluye cualquier ticker con al menos un hallazgo `filing_before_period_end`, recalculado EN CADA EJECUCION, sin lista hardcodeada. **26 de 636 excluidos** (`AMTM, BX, CRH, CSX, CZR, DELL, DLTR, DRI, GIS, GPN, HSIC, KD, LITE, MBC, MOS, NVDA, PEP, PNR, PVH, QRVO, ROP, SNDK, STX, VNT, VTRS, WSM`), universo final **610 tickers**.
+
+**Verificado que esta cifra NO contradice a la especificacion de la tarea** (que citaba 43 tickers de una ejecucion anterior el mismo dia): confirmado ejecutando `bin/audit-fundamentals-quality.php` completo (sin restringir tickers) contra los 938 tickers archivados en `eodhd_raw_fundamentals` -- **da 43, exacto**. Los 26 de aqui son un subconjunto estricto de esos 43 (confirmado uno a uno): la diferencia es que la tarea de hoy solo filtra dentro de los 636 tickers que de verdad entran en `point_in_time_universe.txt` (el universo real del backtest), mientras que el archivo completo de EODHD (938) incluye 302 tickers legado/delistados adicionales (`MON`, `CERN`, `XLNX`, `ALXN`, `BBBY_OLD`, `SHLD_OLD`...) que nunca iban a entrar en esta medicion de todos modos. No es una discrepancia, es el filtro correcto aplicado al universo correcto.
+
+`currency_unit_jump` y la cobertura TTM baja no se filtran (decision ya tomada, fuera de alcance): quedan como limitacion documentada, no arreglada. `extreme_ratio` no requiere accion: el diseño rank-based ya lo neutraliza por construccion.
+
+### Medicion: universo point-in-time real, 610 tickers, dos horizontes predeclarados
+
+| | horizon=20 (comparable al baseline) | horizon=60 (medio plazo) |
+|---|---|---|
+| Fechas evaluadas | 112 | 37 |
+| Fechas descartadas (amplitud + solape) | 1.129 | 441 |
+| Muestras usadas | 50.621 | 16.691 |
+| Descartadas por no ser miembro point-in-time del indice | 14.755 | 4.897 |
+| Descartadas por Momentum 12-1 no calculable (P0.3, sigue aplicando aunque este modo no use momentum para rankear) | 5.440 | 1.813 |
+| Descartadas por `fundamentals_is_point_in_time !== true` | 311 | 104 |
+| Alpha media top-10 | +0,19 pp | +0,23 pp |
+| **t pareado por fecha** (metrica principal) | **0,90** | **0,31** |
+| t de Welch (pooled, secundaria) | 0,70 | 0,31 |
+| IC95% | [-0,23, 0,61] | [-1,21, 1,67] |
+
+Con N=2 comparaciones predeclaradas, Bonferroni exige |t|>=2,24 (en vez de 1,96). **Ninguna de las dos corridas se acerca siquiera al umbral sin corregir**: horizon=20 con t=0,90 es un 46% del umbral nominal; horizon=60 con t=0,31, un 16%. La correccion formal no cambia nada, solo lo confirma con mas margen.
+
+### Limitacion real de ESTA medicion concreta, no del diseño del motor (verificada, no supuesta)
+
+`earningsYield`/`cashConversion` -- los dos factores nuevos de este mismo lote -- **salieron `null` en el 100% de las muestras utilizadas**. Causa confirmada consultando en vivo un snapshot real (`fundamentals_history`, AAPL, fecha mas reciente): el payload guardado tiene exactamente los 18 campos de siempre, sin `earningsYield` ni `cashConversion` -- los 1.511.967 snapshots ya acumulados en la tabla real se generaron TODOS antes de que estos dos campos existieran (hoy), asi que `fromArray()` los lee como `null` (tolerante con claves ausentes por diseño, ver `v2.91`) para CUALQUIER fecha pasada. Como el diseño trata "sin dato" igual que "sin peers suficientes" (percentil `null` -> punto medio 50), estos dos factores contribuyeron un 50 CONSTANTE a Valor/Calidad en toda la medicion de hoy, en vez de diferenciar de verdad -- la medicion de arriba usa efectivamente 5 de los 7 factores especificados (`freeCashFlowYield`, `evToEbitda`, `roic`, `operatingMargin`, `debtToEquity`), no 7.
+
+**No corregido en este lote, a proposito**: regenerar `fundamentals_history` (la tabla REAL, 1,5M filas) para retro-rellenar estos dos campos en snapshots ya existentes es una operacion de escritura masiva sobre una tabla de produccion que ningun agente de mercado ni el encargo de esta tarea pidieron explicitamente -- aunque seria segura en principio (mismo patron UPSERT de `bin/regenerate-fundamentals-history-v2110.php`, sin cambiar ninguna formula de los 18 campos existentes, solo añadiendo dos nuevos), es una decision que le corresponde al usuario, no una asuncion de este agente. Queda como siguiente paso recomendado si se quiere una medicion de P3.3 con los 7 factores realmente activos.
+
+### Tests nuevos
+
+`tests/Services/PointInTimeFundamentalsBuilderTest.php` (+4): `earningsYield` como inverso exacto del PER, `earningsYield` con beneficio NEGATIVO (a diferencia del PER, que sale `null` en el mismo caso), `cashConversion` como FCF/beneficio neto, `cashConversion` nulo con beneficio neto cero. `tests/Services/BacktestingServiceFundamentalModeTest.php` (nuevo, 2 tests, mismo patron que `BacktestingServiceMomentumModeTest`): descarte por `fundamentals_is_point_in_time !== true` (un ticker con los siete factores DELIBERADAMENTE superiores a todos los demas pero SIN snapshot registrado nunca aparece en el top-N), y un caso calculable a mano (`WINNER` con los siete factores estrictamente mejores que otros 9 tickers identicos entre si: percentil 100 en los tres frente a 8/9*100=88,89 de los demas, diferencia de ~11 puntos en las tres familias, muy por encima del ruido de coma flotante). `tests/Repository/FundamentalsHistorySnapshotTest.php` actualizado (18->20 campos guardados) tras encontrar el test roto al ejecutar la suite completa.
+
+Ficheros nuevos: `tests/Services/BacktestingServiceFundamentalModeTest.php`, `storage/scratch/run_fundamental_only_backtest.php`. Modificados: `src/Models/Fundamentals.php` (`earningsYield`/`cashConversion`), `src/Services/PointInTimeFundamentalsBuilder.php` (calculo de los dos campos), `src/Repository/FundamentalsHistoryRepository.php` (`FIELDS`/`toArray()`/`fromArray()` ampliados), `src/Services/BacktestingService.php` (`$fundamentalScorer`, `sampleHistory()`, `assertValidMode()`, `runCrossSectional()`, `rankByFundamentalNeutral()`/`fundamentalFactorValues()`/`FUNDAMENTAL_FACTORS` nuevos), `tests/Services/PointInTimeFundamentalsBuilderTest.php`, `tests/Services/InMemoryFundamentalsHistoryRepository.php` (`withFundamentalsSnapshot()`), `tests/Repository/FundamentalsHistorySnapshotTest.php`.
+
+### Verificado en ddev con
+
+`ddev exec vendor/bin/phpunit`: **502 tests, 1.398 assertions, OK** (sube desde 496/1.373; +6: 4 de `PointInTimeFundamentalsBuilderTest`, 2 de `BacktestingServiceFundamentalModeTest`; 1 skip preexistente sin relacion, ya documentado). `ddev exec vendor/bin/phpstan analyse`: sin errores (234 ficheros), limpio en el primer intento. `ddev exec php storage/scratch/run_fundamental_only_backtest.php`: ejecutado de punta a punta, resultados guardados en `storage/scratch/fundamental_only_backtest_results.json`.
+
+**Conclusion: el score fundamental de tres familias (percentil por sector), con las limitaciones de datos historicos documentadas arriba, no muestra ventaja demostrable en este universo/horizonte. `config/weights.php` no se toca. `config/measured_edge.php` tampoco, es una investigacion separada del score completo.** Con esto se cierra el plan completo de Codex del `2026-09-02` (P0 a P3.4): los tres bugs de metodologia (P0.1-P0.3) se arreglaron, y las dos investigaciones nuevas que el consenso del equipo priorizo (Momentum 12-1 solo y el score fundamental de tres familias) se midieron ambas con veredicto nulo, sin ventaja demostrable en el universo point-in-time real de este proyecto.

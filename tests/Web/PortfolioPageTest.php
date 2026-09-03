@@ -8,8 +8,10 @@ use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 use StockAnalyzer\DTO\PortfolioConcentration;
 use StockAnalyzer\DTO\PortfolioHeat;
+use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
+use StockAnalyzer\Models\Transaction;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Web\PortfolioPage;
 
@@ -476,5 +478,78 @@ final class PortfolioPageTest extends TestCase
             [],
             $concentration
         );
+    }
+
+    /**
+     * Historial de operaciones paginado (v2.116): con mas de
+     * `PortfolioPage::TRANSACTIONS_PAGE_SIZE` (20) operaciones, la pagina 1
+     * muestra las 20 MAS RECIENTES (orden invertido respecto a como las
+     * devuelve `TransactionRepository`, que va ASC por fecha para el
+     * calculo FIFO de coste) y deja el resto para la pagina 2.
+     */
+    private function renderWithTransactions(int $pageNum): string
+    {
+        $transactions = [];
+
+        for ($i = 1; $i <= 25; $i++) {
+            $transactions[] = new Transaction(
+                $i,
+                1,
+                sprintf('T%02d', $i),
+                TransactionType::BUY,
+                1.0,
+                100.0,
+                new DateTimeImmutable(sprintf('2026-01-%02d', $i))
+            );
+        }
+
+        $portfolio = new Portfolio([], $transactions, 0.0);
+
+        return PortfolioPage::render(
+            $this->user(),
+            $portfolio,
+            'token',
+            null,
+            null,
+            ['labels' => [], 'values' => []],
+            [],
+            0,
+            [],
+            [],
+            [],
+            null,
+            null,
+            $pageNum
+        );
+    }
+
+    public function testHistorialDeOperacionesSePaginaConLasMasRecientesPrimero(): void
+    {
+        $pagina1 = $this->renderWithTransactions(1);
+
+        // Las 20 mas recientes: T25 (2026-01-25) hasta T06 (2026-01-06).
+        self::assertStringContainsString('T25', $pagina1);
+        self::assertStringContainsString('T06', $pagina1);
+        self::assertStringNotContainsString('T05', $pagina1);
+        self::assertStringNotContainsString('T01', $pagina1);
+        self::assertStringContainsString('page_num=2', $pagina1);
+
+        $pagina2 = $this->renderWithTransactions(2);
+
+        // Las 5 restantes, las mas antiguas: T05 hasta T01.
+        self::assertStringContainsString('T05', $pagina2);
+        self::assertStringContainsString('T01', $pagina2);
+        self::assertStringNotContainsString('T06', $pagina2);
+        self::assertStringNotContainsString('T25', $pagina2);
+    }
+
+    public function testUnaPaginaFueraDeRangoSeAcotaALaUltima(): void
+    {
+        $html = $this->renderWithTransactions(99);
+
+        // Solo hay 2 paginas (25 operaciones / 20 por pagina): pedir la 99
+        // no debe romper nada, se acota a la 2 (las 5 mas antiguas).
+        self::assertStringContainsString('T05', $html);
+        self::assertStringNotContainsString('T06', $html);
     }
 }

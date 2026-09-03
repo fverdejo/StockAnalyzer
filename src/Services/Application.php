@@ -910,7 +910,10 @@ class Application
                 (new SuggestedPositionCalculator(new RiskLevelsConfig()))
                     ->compute($portfolio, $holdingsAnalysis['riskLevels']),
                 (new PortfolioConcentrationCalculator())->compute($portfolio, $holdingsAnalysis['sectors']),
-                (new PortfolioHeatCalculator())->compute($portfolio, $holdingsAnalysis['riskLevels'])
+                (new PortfolioHeatCalculator())->compute($portfolio, $holdingsAnalysis['riskLevels']),
+                // Paginacion del historial de operaciones: mismo patron que
+                // el Ranking del Home (linea ~325) y BacktestPage (~1108).
+                max(1, (int) $this->queryString('page_num'))
             );
         } catch (Throwable $exception) {
             if ($this->auth->currentUser() === null) {
