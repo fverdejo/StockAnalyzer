@@ -6271,4 +6271,50 @@ Replico la aritmetica de las dos corridas de forma independiente (0,19/0,21=0,90
 1. **Regla nueva sobre combinar hallazgos sub-umbral**: `versions.md` (entradas anteriores) ya deja anotados casos que no sobreviven Bonferroni individualmente pero muestran consistencia de signo llamativa (bucket de spread SMA 24/30 mismo signo, frog-in-the-pan 11/12 mismo signo). Si en el futuro se combinan dos señales así en una nueva, esa combinacion es una **hipotesis nueva** que necesita su propio test predeclarado con su propio umbral -- no vale sumar dos señales que fallaron el corte individualmente y tratar la combinacion como si ya estuviera validada.
 2. **Limitacion de regimen unico**: el plan completo (P0 a P3.4) se ha medido casi enteramente sobre 2016-2026 (ventana point-in-time real concentrada en 2017-2026), con una unica correccion incompleta (2022) y sin una recesion completa. El veredicto acumulado "ninguna señal probada muestra ventaja demostrable" es una afirmacion sobre esta muestra/regimen concreto, no una prueba general de eficiencia de mercado.
 
+---
+
+## 2026-09-04 - Correcciones de especificacion del fundamental (Codex, "Prioridad cero-ter") implementadas y repetido: veredicto nulo se mantiene
+
+Estado: cerrado. Codex dejo una segunda revision externa, `EVALUACION_RESULTADOS_CLAUDE_Y_PLAN_MOTOR_2026-09-03.md` (raiz del repo), sobre el commit `ba57aec` -- ya con P3.3/P3.4 cerrados. `auditor-estadistico` verifico cada critica CONTRA EL CODIGO REAL (no contra el resumen del documento) antes de anotar nada: las seis limitaciones que señala son ciertas. Detalle completo de esa consulta y de la priorizacion resultante en `roadmap.md`, "Prioridad cero-ter".
+
+### Las 5 correcciones implementadas (`desarrollador-php`, diff revisado a mano linea a linea antes de medir)
+
+1. **`FUNDAMENTAL_FACTORS` reducido de 7 a 5 factores reales.** `earningsYield`/`cashConversion` eran `null` en el 100% del historico (se añadieron despues de generar `fundamentals_history`) y `pointsFor(null, 100)` los convertia en 50 puntos constantes -- Solidez (deuda/patrimonio, unico factor real de esa familia) pesaba ~1/3 del score total en vez de ~1/9 como cada factor activo. Ausencia de dato deja de caer al punto medio: un factor sin dato (propio o por peers insuficientes) se excluye del promedio de su familia; una familia sin ningun factor util se excluye del promedio de familias; una muestra sin ninguna familia util se excluye del ranking entero (`samples_dropped_no_usable_factors`, contador nuevo).
+2. **`sampleHistory()` ya no exige `momentum12m1` no-nulo para `mode='fundamental'`** (si sigue exigiendolo para `full`/`technical`/`momentum`). Verificado que `ScoreCalculator`/`TechnicalScoreAnalyzer` no rompen con momentum null (rellenan un neutral silencioso que el ranking fundamental nunca lee, ya que rankea por `fundamental_score`, no por `percentage`).
+3. **`PointInTimeFundamentalsBuilder`**: `cashConversion` ahora exige `netIncomeTtm > 0.0` (antes `!= 0.0`, dejaba pasar FCF y beneficio ambos negativos como un ratio positivo enganosamente "bueno"). `debtToEquity` excluye explicitamente patrimonio `<= 0.0` (verificado redundante en la practica -- ya estaba guardado indirectamente via `positive()` -- pero mantenido por claridad).
+4. El script de medicion (`storage/scratch/run_fundamental_only_backtest.php`) guarda ahora el array `errors` completo (ticker+mensaje), no solo el contador -- el servicio ya lo devolvia completo, se perdia solo al escribir el JSON.
+5. **La alpha PRINCIPAL de `mode='momentum'`/`mode='fundamental'` se mide contra el subconjunto `eligible`** que devuelve cada funcion de ranking (todos los que sobrevivieron los filtros de esa fecha, no solo el top-N), no contra `$daySamples` completo. Se conserva como diagnostico secundario, sin entrar en las estadisticas principales, `alpha_vs_all_available`/`universe_avg_forward_return_all_available`.
+
+Verificacion: 509/509 tests, PHPStan limpio. Un ajuste propio no delegado: 4 tests de `BacktestingServiceFundamentalModeTest.php` fallaban tras la implementacion (`dates_evaluated` salia 35 en vez de 1) porque el fixture seguia usando el prefijo largo de `MomentumPrefixFixture` -- innecesario ya que `mode='fundamental'` no exige momentum, y contraproducente: generaba una muestra adicional (momentum null, ya no descartada) por cada indice del historico anterior a los ~250 cierres que Momentum 12-1 necesita. Corregido unificando todos los fixtures del fichero a un historico corto (87 velas), sin el prefijo.
+
+### Medicion repetida (universo point-in-time de 636 tickers, 26 excluidos por el filtro de calidad P3.1 = 610, mismos dos horizontes predeclarados que P3.3)
+
+| | horizon=20 (n=121) | horizon=60 (n=40) |
+|---|---|---|
+| avg_alpha | 0,25 pp | 0,42 pp |
+| alpha_stderr | 0,22 | 0,70 |
+| t pareado | **1,17** | **0,61** |
+| IC95% | [-0,17, 0,67] | [-0,95, 1,79] |
+
+`samples_dropped_no_usable_factors`: 112/54.413 (0,21%) en horizon=20, 38/17.952 (0,21%) en horizon=60 -- cifra pequeña, sin motivo de preocupacion (dos ordenes de magnitud menor que el ~9,7% que descartaba antes la exigencia de momentum indebida). 1 error en ambas corridas (`LEG`, "Yahoo response is incomplete"), ahora con el mensaje completo guardado.
+
+### Split de mitades (mismo criterio obligatorio que P3.3/P3.4)
+
+| | horizon=20 (n=60/61) | horizon=60 (n=20/20) |
+|---|---|---|
+| Primera mitad | t=**-0,12** (2016-12-27 a 2021-09-03) | t=**-0,71** (2016-12-27 a 2021-07-09) |
+| Segunda mitad | t=**1,66** (2021-10-04 a 2026-07-17) | t=**1,60** (2021-10-04 a 2026-04-21) |
+
+### Veredicto de `auditor-estadistico`, con verificacion cruzada propia
+
+Replico la aritmetica de forma independiente (0,252/0,216=1,167≈1,17; 0,425/0,699=0,608≈0,61, IC95% cuadran) y confirmo en el codigo que el diseño pareado por fecha y la alpha contra `eligible` estan implementados tal como se describe. Con N=2 predeclaradas, Bonferroni exige |t|>=2,24: ninguno de los dos horizontes se acerca, ni siquiera al umbral sin corregir de 1,96. **La alpha subio de 0,19pp (P3.3) a 0,25pp, lejos de los ~0,47pp que hacian falta para cruzar el umbral con el error estandar observado** -- exactamente la prediccion cuantitativa que el propio auditor ya habia hecho antes de repetir la medicion, y que no se cumplio.
+
+El split-half (ejecutado por Claude directamente via `ddev`, ya que el sandbox del agente auditor no tenia PHP/Docker disponibles) confirma el mismo patron que P3.3/P3.4: primera mitad (2016-2021) practicamente nula o negativa, segunda mitad (2021-2026) positiva pero sin cruzar 1,96 en ningun horizonte. **La alpha global esta tirada por el tramo posterior a 2021-2022, no es un hallazgo estable en el tiempo.**
+
+**Veredicto: sigue siendo nulo, con mas margen que antes, no menos.** Las correcciones de especificacion (quitar factores fantasma, no exigir momentum, sanear ratios degenerados, medir contra el universo elegible correcto) hicieron lo que debian hacer -- medir la pregunta correcta -- y el resultado es consistente con P3.3: mismo signo, alpha ligeramente mayor pero sin que el t se mueva lo suficiente. **Cierra la via del fundamental como predictor de retorno cross-sectional a 20/60 dias con los datos actuales**, no la deja abierta a "una variante mas". `config/weights.php` no se toca.
+
+### Items del documento de Codex explicitamente aplazados (sobre-ingenieria para una herramienta personal de un solo usuario, segun `auditor-estadistico`), sin implementar
+
+Calendario de rebalanceo comun en vez de rejilla por ticker, calidad point-in-time a nivel snapshot en vez de exclusion del ticker completo (afecta solo ~4% del universo), diagnosticos Rank-IC/quintiles/monotonicidad (validos pero con regla de lectura fijada de antemano, no como menu), e hipotesis combinada puerta-fundamental+momentum en modo sombra (sin sentido mientras ambos bloques por separado sigan nulos). Detalle completo en `roadmap.md`, "Prioridad cero-ter". **Con esto, el segundo documento de Codex queda cerrado en su parte accionable.**
+
 Con esto, el plan de Codex del `2026-09-02` (P0 a P3.4) queda cerrado del todo, incluida su verificacion final.

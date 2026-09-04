@@ -339,7 +339,20 @@ class BacktestingService
      *        ver `rankByMomentumNeutral()` para el criterio exacto.
      *        'fundamental' (P3.3, misma referencia) rankea cada fecha por un
      *        score fundamental de tres familias (Valor/Calidad/Solidez)
-     *        percentil-por-sector: ver `rankByFundamentalNeutral()`.
+     *        percentil-por-sector: ver `rankByFundamentalNeutral()`. En
+     *        estos dos modos (roadmap.md, "Prioridad cero-ter" punto 5,
+     *        `2026-09-04`) la alpha PRINCIPAL de cada fecha se mide contra
+     *        el subconjunto ELEGIBLE de esa fecha (`$ranking['eligible']`),
+     *        no contra `$daySamples` completo: mezclar el top elegido entre
+     *        elegibles con un benchmark que incluye tickers que ya se sabia,
+     *        antes de rankear, que no podian competir (sin marketCap PIT,
+     *        sector demasiado pequeño, sin fundamentales/factores PIT...)
+     *        desplazaria la alpha sin motivo. La comparacion contra
+     *        `$daySamples` completo se conserva como diagnostico secundario
+     *        en cada entrada de `dates[]`
+     *        (`universe_avg_forward_return_all_available`/
+     *        `alpha_vs_all_available`). 'full'/'technical' no tienen filtro
+     *        de elegibilidad propio y no cambian de comportamiento.
      * @param ?string $indexCode Codigo de indice (roadmap.md, "Segundo
      *        bloque" punto 5, 2026-09-02) contra el que se comprueba
      *        membresia point-in-time va `IndexMembershipCheckerInterface`.
@@ -455,6 +468,11 @@ class BacktestingService
         // docblock), mismo criterio de "0 fuera de $mode='fundamental'"
         // que los dos contadores de arriba.
         $droppedNoFundamentalsPit = 0;
+        // roadmap.md, "Prioridad cero-ter" punto 1 (2026-09-04): descarte
+        // propio de `rankByFundamentalNeutral()` cuando NINGUNA de las tres
+        // familias aporto dato utilizable ese dia (mismo criterio "0 fuera
+        // de $mode='fundamental'" que el resto de contadores de esta zona).
+        $droppedNoUsableFactors = 0;
         $lastEvaluatedDate = null;
 
         foreach ($samplesByDate as $date => $daySamples) {
@@ -472,12 +490,26 @@ class BacktestingService
                 }
             }
 
+            // roadmap.md, "Prioridad cero-ter" punto 5 (2026-09-04):
+            // $eligibleReturns queda en null para 'full'/'technical' (sin
+            // filtro de elegibilidad propio, la alpha se mide contra
+            // $daySamples completo, como siempre). Para 'momentum'/
+            // 'fundamental' recoge los retornos del subconjunto ELIGIBLE
+            // que devuelve cada ranking (`$ranking['eligible']`): el
+            // universo COMPLETO que sobrevivio a los filtros de esa funcion
+            // antes del top-N, no solo los $topN seleccionados. Mezclar el
+            // top elegido entre elegibles con un benchmark que incluye
+            // tickers que nunca podian entrar (sin marketCap PIT, sector
+            // demasiado pequeño, sin fundamentales/factores PIT...)
+            // desplazaria la alpha sin motivo.
+            $eligibleReturns = null;
+
             if ($mode === 'momentum') {
                 $ranking = $this->rankByMomentumNeutral($daySamples, $topN);
                 $droppedThinSector += $ranking['dropped_thin_sector'];
                 $droppedNoMarketCapPit += $ranking['dropped_no_marketcap_pit'];
 
-                if ($ranking['selected'] === []) {
+                if ($ranking['eligible'] === []) {
                     // Ninguna muestra sobrevivio a la neutralizacion
                     // sector/tamaño ese dia (sectores todos demasiado
                     // pequeños, o ninguna con marketCap point-in-time): sin
@@ -490,20 +522,23 @@ class BacktestingService
                 }
 
                 $selected = $ranking['selected'];
+                $eligibleReturns = array_column($ranking['eligible'], 'forward_return');
             } elseif ($mode === 'fundamental') {
                 $ranking = $this->rankByFundamentalNeutral($daySamples, $topN);
                 $droppedNoFundamentalsPit += $ranking['dropped_no_fundamentals_pit'];
+                $droppedNoUsableFactors += $ranking['dropped_no_usable_factors'];
 
-                if ($ranking['selected'] === []) {
+                if ($ranking['eligible'] === []) {
                     // Mismo criterio que 'momentum' arriba: sin
-                    // supervivientes con fundamentales point-in-time ese
-                    // dia (muy improbable con un universo de cientos de
+                    // supervivientes con fundamentales/factores utilizables
+                    // ese dia (muy improbable con un universo de cientos de
                     // tickers), no hay alpha que calcular.
                     $droppedLowBreadth++;
                     continue;
                 }
 
                 $selected = $ranking['selected'];
+                $eligibleReturns = array_column($ranking['eligible'], 'forward_return');
             } else {
                 $selected = array_slice($this->rankByPercentage($daySamples), 0, $topN);
             }
@@ -512,15 +547,20 @@ class BacktestingService
             $selectedReturns = array_column($selected, 'forward_return');
             $dayReturns = array_column($daySamples, 'forward_return');
             $topAverage = array_sum($selectedReturns) / count($selectedReturns);
-            $universeAverage = array_sum($dayReturns) / count($dayReturns);
+            // La cifra PRINCIPAL (la que entra en alpha/avg_universe_forward_return
+            // y en todos los t-stats de crossSectionalStatistics()): contra
+            // $eligibleReturns cuando lo hay, contra $daySamples completo si
+            // no (full/technical, sin cambio de comportamiento).
+            $universeReturnsForAlpha = $eligibleReturns ?? $dayReturns;
+            $universeAverage = array_sum($universeReturnsForAlpha) / count($universeReturnsForAlpha);
 
             $alphas[] = $topAverage - $universeAverage;
             $topAverages[] = $topAverage;
             $universeAverages[] = $universeAverage;
             $topReturns = array_merge($topReturns, $selectedReturns);
-            $universeReturns = array_merge($universeReturns, $dayReturns);
+            $universeReturns = array_merge($universeReturns, $universeReturnsForAlpha);
 
-            $dates[] = [
+            $dateEntry = [
                 'date' => (string) $date,
                 'universe_size' => count($daySamples),
                 'top_tickers' => array_column($selected, 'ticker'),
@@ -528,6 +568,21 @@ class BacktestingService
                 'universe_avg_forward_return' => round($universeAverage, 2),
                 'alpha' => round($topAverage - $universeAverage, 2),
             ];
+
+            if ($eligibleReturns !== null) {
+                // Diagnostico secundario (roadmap.md, "Prioridad cero-ter"
+                // punto 5): misma comparacion que antes de este cambio,
+                // contra $daySamples completo, conservada para poder
+                // contrastar ambas lecturas sin perder la anterior. NO entra
+                // en $alphas/$universeReturns (la cifra principal ya usa el
+                // universo elegible), asi que no afecta a
+                // crossSectionalStatistics().
+                $universeAverageAllAvailable = array_sum($dayReturns) / count($dayReturns);
+                $dateEntry['universe_avg_forward_return_all_available'] = round($universeAverageAllAvailable, 2);
+                $dateEntry['alpha_vs_all_available'] = round($topAverage - $universeAverageAllAvailable, 2);
+            }
+
+            $dates[] = $dateEntry;
         }
 
         return array_merge(
@@ -556,6 +611,12 @@ class BacktestingService
                 // publicado igual que el resto -- 0 cuando $mode no es
                 // 'fundamental', no se llego a comprobar nada.
                 'samples_dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+                // roadmap.md, "Prioridad cero-ter" punto 1 (2026-09-04):
+                // cuantas muestras con fundamentales point-in-time reales
+                // no aportaron NINGUN factor utilizable (ni valor propio ni
+                // peers suficientes en ninguna de las tres familias), mismo
+                // criterio de "0 fuera de $mode='fundamental'" de arriba.
+                'samples_dropped_no_usable_factors' => $droppedNoUsableFactors,
                 // Cobertura del universo point-in-time (roadmap.md,
                 // "Segundo bloque" punto 5): `point_in_time_universe` es
                 // `false` cuando no se pidio (`$indexCode` nulo) o no hay
@@ -689,8 +750,8 @@ class BacktestingService
      * e. Top-N por `momentum_neutral` descendente, mismo desempate
      *    alfabetico que `rankByPercentage()`.
      *
-     * @param list<array{ticker: string, percentage: float, forward_return: float, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}> $daySamples
-     * @return array{selected: list<array{ticker: string, forward_return: float}>, dropped_thin_sector: int, dropped_no_marketcap_pit: int}
+     * @param list<array{ticker: string, percentage: float, forward_return: float, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool}> $daySamples
+     * @return array{selected: list<array{ticker: string, forward_return: float}>, eligible: list<array{ticker: string, forward_return: float}>, dropped_thin_sector: int, dropped_no_marketcap_pit: int}
      */
     private function rankByMomentumNeutral(array $daySamples, int $topN): array
     {
@@ -727,16 +788,48 @@ class BacktestingService
                 continue;
             }
 
+            // roadmap.md, "Prioridad cero-ter" punto 2 (2026-09-04):
+            // momentum12m1 paso a ser `?float` en la muestra compartida
+            // porque `sampleHistory()` ya no lo exige para
+            // mode='fundamental' -- pero SIGUE exigiendolo (descarta la
+            // muestra entera, ver P0.3) para mode='momentum', el UNICO modo
+            // que invoca esta funcion. Este chequeo nunca deberia disparar
+            // en la practica: es un guard de tipos (reasignar el campo tras
+            // la comprobacion deja `$sample` con `momentum12m1: float` de
+            // cara a PHPStan), no una regla de negocio nueva.
+            $momentum = $sample['momentum12m1'];
+
+            if ($momentum === null) {
+                $droppedNoMarketCapPit++;
+
+                continue;
+            }
+
+            $sample['momentum12m1'] = $momentum;
             $survivors[] = $sample;
         }
 
         if ($survivors === []) {
             return [
                 'selected' => [],
+                'eligible' => [],
                 'dropped_thin_sector' => $droppedThinSector,
                 'dropped_no_marketcap_pit' => $droppedNoMarketCapPit,
             ];
         }
+
+        // Punto 5 (roadmap.md, "Prioridad cero-ter", 2026-09-04): el
+        // universo ELEGIBLE para el benchmark de alpha es exactamente este
+        // conjunto -- los que ya pasaron (a) y (b), antes de neutralizar y
+        // recortar al top-N. Tomado aqui, antes de que los pasos c-e muten
+        // $survivors/$byMarketCap con campos derivados.
+        $eligibleResult = array_map(
+            static fn (array $sample): array => [
+                'ticker' => $sample['ticker'],
+                'forward_return' => $sample['forward_return'],
+            ],
+            $survivors
+        );
 
         // c. Neutralizacion sectorial: momentum menos la mediana de su
         // propio sector, misma fecha, entre las supervivientes de (a)+(b).
@@ -814,6 +907,7 @@ class BacktestingService
 
         return [
             'selected' => $selected,
+            'eligible' => $eligibleResult,
             'dropped_thin_sector' => $droppedThinSector,
             'dropped_no_marketcap_pit' => $droppedNoMarketCapPit,
         ];
@@ -821,12 +915,27 @@ class BacktestingService
 
     /**
      * P3.3 (`REVISION_MOTOR_CODEX_2026-09-02.md`, seccion P3.3, mas la
-     * especificacion de `inversor-fundamental`/`auditor-estadistico`):
-     * los siete factores fundamentales que entran en
-     * `rankByFundamentalNeutral()`, agrupados en las tres familias con peso
-     * igual en el calculo. Cada entrada es la clave de la muestra
+     * especificacion de `inversor-fundamental`/`auditor-estadistico`), REDUCIDO
+     * de siete a **cinco** factores el `2026-09-04` (`roadmap.md`, "Prioridad
+     * cero-ter", punto 1): `earnings_yield` y `cash_conversion` son `null`
+     * en el 100% de los snapshots de `fundamentals_history` (se añadieron
+     * DESPUES de generar esa tabla), asi que en la practica no aportaban
+     * percentil real, solo el punto medio constante (50) que
+     * `RelativeFundamentalScorer::pointsFor(null, 100)` devuelve para "sin
+     * dato" -- eso hacia que Solidez (deuda/patrimonio, el unico factor real
+     * de esa familia) pesara ~1/3 del score total en vez de ~1/9 como cada
+     * factor activo de Valor/Calidad. Quedan los cinco factores realmente
+     * presentes en el historico, agrupados en las mismas tres familias
+     * (`value`/`quality` con dos factores cada una, `soundness` con uno) con
+     * peso igual en el calculo. Cada entrada es la clave de la muestra
      * (`sampleHistory()`) y si un valor MAYOR es mejor para
      * `RelativeFundamentalScorer::percentileRank()`.
+     *
+     * Ausencia de dato ya NO cae al punto medio (ver
+     * `rankByFundamentalNeutral()`): un factor sin valor propio, o sin
+     * peers suficientes, se EXCLUYE del promedio de su familia en vez de
+     * puntuar como neutral -- "sin opinar" y "neutral" son cosas distintas,
+     * y confundirlas fue precisamente la causa del sesgo de arriba.
      *
      * Deliberadamente sin la familia "Cambio" (mejora YoY de margen, ROIC,
      * deuda, ventas, FCF): exige una segunda consulta point-in-time por
@@ -840,12 +949,10 @@ class BacktestingService
         'value' => [
             ['field' => 'free_cash_flow_yield', 'higher_is_better' => true],
             ['field' => 'ev_to_ebitda', 'higher_is_better' => false],
-            ['field' => 'earnings_yield', 'higher_is_better' => true],
         ],
         'quality' => [
             ['field' => 'roic', 'higher_is_better' => true],
             ['field' => 'operating_margin', 'higher_is_better' => true],
-            ['field' => 'cash_conversion', 'higher_is_better' => true],
         ],
         'soundness' => [
             ['field' => 'debt_to_equity', 'higher_is_better' => false],
@@ -866,27 +973,39 @@ class BacktestingService
      * b. Con las supervivientes, agrupa por sector -- los peers de cada
      *    factor son SOLO del mismo sector, MISMO DIA, nunca todo el
      *    universo.
-     * c. Por cada uno de los siete factores: si la propia muestra no tiene
-     *    dato para ese factor, o si el sector no llega a
+     * c. Por cada uno de los cinco factores (`self::FUNDAMENTAL_FACTORS`,
+     *    reducido de siete el `2026-09-04`, ver su docblock): si la propia
+     *    muestra no tiene dato para ese factor, o si el sector no llega a
      *    `RelativeFundamentalScorer::MIN_PEERS` (8) peers con dato no nulo
-     *    para ese factor concreto, el percentil es `null` y
-     *    `pointsFor(null, 100)` cae automaticamente al punto medio (50) --
-     *    a diferencia de `rankByMomentumNeutral()`, aqui NO se excluye el
-     *    sector entero por tener pocas muestras, es un diseño deliberado
-     *    (especificado por `inversor-fundamental`/`auditor-estadistico`,
-     *    2026-09-03): con un numero reducido de sectores y un universo de
-     *    cientos de tickers, excluir el sector completo dejaria demasiado
-     *    pocas muestras utilizables, a diferencia del filtro de tamaño
-     *    minimo que si tiene sentido para Momentum 12-1.
-     * d. `valor_familia` = media de `pointsFor()` de los factores de esa
-     *    familia (Solidez tiene un unico factor: su "media" es el sí
-     *    mismo). `fundamental_score` = media de las tres `valor_familia`
-     *    (peso igual, sin inclinar hacia ninguna familia).
+     *    para ese factor concreto, el factor se EXCLUYE del promedio de su
+     *    familia -- no se llama a `pointsFor(null, 100)` ni se inyecta un
+     *    50 (`roadmap.md`, "Prioridad cero-ter" punto 1, `2026-09-04`):
+     *    ausencia de dato no es lo mismo que "neutral", y tratarlas igual
+     *    fue precisamente lo que hizo que Solidez pesara el triple de lo
+     *    que deberia en la medicion de P3.3 (`versions.md`, entradas del
+     *    `2026-09-03`). A diferencia de
+     *    `rankByMomentumNeutral()`, aqui NO se excluye el sector entero por
+     *    tener pocas muestras, es un diseño deliberado (especificado por
+     *    `inversor-fundamental`/`auditor-estadistico`, 2026-09-03): con un
+     *    numero reducido de sectores y un universo de cientos de tickers,
+     *    excluir el sector completo dejaria demasiado pocas muestras
+     *    utilizables, a diferencia del filtro de tamaño minimo que si tiene
+     *    sentido para Momentum 12-1.
+     * d. `valor_familia` = media de `pointsFor()` de los factores CON dato
+     *    utilizable de esa familia (Solidez tiene un unico factor: su
+     *    "media" es el si mismo). Si ninguno de los factores de una familia
+     *    tuvo dato utilizable ese dia, la familia entera se excluye del
+     *    promedio siguiente en vez de aportar un valor inventado.
+     *    `fundamental_score` = media de las familias CON dato (peso igual
+     *    entre ellas, sin inclinar hacia ninguna). Si NINGUNA de las tres
+     *    familias aporto dato utilizable, la muestra entera se excluye del
+     *    ranking (`dropped_no_usable_factors`): sin datos, no hay opinion
+     *    que dar, y menos que competir en el top-N.
      * e. Top-N por `fundamental_score` descendente, mismo desempate
      *    alfabetico que `rankByPercentage()`/`rankByMomentumNeutral()`.
      *
      * @param list<array{ticker: string, percentage: float, forward_return: float, sector: string, fundamentals_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float}> $daySamples
-     * @return array{selected: list<array{ticker: string, forward_return: float}>, dropped_no_fundamentals_pit: int}
+     * @return array{selected: list<array{ticker: string, forward_return: float}>, eligible: list<array{ticker: string, forward_return: float}>, dropped_no_fundamentals_pit: int, dropped_no_usable_factors: int}
      */
     private function rankByFundamentalNeutral(array $daySamples, int $topN): array
     {
@@ -907,25 +1026,32 @@ class BacktestingService
         if ($survivors === []) {
             return [
                 'selected' => [],
+                'eligible' => [],
                 'dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+                'dropped_no_usable_factors' => 0,
             ];
         }
 
-        // b. Peers por sector, MISMO DIA -- copia tomada antes de anotar
-        // fundamental_score en cada muestra, para que un peer nunca se
-        // compare consigo mismo con datos ya mutados.
+        // b. Peers por sector, MISMO DIA -- tomados de $survivors, que no se
+        // muta: `$usable` de abajo es un array nuevo, para que un peer nunca
+        // se compare consigo mismo con datos ya recalculados.
         $bySector = [];
 
         foreach ($survivors as $sample) {
             $bySector[$sample['sector']][] = $sample;
         }
 
-        foreach ($survivors as &$sample) {
+        // c. + d. Percentil por factor CON dato, media por familia CON dato,
+        // media de familias CON dato. Cualquier nivel sin nada utilizable se
+        // excluye del nivel siguiente en vez de rellenarse con un 50.
+        $usable = [];
+        $droppedNoUsableFactors = 0;
+
+        foreach ($survivors as $sample) {
             $sectorPeers = $bySector[$sample['sector']];
             $sampleValues = $this->fundamentalFactorValues($sample);
             $familyScores = [];
 
-            // c. + d. Percentil por factor, media por familia.
             foreach (self::FUNDAMENTAL_FACTORS as $family => $factors) {
                 $points = [];
 
@@ -934,10 +1060,8 @@ class BacktestingService
                     $value = $sampleValues[$field];
 
                     if ($value === null) {
-                        // Sin dato para ESTA muestra en este factor: neutro,
-                        // mismo criterio que "sin peers suficientes".
-                        $points[] = $this->fundamentalScorer->pointsFor(null, 100.0);
-
+                        // Sin dato para ESTA muestra en este factor: se
+                        // excluye del promedio de la familia, no se rellena.
                         continue;
                     }
 
@@ -956,35 +1080,67 @@ class BacktestingService
                     }
 
                     $percentile = $this->fundamentalScorer->percentileRank($value, $peerValues, $factor['higher_is_better']);
+
+                    if ($percentile === null) {
+                        // Sector con menos de MIN_PEERS peers con dato no
+                        // nulo para este factor concreto: misma exclusion
+                        // que "sin dato propio", no un 50 de relleno.
+                        continue;
+                    }
+
                     $points[] = $this->fundamentalScorer->pointsFor($percentile, 100.0);
+                }
+
+                if ($points === []) {
+                    // Ningun factor de esta familia tuvo dato utilizable
+                    // hoy: la familia entera queda fuera del promedio.
+                    continue;
                 }
 
                 $familyScores[$family] = array_sum($points) / count($points);
             }
 
+            if ($familyScores === []) {
+                // Ninguna de las tres familias aporto dato utilizable: la
+                // muestra no puede rankearse, ni siquiera ser "elegible".
+                $droppedNoUsableFactors++;
+
+                continue;
+            }
+
             $sample['fundamental_score'] = array_sum($familyScores) / count($familyScores);
+            $usable[] = $sample;
         }
 
-        unset($sample);
+        if ($usable === []) {
+            return [
+                'selected' => [],
+                'eligible' => [],
+                'dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+                'dropped_no_usable_factors' => $droppedNoUsableFactors,
+            ];
+        }
 
         // e. Top-N por fundamental_score descendente.
         usort(
-            $survivors,
+            $usable,
             static fn (array $left, array $right): int
                 => [$right['fundamental_score'], $left['ticker']] <=> [$left['fundamental_score'], $right['ticker']]
         );
 
-        $selected = array_map(
+        $eligible = array_map(
             static fn (array $sample): array => [
                 'ticker' => $sample['ticker'],
                 'forward_return' => $sample['forward_return'],
             ],
-            array_slice($survivors, 0, $topN)
+            $usable
         );
 
         return [
-            'selected' => $selected,
+            'selected' => array_slice($eligible, 0, $topN),
+            'eligible' => $eligible,
             'dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+            'dropped_no_usable_factors' => $droppedNoUsableFactors,
         ];
     }
 
@@ -993,7 +1149,11 @@ class BacktestingService
      * plano (campo => valor), para poder indexar por el `field` de
      * `self::FUNDAMENTAL_FACTORS` (una cadena que PHPStan no puede acotar a
      * un literal fijo) sin arriesgar un acceso de indice dinamico sobre el
-     * array-shape estricto de `$daySamples`/`$survivors`.
+     * array-shape estricto de `$daySamples`/`$survivors`. Devuelve los
+     * siete campos (incluidos `earnings_yield`/`cash_conversion`, aunque
+     * `self::FUNDAMENTAL_FACTORS` ya no los use para rankear desde el
+     * `2026-09-04`): siguen expuestos aqui porque otros consumidores de la
+     * muestra (ficha de detalle, API) los muestran igualmente.
      *
      * @param array{free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float} $sample
      * @return array<string,?float>
@@ -1191,7 +1351,7 @@ class BacktestingService
      * bursatil real del universo con el mismo historico que ya pedia, sin
      * una segunda llamada al proveedor de mercado por ticker.
      *
-     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>, history: list<HistoricalQuote>}
+     * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>, history: list<HistoricalQuote>}
      */
     private function collectSamplesWithHistory(string $ticker, int $horizonDays, int $step, string $mode): array
     {
@@ -1222,7 +1382,7 @@ class BacktestingService
      * sin necesidad de un descarte aparte.
      *
      * @param list<HistoricalQuote> $history
-     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>
+     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>
      */
     private function sampleHistory(Stock $stock, array $history, int $horizonDays, int $step, string $mode): array
     {
@@ -1261,7 +1421,25 @@ class BacktestingService
             // para que la merma quede visible (ver
             // `samples_dropped_momentum_null`/`fundamentals_point_in_time_pct`,
             // mismo criterio de "no ocultar lo que no se pudo medir").
-            if ($momentum12m1 === null) {
+            //
+            // roadmap.md, "Prioridad cero-ter" punto 2 (2026-09-04): esta
+            // exigencia se mantiene para 'full'/'technical'/'momentum' (los
+            // tres usan momentum12m1, ya sea dentro del score o para
+            // rankear en `rankByMomentumNeutral()`), pero NO para
+            // 'fundamental': ese modo rankea por `fundamental_score`
+            // (`rankByFundamentalNeutral()`), nunca lee `momentum12m1`, y
+            // exigirlo igualmente descartaba ~9,7% de la muestra en la
+            // corrida real de P3.3 por un motivo ajeno al ranking medido.
+            // Verificado antes de este cambio que
+            // `$this->scoreCalculator->calculate()` no rompe con
+            // `$technical->getMomentum12m1() === null` mas abajo: solo lo
+            // consume `TechnicalScoreAnalyzer::momentum()`, que ya rellena
+            // un neutral silencioso (3,5/7 puntos) cuando falta -- ese
+            // `percentage`/`recommendation` no se usa para rankear en modo
+            // 'fundamental' (el ranking usa `fundamental_score`, no
+            // `percentage`), asi que el neutral silencioso no contamina
+            // nada aqui.
+            if ($momentum12m1 === null && $mode !== 'fundamental') {
                 ++$this->momentumNullDropped;
 
                 continue;

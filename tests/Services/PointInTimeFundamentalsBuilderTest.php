@@ -231,7 +231,13 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
     /**
      * Patrimonio negativo (recompras agresivas, p.ej. McDonald's o Boeing):
      * ROE y precio/valor contable dejan de significar nada y se devuelven
-     * como ausentes en vez de como un numero enorme y negativo.
+     * como ausentes en vez de como un numero enorme y negativo. Cubre
+     * tambien `debtToEquity` (roadmap.md, "Prioridad cero-ter" punto 3,
+     * `2026-09-04`): con patrimonio negativo el ratio invertiria el signo
+     * (empresa insolvente puntuando como "poco endeudada"); ya se excluia
+     * de forma indirecta via `positive($totalStockholdersEquity)` antes de
+     * este cambio, pero ahora la propia expresion de `debtToEquity` lo
+     * comprueba explicitamente, sin depender solo de esa reutilizacion.
      */
     public function testConPatrimonioNegativoNoSeInventanRatios(): void
     {
@@ -906,6 +912,51 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
 
         self::assertNotNull($f);
         self::assertNull($f->getCashConversion(), 'Beneficio neto cero: la division no significa nada.');
+    }
+
+    /**
+     * roadmap.md, "Prioridad cero-ter" punto 3 (`2026-09-04`): con FCF y
+     * beneficio neto ambos NEGATIVOS, la guarda anterior (`!= 0.0`) dejaba
+     * pasar la division y el signo negativo entre dos negativos daba un
+     * ratio POSITIVO que aparentaba buena conversion de caja -- el caso
+     * degenerado exacto que la guarda tiene que evitar, no solo la division
+     * por cero.
+     */
+    public function testCashConversionEsNuloConFcfYBeneficioNetoAmbosNegativos(): void
+    {
+        $periodo = new FiscalPeriod(
+            ticker: 'BURNING',
+            endDate: new DateTimeImmutable('2025-12-31'),
+            filingDate: new DateTimeImmutable('2026-02-15'),
+            periodType: FiscalPeriodType::Annual,
+            revenue: 5_000_000_000.0,
+            grossProfit: 1_000_000_000.0,
+            operatingIncome: -800_000_000.0,
+            netIncome: -1_000_000_000.0,
+            ebitda: -400_000_000.0,
+            ebit: -800_000_000.0,
+            incomeBeforeTax: -800_000_000.0,
+            incomeTaxExpense: 0.0,
+            epsDiluted: -1.0,
+            sharesDiluted: 1_000_000_000.0,
+            totalStockholdersEquity: 2_000_000_000.0,
+            totalDebt: 1_000_000_000.0,
+            netDebt: 800_000_000.0,
+            totalCurrentAssets: 1_500_000_000.0,
+            totalCurrentLiabilities: 1_000_000_000.0,
+            freeCashFlow: -600_000_000.0,
+            commonDividendsPaid: null
+        );
+
+        $f = (new PointInTimeFundamentalsBuilder([$periodo]))->buildFor(new DateTimeImmutable('2026-03-01'), 10.0);
+
+        self::assertNotNull($f);
+        // Sin la guarda corregida, -600M/-1.000M = 0,6 (aparenta buena
+        // conversion de caja); con la guarda, null.
+        self::assertNull(
+            $f->getCashConversion(),
+            'FCF y beneficio neto ambos negativos: el ratio positivo resultante no significa "buena conversion de caja".'
+        );
     }
 
     public function testMezclarPeriodosAnualesYTrimestralesLanzaExcepcion(): void

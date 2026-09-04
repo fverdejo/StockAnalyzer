@@ -39,8 +39,12 @@ class Fundamentals
      *                      las empresas con perdidas en un ranking por percentil.
      * @param ?float $cashConversion Flujo de caja libre TTM entre beneficio neto TTM
      *                      (ratio, ej. 1.1 = el flujo de caja libre superó el beneficio
-     *                      contable un 10%). Null si el beneficio neto es cero (division
-     *                      sin sentido) o si no hay dato de alguno de los dos.
+     *                      contable un 10%). Null si el beneficio neto NO es positivo
+     *                      (`PointInTimeFundamentalsBuilder`, roadmap.md "Prioridad
+     *                      cero-ter" punto 3, `2026-09-04`: con beneficio cero la
+     *                      division no significa nada, y con FCF y beneficio neto
+     *                      ambos negativos el ratio sale positivo y aparentaria buena
+     *                      conversion de caja) o si no hay dato de alguno de los dos.
      */
     public function __construct(
         private readonly ?float $per,

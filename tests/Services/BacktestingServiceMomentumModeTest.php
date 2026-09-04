@@ -33,6 +33,11 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  * `FundamentalsHistoryRepository` en memoria
  * (`InMemoryFundamentalsHistoryRepository`) que decide, ticker a ticker, si
  * `market_cap_is_point_in_time` sale `true` o `false`.
+ *
+ * `testAlphaSeMideContraElUniversoElegibleNoContraTodosLosDisponibles()`
+ * cubre ademas roadmap.md, "Prioridad cero-ter" punto 5 (2026-09-04): la
+ * alpha principal se mide contra `$ranking['eligible']`, no contra
+ * `$daySamples` completo.
  */
 final class BacktestingServiceMomentumModeTest extends TestCase
 {
@@ -314,5 +319,81 @@ final class BacktestingServiceMomentumModeTest extends TestCase
         self::assertSame(40, $result['dates'][0]['universe_size']);
         self::assertSame(['BSTAR'], $result['dates'][0]['top_tickers']);
         self::assertSame(42.0, $result['dates'][0]['top_avg_forward_return']);
+    }
+
+    /**
+     * roadmap.md, "Prioridad cero-ter" punto 5 (2026-09-04): la alpha
+     * PRINCIPAL de cada fecha se mide contra el subconjunto ELEGIBLE (los
+     * que sobrevivieron a `rankByMomentumNeutral()`), no contra
+     * `$daySamples` completo. `OUTLIER` esta en un sector de un unico
+     * ticker (por debajo de `MIN_SECTOR_SAMPLES_MOMENTUM`), asi que NUNCA
+     * pudo competir por el top-N -- pero su `forward_return` extremo (-80%)
+     * SI cuenta en el universo completo. Los 21 tickers elegibles tienen
+     * `forward_return` = 2,0% exacto cada uno (independiente de su
+     * momentum, ver el docblock de `momentumTickerHistory()`: el retorno se
+     * mide desde la ENTRADA, que es el propio `$target`, asi que el
+     * momentum no lo desplaza), asi que cualquier top-N que se elija entre
+     * ellos promedia tambien 2,0% exacto: la alpha principal (contra
+     * elegibles) sale 0,0 EXACTA, mientras que la alpha contra el universo
+     * completo se desplaza mucho por `OUTLIER`.
+     */
+    public function testAlphaSeMideContraElUniversoElegibleNoContraTodosLosDisponibles(): void
+    {
+        $stocksByTicker = [];
+        $historiesByTicker = [];
+        $fundamentalsHistory = new InMemoryFundamentalsHistoryRepository();
+        $tickers = [];
+
+        // Sector elegible: 21 tickers (>= MIN_SECTOR_SAMPLES_MOMENTUM = 20),
+        // momentum variado (para que la neutralizacion tenga algo que
+        // hacer) pero forward_return CONSTANTE.
+        for ($i = 0; $i <= 20; $i++) {
+            $ticker = sprintf('T%02d', $i);
+            $tickers[] = $ticker;
+            $stocksByTicker[$ticker] = $this->stockFor($ticker, 'tech');
+            $historiesByTicker[$ticker] = $this->momentumTickerHistory(100.0, (float) $i, 2.0);
+            $fundamentalsHistory->withMarketCapSnapshot($ticker, 1_000_000_000.0);
+        }
+
+        // Sector demasiado pequeño (1 < 20): nunca elegible, pero su
+        // retorno extremo SI cuenta en el universo completo.
+        $tickers[] = 'OUTLIER';
+        $stocksByTicker['OUTLIER'] = $this->stockFor('OUTLIER', 'energy');
+        $historiesByTicker['OUTLIER'] = $this->momentumTickerHistory(100.0, 500.0, -80.0);
+        $fundamentalsHistory->withMarketCapSnapshot('OUTLIER', 1_000_000_000.0);
+
+        $service = new BacktestingService(
+            new PerTickerStockAndHistoryProvider($stocksByTicker, $historiesByTicker),
+            new TechnicalAnalyzer(),
+            new ScoreCalculator(),
+            new RiskLevelsCalculator(new RiskLevelsConfig(2.5, 2.0)),
+            fundamentalsHistory: $fundamentalsHistory
+        );
+
+        $result = $service->runCrossSectional($tickers, self::HORIZON_DAYS, self::STEP, 3, 'momentum');
+
+        self::assertSame([], $result['errors']);
+        self::assertSame(1, $result['dates_evaluated']);
+        self::assertSame(1, $result['samples_dropped_thin_sector']);
+        self::assertSame(22, $result['dates'][0]['universe_size']);
+        self::assertNotContains('OUTLIER', $result['dates'][0]['top_tickers']);
+
+        self::assertSame(2.0, $result['dates'][0]['top_avg_forward_return']);
+        self::assertSame(2.0, $result['dates'][0]['universe_avg_forward_return']);
+        self::assertSame(0.0, $result['dates'][0]['alpha']);
+
+        // Diagnostico secundario: SI se mueve por OUTLIER (21 tickers a
+        // 2,0% + 1 a -80%, entre los 22 disponibles ese dia).
+        $expectedAllAvailable = ((21 * 2.0) + (-80.0)) / 22;
+        self::assertEqualsWithDelta(
+            $expectedAllAvailable,
+            $result['dates'][0]['universe_avg_forward_return_all_available'],
+            0.01
+        );
+        self::assertEqualsWithDelta(
+            2.0 - $expectedAllAvailable,
+            $result['dates'][0]['alpha_vs_all_available'],
+            0.01
+        );
     }
 }

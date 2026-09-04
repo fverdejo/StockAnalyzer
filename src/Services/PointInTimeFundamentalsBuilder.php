@@ -179,9 +179,13 @@ class PointInTimeFundamentalsBuilder
         $ebitdaTtm = $this->positive($this->figure($ttm, 'ebitda'));
         $freeCashFlowTtm = $this->figure($ttm, 'freeCashFlow');
         // FCF/beneficio neto: cuanto del beneficio contable se convirtio de
-        // verdad en caja. Null con beneficio neto cero (division sin
-        // sentido) o si falta cualquiera de los dos, nunca inventado.
-        $cashConversion = ($freeCashFlowTtm !== null && $netIncomeTtm !== null && $netIncomeTtm != 0.0)
+        // verdad en caja. Solo tiene sentido con beneficio neto POSITIVO
+        // (roadmap.md, "Prioridad cero-ter" punto 3, `2026-09-04`): con
+        // `$netIncomeTtm != 0.0` (guarda anterior) un FCF y un beneficio
+        // neto ambos NEGATIVOS producian un ratio POSITIVO que aparentaba
+        // buena conversion de caja -- exactamente el caso degenerado que
+        // esta guarda tiene que evitar, no solo la division por cero.
+        $cashConversion = ($freeCashFlowTtm !== null && $netIncomeTtm !== null && $netIncomeTtm > 0.0)
             ? $freeCashFlowTtm / $netIncomeTtm
             : null;
 
@@ -199,7 +203,12 @@ class PointInTimeFundamentalsBuilder
             marketCap: $marketCap,
             // Ratio puro, no porcentaje: asi lo normaliza YahooParser. El
             // balance no se suma entre periodos: es el ultimo publicado.
-            debtToEquity: ($current->totalDebt !== null && $equity !== null)
+            // Patrimonio <= 0 se excluye ademas de null (roadmap.md,
+            // "Prioridad cero-ter" punto 3, `2026-09-04`): con patrimonio
+            // negativo el ratio invierte el signo y una empresa insolvente
+            // puntuaria como "poco endeudada" (`debt_to_equity` es "menor es
+            // mejor" en el ranking de `RelativeFundamentalScorer`).
+            debtToEquity: ($current->totalDebt !== null && $equity !== null && $equity > 0.0)
                 ? $current->totalDebt / $equity
                 : null,
             freeCashFlow: $freeCashFlowTtm,
