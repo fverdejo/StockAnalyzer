@@ -46,8 +46,21 @@ echo 'Backfill de eodhd_raw_fundamentals -> eodhd_raw_fundamental_versions' . PH
 printf('Filas en origen (eodhd_raw_fundamentals): %d%s', $sourceCount, PHP_EOL);
 echo str_repeat('-', 62) . PHP_EOL;
 
-$statement = $pdo->query(
-    'SELECT ticker, payload_json, payload_hash, fetched_at FROM eodhd_raw_fundamentals ORDER BY ticker'
+// Deliberadamente NO se hace un unico SELECT de las 4 columnas para las 938
+// filas: PDO usa consultas "bufferadas" por defecto con el driver de MySQL,
+// asi que un SELECT que devuelva los ~580 MB de payload_json de golpe los
+// carga TODOS en memoria antes de que el bucle procese la primera fila.
+// Colgo la Raspberry Pi de produccion (906 MiB de RAM, ~199 MiB de swap) la
+// primera vez que se ejecuto este script ahi -- no fue la compresion gzip,
+// fue este SELECT. Primero se piden solo los tickers (cadenas cortas,
+// coste de memoria insignificante) y despues se pide el payload de UNO en
+// UNO dentro del bucle, para que en memoria haya como mucho un payload a la
+// vez (el mayor de los 938 no llega a unos pocos MB).
+$tickers = $pdo->query('SELECT ticker FROM eodhd_raw_fundamentals ORDER BY ticker')
+    ->fetchAll(PDO::FETCH_COLUMN);
+
+$rowStatement = $pdo->prepare(
+    'SELECT payload_json, payload_hash, fetched_at FROM eodhd_raw_fundamentals WHERE ticker = :ticker'
 );
 
 $copied = 0;
@@ -57,9 +70,23 @@ $index = 0;
 /** @var list<string> $corruptedTickers */
 $corruptedTickers = [];
 
-while (($row = $statement->fetch()) !== false) {
+foreach ($tickers as $ticker) {
     ++$index;
-    $ticker = (string) $row['ticker'];
+    $ticker = (string) $ticker;
+
+    $rowStatement->execute(['ticker' => $ticker]);
+    $row = $rowStatement->fetch();
+    $rowStatement->closeCursor();
+
+    if ($row === false) {
+        // No debería pasar (el ticker viene de la misma tabla), pero si la
+        // fila se borró entre el SELECT de tickers y este fetch, se salta
+        // en vez de fallar todo el backfill.
+        printf('[%3d/%3d] %-10s ya no existe en origen, se salta%s', $index, $sourceCount, $ticker, PHP_EOL);
+
+        continue;
+    }
+
     $payloadJson = (string) $row['payload_json'];
     $storedHash = (string) $row['payload_hash'];
     $fetchedAt = new DateTimeImmutable((string) $row['fetched_at']);
