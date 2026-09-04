@@ -6427,3 +6427,38 @@ Verificado con Playwright (`Chart.getChart(canvas)` para leer `scales.x/y.min/ma
 - Labels de `Signal::getLabel()` (`TechnicalScoreAnalyzer.php`) sin acentuar, para no romper el `match()` de `IndicatorEducation.php` sin coordinar ambos ficheros.
 - Asunto/cuerpo del correo de verificacion de cuenta (`AuthService.php`) sin revisar, fuera de los dos lotes de `Web/`.
 - `roadmap.md`/`versions.md` (miles de lineas) y comentarios/docblocks de codigo: excluidos a proposito, decision explicita del usuario.
+
+---
+
+## 2026-09-04 (quinta entrada) - Bloque A del plan de Codex: `eodhd_raw_fundamentals` deja de perder sus capturas anteriores en cada re-descarga
+
+Estado: implementado y verificado contra los datos reales de `ddev` (938/938 tickers, dos ejecuciones para confirmar idempotencia). Cierra el Bloque A de `PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md` (Codex): "proteger lo ya pagado antes de nuevas descargas". Explicitamente FUERA de este lote: A2 (backup/replicacion a la Raspberry, pregunta de infraestructura del usuario), A3 (confirmacion por escrito de la licencia de retencion de EODHD), y todo el Bloque B (v1.1, Calendar, dividendos/splits -- ninguna llamada nueva a la red de EODHD en esta tarea).
+
+Objetivo: `eodhd_raw_fundamentals` (019) guarda una unica fila por ticker con UPSERT (`ON DUPLICATE KEY UPDATE`) -- un `--force` futuro, o simplemente volver a archivar con la API v1.1 cuando llegue el Bloque B, sobrescribe la captura anterior sin dejar rastro. Antes de gastar mas cuota de la suscripcion de pago (100.000 peticiones/dia, ~3.720 usadas segun `fiabilidad-datos-mercado`, fecha de vencimiento exacta desconocida), habia que dejar de poder perder sin querer lo que ya esta pagado y archivado.
+
+### Decisiones de arquitectura
+
+- **Tabla nueva, no una migracion destructiva de la existente**: `eodhd_raw_fundamental_versions` (`database/migrations/025_create_eodhd_raw_fundamental_versions.sql`) vive junto a `eodhd_raw_fundamentals`, que no se toca ni se migra -- sigue siendo "la ultima version conocida por ticker", usada tal cual por sus consumidores actuales (`bin/archive-eodhd-fundamentals.php`, `storage/scratch/run_fundamental_only_backtest.php` y el resto de scripts de investigacion que llaman a `find($ticker)`). La tabla nueva es un HISTORIAL, no un reemplazo.
+- **Clave unica `(ticker, api_version, section, payload_hash)`**: si el contenido no cambia entre dos capturas, `INSERT IGNORE` la descarta sin duplicar. `api_version`/`section` dejan sitio para Fundamentals v1.1 y para secciones parciales (`Financials`/`Earnings`/`outstandingShares`...) del Bloque B, pero hoy solo se usan `'legacy'`/`'full'` -- no se crea ninguna logica de secciones parciales sin consumidor todavia, tal como pedia el encargo.
+- **`payload_compressed` (LONGBLOB, gzip) en vez de LONGTEXT sin comprimir**: a 580,6 MB para 938 tickers (medido en la tabla real antes de tocar nada), repetir ese tamano sin comprimir en cada version futura no es sostenible. `payload_hash` se calcula SIEMPRE sobre el JSON ORIGINAL sin comprimir, nunca sobre el comprimido -- `gzencode()` no es determinista byte a byte entre ejecuciones aunque el contenido sea identico, asi que hashear el comprimido habria roto la deduplicacion por contenido real.
+- **Verificacion activa del ciclo comprimir/descomprimir dentro de `store()`**, no solo en un test: `EodhdRawFundamentalVersionsRepository::compressAndVerify()` descomprime inmediatamente lo que acaba de comprimir y compara byte a byte contra el JSON original antes de dejar que el `INSERT` siga adelante, lanzando `RuntimeException` si no coincide. El proposito entero de esta tabla es no perder nunca una captura ya pagada; una compresion corrupta silenciosa seria peor que no versionar nada.
+- **`store()` devuelve `void`** (firma pedida explicitamente): el script de backfill mide idempotencia comparando `count()` antes/despues de cada llamada, no anadiendo un metodo nuevo (`hasVersion()` o similar) que nadie pidio solo para reportar un numero en un script de un solo uso.
+- **`bin/backfill-eodhd-fundamental-versions.php` no toca la red** y no reutiliza `EodhdRawFundamentalsRepository::find()` (que solo expone el JSON, no el `payload_hash`/`fetched_at` guardados): lee `eodhd_raw_fundamentals` directamente por SQL, mismo patron ya usado por otros scripts de informe/backfill de un solo uso de `bin/` (p.ej. `compare-fundamentals-history-v2110.php`). Antes de copiar cada fila recalcula `hash('sha256', payload_json)` y lo compara con el hash ya guardado en origen -- un ticker cuyo hash no cuadra (corrupcion) se omite y se cuenta aparte, en vez de archivar una version de la que no se sabe si es integra.
+
+### Incluye
+
+Nuevo: `database/migrations/025_create_eodhd_raw_fundamental_versions.sql`, `src/Repository/EodhdRawFundamentalVersionsRepository.php` (`store()`, `latestFor()`, `allVersionsFor()`, `count()`, `countDistinctTickers()`), `bin/backfill-eodhd-fundamental-versions.php`, `tests/Integration/EodhdRawFundamentalVersionsRepositoryTest.php` (9 tests: sin versiones, store/latestFor, ciclo comprimir/descomprimir con un payload grande de >1MB con acentos/simbolos no ASCII, normalizacion de ticker a mayusculas, deduplicacion por hash identico, version nueva con contenido distinto, `api_version`/`section` distintos no cuentan como duplicado, `allVersionsFor()` no expone `payload_compressed`, `count()`/`countDistinctTickers()`). Modificado: `tests/Integration/IntegrationTestCase.php` (`eodhd_raw_fundamental_versions` anadida a la lista de tablas que se vacian antes de cada test).
+
+### Verificado en ddev con
+
+Migracion aplicada sobre la base real de `ddev` (`php bin/migrate.php`, junto con la `024` que tambien estaba pendiente de aplicar ahi): `DESCRIBE eodhd_raw_fundamental_versions` confirma el esquema esperado. `php bin/backfill-eodhd-fundamental-versions.php` ejecutado dos veces seguidas contra los 938 tickers reales de `eodhd_raw_fundamentals`:
+
+- **Primera ejecucion**: `Copiados ahora: 938 | ya existian: 0 | corruptos (omitidos): 0`. Verificacion de cobertura: `COUNT(*)` origen = 938, `COUNT(DISTINCT ticker)` destino = 938, `OK`.
+- **Segunda ejecucion (idempotencia real, no solo teorica)**: `Copiados ahora: 0 | ya existian: 938 | corruptos (omitidos): 0`, misma verificacion de cobertura en 938/938 -- ninguna fila duplicada, confirmado tambien con `SELECT COUNT(*) FROM eodhd_raw_fundamental_versions` = 938 (no 1.876) tras las dos ejecuciones.
+- **Compresion real medida en la base**: `SUM(LENGTH(payload_json))` en `eodhd_raw_fundamentals` = 580,6 MB (coincide exacto con la cifra que ya traia el plan de Codex); `SUM(LENGTH(payload_compressed))` en la tabla nueva = 55,9 MB -- ratio ~10,4x.
+
+`ddev exec vendor/bin/phpunit`: **550 tests, 1.556 assertions, OK** (1 skip preexistente sin relacion), incluidos los 9 tests nuevos ejecutados tambien en aislamiento (`OK (9 tests, 27 assertions)`). `ddev exec vendor/bin/phpstan analyse`: sin errores (258 ficheros), limpio.
+
+### Resultado esperado
+
+Ninguna descarga futura (v1.1, un `--force`, o una re-archivada por cualquier motivo) puede volver a destruir una captura ya pagada de EODHD: cada version distinta queda archivada aparte, comprimida, con su hash verificado, y las identicas no duplican espacio. Bloque A del plan de Codex cerrado salvo A2 (backup/replicacion a la Raspberry) y A3 (confirmacion escrita de licencia), que quedan fuera de este encargo, a decidir por el usuario. Bloques B-F del plan siguen sin empezar.
