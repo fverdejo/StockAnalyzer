@@ -44,7 +44,7 @@ class RiskLevelsBadge
      * es transversal, no concentrado en un sector concreto — no hay base
      * para segmentar el aviso.
      */
-    private const GAP_RISK_NOTE = 'El stop-loss es orientativo, no una orden real: en el historico de 10 años medido en la app, el 15,77% de las salidas por este tipo de stop abrieron el mercado ya por debajo del nivel calculado (hueco de apertura), con una perdida real un 22% peor que la teorica en esos casos.';
+    private const GAP_RISK_NOTE = 'El stop-loss es orientativo, no una orden real: en el histórico de 10 años medido en la app, el 15,77% de las salidas por este tipo de stop abrieron el mercado ya por debajo del nivel calculado (hueco de apertura), con una pérdida real un 22% peor que la teórica en esos casos.';
 
     /**
      * Cuando el que acota la cantidad es el peso maximo por posicion y no
@@ -61,7 +61,7 @@ class RiskLevelsBadge
         $quantity = Layout::escape(self::formatQuantity($suggestedPosition->getQuantity()));
         $why = $suggestedPosition->isLimitedByMaxWeight()
             ? sprintf(
-                'Referencia orientativa, no una cantidad exacta: se mueve con el precio y con el valor del resto de la cartera. Limitado al %s maximo por posicion (el riesgo por operacion permitiria comprar mas).',
+                'Referencia orientativa, no una cantidad exacta: se mueve con el precio y con el valor del resto de la cartera. Limitado al %s máximo por posición (el riesgo por operación permitiría comprar más).',
                 self::formatPercent($suggestedPosition->getMaxPositionPercent())
             )
             : 'Referencia orientativa, no una cantidad exacta: se mueve con el precio, con el stop-loss y con el valor del resto de la cartera.';

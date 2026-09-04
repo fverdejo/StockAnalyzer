@@ -141,10 +141,10 @@ class DashboardPage
                         <tr>
                             <th class="rank-cell">#</th>
                             {$starHeader}
-                            <th>Accion</th>
+                            <th>Acción</th>
                             <th class="num">Precio</th>
                             <th class="num">Score</th>
-                            <th>Recomendacion</th>
+                            <th>Recomendación</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -189,7 +189,7 @@ HTML;
         }
 
         return sprintf(
-            '<section class="panel panel-notice"><strong>%s concentra %s de las %d primeras posiciones (%s%%).</strong> El ranking ordena por puntuacion, no reparte por sector: comprar el top tal cual seria apostar en buena parte por un solo sector. Reparto completo: %s.</section>',
+            '<section class="panel panel-notice"><strong>%s concentra %s de las %d primeras posiciones (%s%%).</strong> El ranking ordena por puntuación, no reparte por sector: comprar el top tal cual sería apostar en buena parte por un solo sector. Reparto completo: %s.</section>',
             Layout::escape(SectorLabel::translate($top['sector'])),
             Layout::escape((string) $top['count']),
             $shown,
@@ -249,7 +249,7 @@ HTML;
                 number_format($quote->getVolume(), 0, ',', '.'),
                 Layout::formatNumber($score->getPercentage()),
                 Layout::recommendationClass($recommendation),
-                Layout::escape($recommendation)
+                Layout::escape(RecommendationLabel::translate($recommendation))
             );
         }
 
@@ -289,7 +289,7 @@ HTML;
             : '-';
 
         return sprintf(
-            '<section class="cards"><div class="metric"><span class="muted">Analizadas</span><strong>%d</strong></div><div class="metric"><span class="muted">Score medio</span><strong>%s%%</strong></div><div class="metric"><span class="muted">Candidatas compra</span><strong>%d</strong></div><div class="metric"><span class="muted">Mejor accion</span><strong>%s</strong></div></section>',
+            '<section class="cards"><div class="metric"><span class="muted">Analizadas</span><strong>%d</strong></div><div class="metric"><span class="muted">Score medio</span><strong>%s%%</strong></div><div class="metric"><span class="muted">Candidatas compra</span><strong>%d</strong></div><div class="metric"><span class="muted">Mejor acción</span><strong>%s</strong></div></section>',
             $count,
             Layout::formatNumber($averagePercentage),
             $buyCount,
@@ -320,14 +320,14 @@ HTML;
                     '<a class="ticker-link" href="%s"><div class="list-row"><span><strong>%s</strong> <span class="muted">%s</span></span><span>%s%%</span></div></a>',
                     self::detailHref($ticker, $rawTickers),
                     Layout::escape($ticker),
-                    Layout::escape($recommendation),
+                    Layout::escape(RecommendationLabel::translate($recommendation)),
                     Layout::formatNumber($analysis->getScore()->getPercentage())
                 ),
             ];
         }
 
         if ($items === []) {
-            return '<div class="muted">Sin resultados en esta categoria.</div>';
+            return '<div class="muted">Sin resultados en esta categoría.</div>';
         }
 
         if (in_array('STRONG SELL', $recommendations, true)) {
@@ -362,10 +362,10 @@ HTML;
     {
         $options = [
             '' => 'Todas',
-            'BUY' => 'BUY',
-            'HOLD' => 'HOLD',
-            'SELL' => 'SELL',
-            'STRONG SELL' => 'STRONG SELL',
+            'BUY' => RecommendationLabel::translate('BUY'),
+            'HOLD' => RecommendationLabel::translate('HOLD'),
+            'SELL' => RecommendationLabel::translate('SELL'),
+            'STRONG SELL' => RecommendationLabel::translate('STRONG SELL'),
         ];
 
         return self::options($options, $selected);
@@ -422,7 +422,7 @@ HTML;
         }
 
         if ($isLive) {
-            return '<p class="muted panel-note">Universo "Movimientos de hoy": las 20 acciones que mas suben y las 20 que mas bajan hoy en el mercado de EEUU, segun el listado "Day Gainers" / "Day Losers" de <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank" rel="noopener">Yahoo Finance</a>. <strong>No es una lista de candidatos a compra:</strong> son valores que ya se han movido mucho hoy, con menos datos fundamentales disponibles que un universo curado, y la lista cambia casi entera de un dia para otro, asi que una recomendacion de ayer no se puede seguir aqui.</p>';
+            return '<p class="muted panel-note">Universo "Movimientos de hoy": las 20 acciones que más suben y las 20 que más bajan hoy en el mercado de EEUU, según el listado "Day Gainers" / "Day Losers" de <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank" rel="noopener">Yahoo Finance</a>. <strong>No es una lista de candidatos a compra:</strong> son valores que ya se han movido mucho hoy, con menos datos fundamentales disponibles que un universo curado, y la lista cambia casi entera de un día para otro, así que una recomendación de ayer no se puede seguir aquí.</p>';
         }
 
         return '<p class="muted panel-note">No se ha podido consultar en vivo el listado de subidas/bajadas de Yahoo Finance; se muestra una lista de respaldo diversificada en su lugar.</p>';

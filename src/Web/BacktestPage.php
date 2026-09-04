@@ -139,24 +139,24 @@ HTML;
         $summary = self::renderUniverseSummary(is_array($result['aggregate'] ?? null) ? $result['aggregate'] : []);
 
         return $summary
-            . '<section class="panel"><h2>Backtesting basico</h2><div class="table-wrap"><table><thead><tr>'
+            . '<section class="panel"><h2>Backtesting básico</h2><div class="table-wrap"><table><thead><tr>'
             . '<th>Ticker</th>'
-            . self::columnHeader('Muestras', 'Fotos historicas analizadas de este ticker: cada cierto numero de dias se recalcula la puntuacion usando solo los datos disponibles hasta esa fecha y se mide que hizo el precio durante el horizonte elegido. Cuantas mas muestras, mas fiable es el resto de la fila.')
-            . self::columnHeader('Compras', 'Cuantas de esas muestras dieron recomendacion BUY. Es el tamaño real de la prueba: con muy pocas señales, el retorno y el win rate de compras son anecdota, no evidencia.')
-            . self::columnHeader('Retorno compras', 'Retorno medio del precio durante el horizonte, contando solo las muestras con señal BUY. Es comprar y mantener hasta el final del horizonte, sin stop loss ni objetivo.')
-            . self::columnHeader('Win rate compras', 'Porcentaje de señales BUY que terminaron el horizonte en positivo. Un 0% exacto no cuenta como acierto: sin movimiento no hay ganancia que respalde la señal.')
-            . self::columnHeader('Ventas', 'Cuantas muestras dieron recomendacion SELL o STRONG SELL.')
-            . self::columnHeader('Retorno ventas', 'Retorno medio del precio durante el horizonte tras las señales SELL/STRONG SELL. Aqui lo deseable es que sea negativo: significa que la señal aviso de una caida.')
-            . self::columnHeader('Win rate ventas', 'Porcentaje de señales SELL/STRONG SELL tras las que el precio subio. Al contrario que en compras, un valor alto es mala noticia: la señal recomendo salir de subidas.')
-            . self::columnHeader('Benchmark', 'Retorno de comprar y mantener el ticker desde el primer hasta el ultimo dia del historico disponible, sin usar ninguna señal. Es la referencia pasiva; cubre todo el historico, no el horizonte, asi que no se compara dato a dato con las columnas de retorno.', true)
-            . self::columnHeader('Peor gestionado', 'Peor resultado de una sola operacion entre las compras simuladas con gestion de riesgo (stop loss y objetivo activos): el golpe maximo que habria encajado la estrategia. Solo entran las señales BUY con niveles de riesgo calculables.', true)
-            . self::columnHeader('Alpha vs todos los dias', 'Retorno medio de las compras de este ticker menos el retorno medio de todas sus muestras, con señal o sin ella. Positivo = filtrar por señal aporta algo frente a estar comprado cualquier dia; cerca de cero = la señal no añade nada. Es alpha contra el propio ticker, no contra el universo: esa es la tarjeta "Alpha del universo" de arriba.', true)
-            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estandar (Welch). |t| mayor o igual que 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.', true)
+            . self::columnHeader('Muestras', 'Fotos históricas analizadas de este ticker: cada cierto número de días se recalcula la puntuación usando solo los datos disponibles hasta esa fecha y se mide qué hizo el precio durante el horizonte elegido. Cuantas más muestras, más fiable es el resto de la fila.')
+            . self::columnHeader('Compras', 'Cuántas de esas muestras dieron recomendación Comprar. Es el tamaño real de la prueba: con muy pocas señales, el retorno y el win rate de compras son anécdota, no evidencia.')
+            . self::columnHeader('Retorno compras', 'Retorno medio del precio durante el horizonte, contando solo las muestras con señal Comprar. Es comprar y mantener hasta el final del horizonte, sin stop loss ni objetivo.')
+            . self::columnHeader('Win rate compras', 'Porcentaje de señales Comprar que terminaron el horizonte en positivo. Un 0% exacto no cuenta como acierto: sin movimiento no hay ganancia que respalde la señal.')
+            . self::columnHeader('Ventas', 'Cuántas muestras dieron recomendación Vender o Venta fuerte.')
+            . self::columnHeader('Retorno ventas', 'Retorno medio del precio durante el horizonte tras las señales Vender/Venta fuerte. Aquí lo deseable es que sea negativo: significa que la señal avisó de una caída.')
+            . self::columnHeader('Win rate ventas', 'Porcentaje de señales Vender/Venta fuerte tras las que el precio subió. Al contrario que en compras, un valor alto es mala noticia: la señal recomendó salir de subidas.')
+            . self::columnHeader('Benchmark', 'Retorno de comprar y mantener el ticker desde el primer hasta el último día del histórico disponible, sin usar ninguna señal. Es la referencia pasiva; cubre todo el histórico, no el horizonte, así que no se compara dato a dato con las columnas de retorno.', true)
+            . self::columnHeader('Peor gestionado', 'Peor resultado de una sola operación entre las compras simuladas con gestión de riesgo (stop loss y objetivo activos): el golpe máximo que habría encajado la estrategia. Solo entran las señales Comprar con niveles de riesgo calculables.', true)
+            . self::columnHeader('Alpha vs todos los días', 'Retorno medio de las compras de este ticker menos el retorno medio de todas sus muestras, con señal o sin ella. Positivo = filtrar por señal aporta algo frente a estar comprado cualquier día; cerca de cero = la señal no añade nada. Es alpha contra el propio ticker, no contra el universo: esa es la tarjeta "Alpha del universo" de arriba.', true)
+            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estándar (Welch). |t| mayor o igual que 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.', true)
             . '</tr></thead><tbody>'
             . implode('', $rows)
             . '</tbody></table></div>'
             . Layout::renderPagination($pageNum, $totalPages, $paginationBase)
-            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estandar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los dias no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
+            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estándar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los días no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
             . self::renderPointInTimeNote($allResults)
             . '</section>';
     }
@@ -197,11 +197,11 @@ HTML;
         $average = array_sum($coverages) / count($coverages);
 
         if ($average >= 99.5) {
-            return '<p class="muted panel-note">Fundamentales point-in-time: el 100% de las muestras uso los ratios que se conocian en su propia fecha, no los de hoy.</p>';
+            return '<p class="muted panel-note">Fundamentales point-in-time: el 100% de las muestras usó los ratios que se conocían en su propia fecha, no los de hoy.</p>';
         }
 
         return sprintf(
-            '<section class="panel panel-notice"><strong>Solo el %s%% de las muestras uso fundamentales de su propia fecha.</strong> El resto se calculo con los ratios de HOY, que en aquella fecha nadie conocia: sobre esa parte, las categorias FUNDAMENTAL, VALUATION, QUALITY y DIVIDEND —el 56%% del peso del score— entran con sesgo de anticipacion y tienden a favorecer a la señal. La serie de snapshots (<code>fundamentals_history</code>) empezo a acumularse el 2026-08-14 y crece un dia por sesion de mercado: esta cifra subira sola.</section>',
+            '<section class="panel panel-notice"><strong>Solo el %s%% de las muestras usó fundamentales de su propia fecha.</strong> El resto se calculó con los ratios de HOY, que en aquella fecha nadie conocía: sobre esa parte, las categorías FUNDAMENTAL, VALUATION, QUALITY y DIVIDEND —el 56%% del peso del score— entran con sesgo de anticipación y tienden a favorecer a la señal. La serie de snapshots (<code>fundamentals_history</code>) empezó a acumularse el 2026-08-14 y crece un día por sesión de mercado: esta cifra subirá sola.</section>',
             Layout::escape(Layout::formatNumber($average))
         );
     }
@@ -239,7 +239,7 @@ HTML;
             . '<div class="metric"><span class="muted">Media de medias mensuales</span><strong>%s</strong></div>'
             . '<div class="metric"><span class="muted">Peor mes</span><strong>%s</strong></div>'
             . '</section>'
-            . '<p class="muted panel-note">Las muestras de tickers distintos en la misma fecha comparten el movimiento del mercado de ese dia, asi que no son independientes: %d señales de compra proceden en realidad de %d tickers y %d meses distintos. Por eso la media de las medias mensuales (un mes = un voto) acompaña al retorno medio por muestra: si ambas se separan mucho, el resultado esta dominado por unos pocos episodios de mercado.</p>',
+            . '<p class="muted panel-note">Las muestras de tickers distintos en la misma fecha comparten el movimiento del mercado de ese día, así que no son independientes: %d señales de compra proceden en realidad de %d tickers y %d meses distintos. Por eso la media de las medias mensuales (un mes = un voto) acompaña al retorno medio por muestra: si ambas se separan mucho, el resultado está dominado por unos pocos episodios de mercado.</p>',
             (int) ($aggregate['buy_signals'] ?? 0),
             self::nullablePercent($aggregate['avg_buy_forward_return'] ?? null),
             self::nullablePercent($aggregate['buy_alpha_vs_all_days'] ?? null),

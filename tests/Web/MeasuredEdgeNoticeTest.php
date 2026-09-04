@@ -88,7 +88,7 @@ final class MeasuredEdgeNoticeTest extends TestCase
 
         self::assertStringContainsString('no tienen ventaja demostrada', $html);
         self::assertStringNotContainsString('han rendido MENOS', $html);
-        self::assertStringContainsString('no alcanza significancia estadistica', $html);
+        self::assertStringContainsString('no alcanza significancia estadística', $html);
     }
 
     /**
@@ -126,7 +126,7 @@ final class MeasuredEdgeNoticeTest extends TestCase
         $html = MeasuredEdgeNotice::render($this->config(-1.32, significant: true));
 
         self::assertStringContainsString('han rendido MENOS', $html);
-        self::assertStringContainsString('es estadisticamente significativa', $html);
+        self::assertStringContainsString('es estadísticamente significativa', $html);
     }
 
     /**
@@ -138,7 +138,7 @@ final class MeasuredEdgeNoticeTest extends TestCase
         $html = MeasuredEdgeNotice::render($this->config(1.8, significant: true));
 
         self::assertStringContainsString('tienen ventaja medida', $html);
-        self::assertStringContainsString('MAS que la media del universo', $html);
+        self::assertStringContainsString('MÁS que la media del universo', $html);
     }
 
     /**
@@ -177,7 +177,7 @@ final class MeasuredEdgeNoticeTest extends TestCase
     {
         $html = MeasuredEdgeNotice::render($this->config(-0.62));
 
-        self::assertStringContainsString('no equivale a seguir solo las señales BUY', $html);
+        self::assertStringContainsString('no equivale a seguir solo las señales Comprar', $html);
     }
 
     /**

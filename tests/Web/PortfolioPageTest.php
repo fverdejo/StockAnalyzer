@@ -134,8 +134,8 @@ final class PortfolioPageTest extends TestCase
         $html = $this->renderWithConcentration();
 
         $posiciones = strpos($html, '<h2>Posiciones abiertas</h2>');
-        $evolucion = strpos($html, 'Evolucion de la cartera');
-        $concentracion = strpos($html, 'Concentracion de la cartera');
+        $evolucion = strpos($html, 'Evolución de la cartera');
+        $concentracion = strpos($html, 'Concentración de la cartera');
         $historial = strpos($html, '<h2>Historial de operaciones</h2>');
 
         self::assertIsInt($posiciones);
@@ -169,7 +169,7 @@ final class PortfolioPageTest extends TestCase
 
         self::assertStringContainsString('Calor de cartera', $html);
         self::assertStringContainsString('5,00%', $html);
-        self::assertStringNotContainsString('perderias un', $html);
+        self::assertStringNotContainsString('perderías un', $html);
     }
 
     public function testConCalorPorEncimaDelUmbralAvisaConPanelNotice(): void
@@ -178,7 +178,7 @@ final class PortfolioPageTest extends TestCase
 
         $html = $this->renderWithHeat($heat);
 
-        self::assertStringContainsString('perderias un', $html);
+        self::assertStringContainsString('perderías un', $html);
         self::assertStringContainsString('20,00%', $html);
     }
 
@@ -312,7 +312,7 @@ final class PortfolioPageTest extends TestCase
         self::assertStringContainsString('Otros sectores</span><span class="donut-legend-value">1,00%', $html);
         // Los ocho con color propio si salen traducidos y por su nombre.
         self::assertStringContainsString('Inmobiliario', $html);
-        self::assertStringContainsString('Materiales Basicos', $html);
+        self::assertStringContainsString('Materiales Básicos', $html);
     }
 
     /**
@@ -329,13 +329,13 @@ final class PortfolioPageTest extends TestCase
 
         $sobreUmbral = $this->renderWithConcentration(['USD' => 90.0, 'EUR' => 10.0]);
 
-        self::assertStringContainsString('El 90,00% de la cartera esta en USD', $sobreUmbral);
+        self::assertStringContainsString('El 90,00% de la cartera está en USD', $sobreUmbral);
         self::assertStringContainsString('panel-notice', $sobreUmbral);
         // El aviso va DENTRO del panel de concentracion, no suelto detras.
         // De esa anidacion depende la regla `.panel .panel-notice` que le da
         // su separacion superior (`v2.92`): sacarlo del panel lo dejaria
         // otra vez pegado a las barras.
-        $panel = strpos($sobreUmbral, '<h2>Concentracion de la cartera</h2>');
+        $panel = strpos($sobreUmbral, '<h2>Concentración de la cartera</h2>');
         $aviso = strpos($sobreUmbral, 'panel panel-notice', (int) $panel);
         $umbrales = strpos($sobreUmbral, 'Los avisos son orientativos', (int) $panel);
 

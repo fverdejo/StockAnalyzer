@@ -19,7 +19,7 @@ class LoginPage
 
         $body = <<<HTML
         <section class="auth-panel">
-            <h2>Iniciar sesion</h2>
+            <h2>Iniciar sesión</h2>
             {$errorHtml}
             {$messageHtml}
             <form method="post" action="?page=login" class="stack-form">
@@ -29,7 +29,7 @@ class LoginPage
                     <input id="email" name="email" type="email" value="{$emailValue}" autocomplete="email" required>
                 </div>
                 <div>
-                    <label for="password">Contrasena</label>
+                    <label for="password">Contraseña</label>
                     <input id="password" name="password" type="password" autocomplete="current-password" required>
                 </div>
                 <button type="submit">Entrar</button>
@@ -37,10 +37,10 @@ class LoginPage
             <form method="post" action="?page=resend-verification" class="stack-form">
                 <input type="hidden" name="csrf_token" value="{$token}">
                 <div>
-                    <label for="resend_email">¿No te llego el correo de confirmacion?</label>
+                    <label for="resend_email">¿No te llegó el correo de confirmación?</label>
                     <input id="resend_email" name="email" type="email" value="{$emailValue}" placeholder="Tu email" autocomplete="email">
                 </div>
-                <button type="submit" class="secondary-button">Reenviar correo de confirmacion</button>
+                <button type="submit" class="secondary-button">Reenviar correo de confirmación</button>
             </form>
         </section>
 HTML;

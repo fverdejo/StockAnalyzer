@@ -96,7 +96,7 @@ HTML;
     private static function renderCards(Portfolio $portfolio): string
     {
         return sprintf(
-            '<section class="cards"><div class="metric"><span class="muted">Invertido abierto</span><strong>%s</strong></div><div class="metric"><span class="muted">Valor actual</span><strong>%s</strong></div><div class="metric"><span class="muted">Beneficio latente</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Beneficio realizado</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Rendimiento general (todo el historico)</span><strong class="%s">%s</strong></div></section><p class="muted panel-note">Todos los totales de la cartera estan en euros: mezclan posiciones en varias divisas, asi que no tienen una divisa nativa propia. Cada importe de una posicion concreta sigue mostrandose en la divisa en la que cotiza, con su equivalencia en euros al lado. El valor de mercado se convierte al cambio de hoy y el importe invertido al cambio del dia de cada compra, de modo que el beneficio latente incluye el efecto del tipo de cambio.</p>',
+            '<section class="cards"><div class="metric"><span class="muted">Invertido abierto</span><strong>%s</strong></div><div class="metric"><span class="muted">Valor actual</span><strong>%s</strong></div><div class="metric"><span class="muted">Beneficio latente</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Beneficio realizado</span><strong class="%s">%s</strong></div><div class="metric"><span class="muted">Rendimiento general (todo el histórico)</span><strong class="%s">%s</strong></div></section><p class="muted panel-note">Todos los totales de la cartera están en euros: mezclan posiciones en varias divisas, así que no tienen una divisa nativa propia. Cada importe de una posición concreta sigue mostrándose en la divisa en la que cotiza, con su equivalencia en euros al lado. El valor de mercado se convierte al cambio de hoy y el importe invertido al cambio del día de cada compra, de modo que el beneficio latente incluye el efecto del tipo de cambio.</p>',
             self::eurMoney($portfolio->getInvestedAmountEur()),
             self::eurMoney($portfolio->getMarketValueEur()),
             self::profitClass($portfolio->getUnrealizedProfitEur()),
@@ -142,10 +142,10 @@ HTML;
             '<section class="cards"><div class="metric"><span class="muted">%s</span><strong>%s</strong></div><div class="metric"><span class="muted">Posiciones efectivas %s</span><strong>%s de %d</strong></div></section>',
             // Singular cuando solo hay una posicion: "Top 1 posiciones" estaba
             // mal escrito (v2.85).
-            $topCount === 1 ? 'Posicion mas grande' : sprintf('Top %d posiciones', $topCount),
+            $topCount === 1 ? 'Posición más grande' : sprintf('Top %d posiciones', $topCount),
             self::percent($concentration->getTopPositionsWeight($topCount)),
             self::infoIcon(sprintf(
-                'Cuantas posiciones igualmente ponderadas darian esta misma concentracion. Sale de 1/HHI, donde el indice HHI (Herfindahl-Hirschman) es la suma de los cuadrados de los pesos: cuanto mas alto, mas concentrada esta la cartera. HHI actual: %s.',
+                'Cuántas posiciones igualmente ponderadas darían esta misma concentración. Sale de 1/HHI, donde el índice HHI (Herfindahl-Hirschman) es la suma de los cuadrados de los pesos: cuanto más alto, más concentrada está la cartera. HHI actual: %s.',
                 self::index($concentration->getHerfindahlIndex())
             )),
             Layout::formatNumber($concentration->getEffectivePositions()),
@@ -158,7 +158,7 @@ HTML;
         // del umbral. Se resume en una linea, con el mismo patron
         // condicional que DashboardPage::renderSectorNote().
         $bars = sprintf(
-            '<div class="concentration-groups"><div><h3 class="panel-subtitle">Por posicion</h3>%s</div><div><h3 class="panel-subtitle">Por sector</h3>%s</div></div>%s',
+            '<div class="concentration-groups"><div><h3 class="panel-subtitle">Por posición</h3>%s</div><div><h3 class="panel-subtitle">Por sector</h3>%s</div></div>%s',
             self::weightBars(
                 $concentration->getPositionWeights(),
                 $concentration->getOverweightPositions(),
@@ -176,7 +176,7 @@ HTML;
         );
 
         return sprintf(
-            '<section class="panel"><h2>Concentracion de la cartera</h2><p class="muted panel-note">Pesos sobre el valor de mercado actual de las posiciones abiertas, convertido a euros con el tipo de cambio de hoy (el beneficio por posicion sigue mostrandose en su divisa nativa, ver "Posiciones abiertas").</p>%s%s<p class="muted panel-note">Los avisos son orientativos y no bloquean nada: se marcan las posiciones por encima del %s, los sectores por encima del %s y la exposicion a una divisa distinta del euro por encima del %s.</p></section>',
+            '<section class="panel"><h2>Concentración de la cartera</h2><p class="muted panel-note">Pesos sobre el valor de mercado actual de las posiciones abiertas, convertido a euros con el tipo de cambio de hoy (el beneficio por posición sigue mostrándose en su divisa nativa, ver "Posiciones abiertas").</p>%s%s<p class="muted panel-note">Los avisos son orientativos y no bloquean nada: se marcan las posiciones por encima del %s, los sectores por encima del %s y la exposición a una divisa distinta del euro por encima del %s.</p></section>',
             $metrics,
             $bars,
             self::thresholdPercent(PortfolioConcentration::POSITION_WARNING_PERCENT),
@@ -209,20 +209,20 @@ HTML;
             ? ''
             : sprintf(
                 '<p class="muted panel-note">%s sin datos suficientes para calcular su riesgo (%s): el calor mostrado es una cota inferior, no el riesgo completo de la cartera.</p>',
-                count($excluded) === 1 ? 'Una posicion queda' : sprintf('%d posiciones quedan', count($excluded)),
+                count($excluded) === 1 ? 'Una posición queda' : sprintf('%d posiciones quedan', count($excluded)),
                 Layout::escape(implode(', ', $excluded))
             );
 
         $warning = $heat->isHot()
             ? sprintf(
-                '<section class="panel panel-notice"><strong>Si todos los stop-loss sugeridos saltaran a la vez, perderias un %s de la cartera,</strong> por encima del %s de referencia. No es una prediccion de que vaya a pasar, es cuanto arriesga la cartera completa si pasara lo peor en todas las posiciones a la vez.</section>',
+                '<section class="panel panel-notice"><strong>Si todos los stop-loss sugeridos saltaran a la vez, perderías un %s de la cartera,</strong> por encima del %s de referencia. No es una predicción de que vaya a pasar, es cuánto arriesga la cartera completa si pasara lo peor en todas las posiciones a la vez.</section>',
                 self::percent($heat->getTotalHeatPercent()),
                 self::thresholdPercent(PortfolioHeat::WARNING_PERCENT)
             )
             : '';
 
         return sprintf(
-            '<section class="panel"><h2>Calor de cartera</h2><p class="muted panel-note">Si el precio de cada posicion cayera hasta su stop-loss sugerido a la vez, esto es cuanto perderia la cartera en total: %s del valor actual. El 1,5%% de riesgo por operacion se calibra posicion a posicion; esto suma ese riesgo cuando varios stops saltan juntos, justo lo que puede pasar en una caida de mercado amplia.</p>%s%s%s</section>',
+            '<section class="panel"><h2>Calor de cartera</h2><p class="muted panel-note">Si el precio de cada posición cayera hasta su stop-loss sugerido a la vez, esto es cuánto perdería la cartera en total: %s del valor actual. El 1,5%% de riesgo por operación se calibra posición a posición; esto suma ese riesgo cuando varios stops saltan juntos, justo lo que puede pasar en una caída de mercado amplia.</p>%s%s%s</section>',
             self::percent($heat->getTotalHeatPercent()),
             $bars,
             $excludedNote,
@@ -531,7 +531,7 @@ HTML;
         $currency = (string) array_key_first($overweight);
 
         return sprintf(
-            '<section class="panel panel-notice"><strong>El %s de la cartera esta en %s,</strong> no en euros: su valor en euros sube y baja tambien con el tipo de cambio, al margen de lo que hagan las acciones. Reparto completo: %s.</section>',
+            '<section class="panel panel-notice"><strong>El %s de la cartera está en %s,</strong> no en euros: su valor en euros sube y baja también con el tipo de cambio, al margen de lo que hagan las acciones. Reparto completo: %s.</section>',
             self::percent($overweight[$currency]),
             Layout::escape($currency),
             $summary
@@ -585,7 +585,7 @@ HTML;
         $holdings = $portfolio->getHoldings();
 
         if ($holdings === []) {
-            return '<div class="muted">Todavia no hay posiciones abiertas.</div>';
+            return '<div class="muted">Todavía no hay posiciones abiertas.</div>';
         }
 
         $rows = [];
@@ -618,7 +618,7 @@ HTML;
             );
         }
 
-        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th class="star-cell">&#9733;</th><th>Ticker</th><th class="num">Acciones</th><th class="num">Precio medio</th><th class="num">Precio actual</th><th class="num">Invertido</th><th class="num">Beneficio</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operacion se hace siempre desde la accion que estas mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del dia de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costo en euros ya esta en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th class="star-cell">&#9733;</th><th>Ticker</th><th class="num">Acciones</th><th class="num">Precio medio</th><th class="num">Precio actual</th><th class="num">Invertido</th><th class="num">Beneficio</th><th>Recomendación</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div><p class="muted panel-note">Para comprar o vender, entra en la ficha del valor pulsando su ticker: la operación se hace siempre desde la acción que estás mirando.</p><p class="muted panel-note">Cada importe se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros: el precio actual al cambio de hoy y el importe invertido al cambio del día de cada compra (los euros que de verdad se pagaron). El precio medio se muestra solo en divisa nativa por ser un nivel de precio del valor, no dinero del inversor: lo que costó en euros ya está en la columna "Invertido".</p><p class="panel-note"><a href="?page=portfolio&amp;export=holdings">Exportar a CSV</a></p>';
     }
 
     /**
@@ -649,7 +649,7 @@ HTML;
         return sprintf(
             '<span class="recommendation %s">%s</span>%s',
             Layout::recommendationClass($recommendation),
-            Layout::escape($recommendation),
+            Layout::escape(RecommendationLabel::translate($recommendation)),
             self::sellContextNote($recommendation)
         );
     }
@@ -750,7 +750,7 @@ HTML;
 
         return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Beneficio</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>'
             . $pagination
-            . '<p class="muted panel-note">El precio de cada operacion se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operacion en euros no lleva equivalencia porque seria el mismo importe repetido). La columna de beneficio es el resultado REALIZADO de cada operacion: una compra siempre muestra 0 (comprar no genera ganancia ni perdida por si sola); una venta muestra lo ganado o perdido de verdad frente a lo que costaron esas acciones. El rendimiento de una posicion todavia abierta se ve en "Beneficio latente", en las tarjetas de arriba. Importe y porcentaje entre parentesis en la misma celda. Las mas recientes primero.</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a> (siempre el historial completo, no solo esta pagina).</p>';
+            . '<p class="muted panel-note">El precio de cada operación se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operación en euros no lleva equivalencia porque sería el mismo importe repetido). La columna de beneficio es el resultado REALIZADO de cada operación: una compra siempre muestra 0 (comprar no genera ganancia ni pérdida por sí sola); una venta muestra lo ganado o perdido de verdad frente a lo que costaron esas acciones. El rendimiento de una posición todavía abierta se ve en "Beneficio latente", en las tarjetas de arriba. Importe y porcentaje entre paréntesis en la misma celda. Las más recientes primero.</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a> (siempre el historial completo, no solo esta página).</p>';
     }
 
     /**
@@ -764,7 +764,7 @@ HTML;
     private static function renderValueHistoryChart(array $valueHistory): string
     {
         if (count($valueHistory['labels']) < 2) {
-            return '<section class="panel"><h2>Evolucion de la cartera</h2><div class="muted">Todavia no hay suficiente historial para dibujar la evolucion: hacen falta al menos dos dias con el cierre de todas las posiciones abiertas y el tipo de cambio de sus divisas.</div></section>';
+            return '<section class="panel"><h2>Evolución de la cartera</h2><div class="muted">Todavía no hay suficiente historial para dibujar la evolución: hacen falta al menos dos días con el cierre de todas las posiciones abiertas y el tipo de cambio de sus divisas.</div></section>';
         }
 
         $labels = json_encode($valueHistory['labels'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?: '[]';
@@ -772,7 +772,7 @@ HTML;
 
         return <<<HTML
         <div class="chart-wrap">
-            <h2>Evolucion de la cartera (EUR)</h2>
+            <h2>Evolución de la cartera (EUR)</h2>
             <div class="chart-canvas-medium">
                 <canvas id="portfolioValueChart"></canvas>
             </div>

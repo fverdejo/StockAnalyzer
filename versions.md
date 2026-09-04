@@ -6377,3 +6377,53 @@ El sandbox que implemento esto no tenia `php` ni `docker`/`ddev` operativo (mism
 ### Resultado esperado
 
 El grafico de velas aprovecha todo el ancho disponible (hueco residual solo del orden de medio ancho de vela, por `categoryPercentage`/`barPercentage`, no del `offset` de eje ya quitado) y permite navegar en las dos direcciones tras hacer zoom, sin poder desplazarse fuera del rango de datos cargado en ningun eje.
+
+**Correccion posterior, mismo dia:** ver la entrada "Acentos y ñ en toda la UI... mas el arreglo real del pan vertical" mas abajo -- el usuario reporto que el pan vertical seguia sin funcionar, y la verificacion "de bajo riesgo" de arriba (fiarse de la lectura del codigo fuente sin probar la interaccion real) resulto ser insuficiente: `pan.mode: 'xy'` cambia que ejes se actualizan una vez que el plugin YA reconocio un gesto de arrastre, pero `chartjs-plugin-zoom@2.2.0` usa Hammer.js para reconocer ese gesto y lo crea con `new Hammer.Pan({ threshold, enable })` sin pasar `direction` -- Hammer.js por defecto es `DIRECTION_HORIZONTAL`, asi que un arrastre puramente vertical nunca llegaba a disparar el evento de pan, sin importar `pan.mode`. Detalle completo, causa confirmada con Playwright (no solo lectura de codigo) y arreglo real en la entrada de mas abajo.
+
+---
+
+## 2026-09-04 (cuarta entrada) - Acentos y ñ en toda la UI, BUY/HOLD/SELL en español, y el arreglo real del pan vertical (Hammer.js)
+
+Estado: implementado y verificado con Playwright real (no solo capturas estaticas). El usuario pidio tres cosas en el mismo turno: (1) corregir acentos/ñ en todo el texto visible de la aplicacion, (2) traducir las recomendaciones BUY/HOLD/SELL/STRONG SELL al español, (3) opinar sobre si reintroducir STRONG BUY y sobre si activar ya los fundamentales en el score. Ademas, en el turno siguiente, el usuario reporto que el pan vertical (cerrado hoy mismo, ver entrada anterior) seguia sin funcionar -- investigado y corregido de raiz en la misma sesion.
+
+### 1. Acentos/ñ, alcance acotado a "solo lo que se ve en la app"
+
+Preguntado explicitamente por el alcance (UI vs. tambien `roadmap.md`/`versions.md` vs. tambien comentarios de codigo): el usuario eligio el mas acotado, solo texto visible. Repartido en dos lotes paralelos (`desarrollador-php` x2) sobre los 20 ficheros de `src/Web/` mas `src/Infrastructure/Mail/LogMailer.php`, ~254 cadenas corregidas. Hallazgos reales de los propios agentes, no solo mecanica:
+
+- `SectorLabel.php` (el propio traductor de sectores) tenia su tabla en español SIN acentos ("Tecnologia", "Servicios Publicos"...) -- se veia literalmente en el panel de concentracion de "Mi cartera", confirmando que el problema era real, no cosmetico.
+- `IndicatorGlossary.php` tenia 6 claves de array sin acento (`'MACD senal'`, `'Maximo (periodo)'`...) mientras `StockDetailPage.php` ya las llamaba CON acento -- un bug de lookup real (el tooltip caia al texto generico de fallback), no solo ortografia. Corregido sincronizando ambos.
+- `IndicatorEducation.php`: las claves de un `match()` (`'Momentum 30 dias'`...) se dejaron deliberadamente SIN acentuar porque tienen que coincidir con `Signal::getLabel()` en `TechnicalScoreAnalyzer.php` (fuera de `Web/`, fuera del lote) -- acentuarlas sin coordinar rompia el `match()` en silencio. **Queda como hueco conocido, sin cerrar**: esos labels concretos siguen sin acento en pantalla hasta que se coordine con ese fichero.
+- `LogMailer.php` no tenia nada que corregir: el asunto/cuerpo real del correo de verificacion vive en `AuthService.php` (fuera de los dos lotes). **Tambien queda como hueco conocido, sin cerrar.**
+
+### 2. BUY/HOLD/SELL/STRONG SELL en español
+
+Nueva `Web\RecommendationLabel::translate()` (creada por Claude, mismo patron exacto que `Web\SectorLabel`): `BUY`->`Comprar`, `HOLD`->`Mantener`, `SELL`->`Vender`, `STRONG SELL`->`Venta fuerte`. Aplicada SOLO al pintar -- los valores internos en ingles siguen igual en `Score::recommendationFor()`, `score_history`, comparaciones (`===`), y el JSON de la API, exactamente como ya hace `SectorLabel` con los sectores. Sitios reales corregidos por los dos agentes: badges de ranking/ficha/cartera/watchlist, desplegable de filtro del Home. Barrido final de Claude sobre menciones sueltas de BUY/HOLD/SELL en TEXTO (no en comparaciones) que los agentes no cubrieron por estar fuera de sus dos lotes: tooltips de columnas de `BacktestPage.php` (5 sitios), frase explicativa de `MeasuredEdgeNotice.php`, nota de `AlertsPage.php`, parentesis `(BUY)` de `StockDetailPage.php` (eliminado, redundante), y el mensaje real de alerta que genera `AlertService::checkRecommendationChange()` (`sprintf('%s ha pasado de %s a %s.', ...)` con los valores crudos en ingles -- bug real fuera de `Web/`, encontrado por grep dirigido, no por los lotes). Este ultimo ya usa `RecommendationLabel::translate()` igual que el resto, mismo patron de import cruzado que ya usaba ese fichero para `Web\Layout`.
+
+**No se reintroduce STRONG BUY**: comprobado con datos reales de `score_history` antes de opinar (no a ciegas) -- maximo historico 85,86%, 0 de 375 registros recientes cruzan el 90% que exigia el antiguo tramo (retirado en `v2.77` por el mismo motivo). Ni bajando el corte a 85% habria recorrido real (2/375). Mismo problema que hace un mes, sin cambios pese a que el score ya no incluye fundamentales.
+
+**No se activan los fundamentales en el score**: reafirmado con la evidencia acumulada de toda la sesion (P3.3 corregido hoy mismo, t=1,17/0,61, `config/weights.php` sigue con FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND a 0). Matiz explicado al usuario: esto cierra la via de "fundamentales como predictor de retorno para rankear", no la de "fundamentales como filtro de calidad/alerta de deterioro sobre una posicion abierta" (la sugerencia de Codex, `roadmap.md` "Prioridad cero-ter", aun sin implementar).
+
+### 3. El arreglo real del pan vertical
+
+El usuario reporto, en el turno siguiente al cierre de la entrada anterior, que "el pan vertical no funciona ni con zoom ni sin zoom". La "verificacion" anterior (leer el codigo fuente sin probar la interaccion real) no fue suficiente. Esta vez, Claude instalo Playwright (via `pip install playwright`, reutilizando el Chrome ya instalado en el sistema con `channel='chrome'`, sin descargar un chromium aparte) para automatizar la interaccion real -- clicks, wheel, drag -- y leer el estado interno real de Chart.js (`chart.scales.x/y.min/max`) tras cada gesto, en vez de fiarse de capturas estaticas o de la lectura de codigo sola.
+
+**Causa raiz confirmada empiricamente (no solo por lectura de codigo esta vez)**: descargado `chartjs-plugin-zoom@2.2.0` (la ultima version publicada, confirmado en npm) y localizado `startHammer()`, que crea el reconocedor de arrastre asi: `mc.add(new Hammer.Pan({ threshold: panOptions.threshold, enable: createEnabler(chart, state) }))` -- **sin pasar `direction`**. Hammer.js usa por defecto `DIRECTION_HORIZONTAL` para su reconocedor `Pan`, asi que un arrastre puramente vertical nunca dispara `panstart`/`panmove`, sin importar el valor de `pan.mode` (ese valor solo decide que ejes actualizar una vez Hammer YA reconocio el gesto -- nunca lo reconoce si es vertical). No hay ninguna opcion del plugin para cambiar esa `direction`; no hay version mas nueva que lo corrija.
+
+Confirmado con Playwright, no solo deducido: un test aislado mostro que NI SIQUIERA el arrastre horizontal sin zoom previo mueve nada (correcto: `limits` fijados a `'original'` significa que sin zoom la vista actual ya coincide con el limite, no hay a donde desplazarse) y que un arrastre vertical tras zoom en X tampoco movia el eje Y (el bug de Hammer, mas el hecho de que el eje Y nunca se hab a zoomeado, asi que tambien estaba siempre en su propio limite).
+
+**Arreglo, dos cambios necesarios juntos** (`src/Web/StockDetailPage.php`, bloque `priceChart`):
+
+1. `plugins.zoom.zoom.mode` pasa de `'x'` a `'xy'`: sin esto, el eje Y nunca se aleja de su rango `'original'` (nunca se hace zoom en el), asi que aunque el arrastre vertical funcionase no habria nunca ningun sitio al que desplazarse -- `limits.y` coincidiria siempre con la vista actual.
+2. `plugins.zoom.pan.enabled` pasa a `false` (se desactiva el Hammer.Pan del plugin, roto para vertical) y se añade un listener manual de Pointer Events (`pointerdown`/`pointermove`/`pointerup`/`pointercancel`/`pointerleave`) sobre el propio canvas que llama al metodo publico `chart.pan({x, y})` que el plugin SI expone (`chart.pan = (delta, panScales, transition) => pan(chart, delta, panScales, transition)`, la misma funcion interna que usaria Hammer.js) -- evita Hammer.js por completo para el arrastre, sin reimplementar el clamping a `limits`, que sigue siendo el mismo del plugin.
+
+Verificado con Playwright (`Chart.getChart(canvas)` para leer `scales.x/y.min/max` directamente, no por pixeles) en cuatro escenarios: arrastre horizontal sin zoom (correctamente sin cambio, nada que desplazar), zoom + arrastre vertical (Y se mueve de verdad, confirmado con valores numericos antes/despues), zoom + arrastre horizontal (sigue funcionando, X se mueve, Y no se ve afectado por un arrastre puramente horizontal), y un arrastre diagonal enorme tras zoom (X e Y se mueven juntos y quedan siempre dentro de los limites originales, nunca escapan a una zona vacia).
+
+### Verificado en ddev con
+
+521/521 tests, PHPStan limpio. 18 tests rotos por los acentos (comparaban texto viejo sin tilde: `posicion`→`posición`, `Concentracion`→`Concentración` en dos `strpos()` de `PortfolioPageTest.php` que devolvian `false` en vez de un entero, `estadistica`→`estadística`, `Paginacion`→`Paginación`, etc.) mas 1 test de `MeasuredEdgeNoticeTest.php` roto por la traduccion de BUY→Comprar -- todos corregidos por Claude para reflejar el texto nuevo (correcto), nunca revertiendo el fix. Verificacion visual con Chrome headless: capturas de la ficha de WFC y del ranking del Home confirmando "Comprar"/"Mantener"/"Venta fuerte"/"Vender", "Evolución del precio", "Próximos resultados", "Recomendación", etc. Verificacion interactiva con Playwright (detallada arriba) del pan vertical/horizontal tras zoom.
+
+### Huecos conocidos, sin cerrar (fuera del alcance elegido o descubiertos sobre la marcha)
+
+- Labels de `Signal::getLabel()` (`TechnicalScoreAnalyzer.php`) sin acentuar, para no romper el `match()` de `IndicatorEducation.php` sin coordinar ambos ficheros.
+- Asunto/cuerpo del correo de verificacion de cuenta (`AuthService.php`) sin revisar, fuera de los dos lotes de `Web/`.
+- `roadmap.md`/`versions.md` (miles de lineas) y comentarios/docblocks de codigo: excluidos a proposito, decision explicita del usuario.

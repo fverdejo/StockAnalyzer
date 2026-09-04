@@ -54,7 +54,7 @@ final class BacktestPagePaginationTest extends TestCase
         self::assertStringContainsString('T20<', $html);
         self::assertStringNotContainsString('T21<', $html);
         self::assertSame(20, substr_count($html, '<tr><td><a class="ticker-link"'));
-        self::assertStringContainsString('aria-label="Paginacion"', $html);
+        self::assertStringContainsString('aria-label="Paginación"', $html);
     }
 
     public function testLaSegundaPaginaMuestraLaSiguienteVeintena(): void

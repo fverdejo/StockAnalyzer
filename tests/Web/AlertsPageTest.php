@@ -52,8 +52,8 @@ final class AlertsPageTest extends TestCase
         self::assertStringContainsString('id="alert-7"', $html);
         self::assertStringContainsString('tabindex="-1"', $html);
         // La accion enviada es explicita segun el estado actual, no un toggle.
-        self::assertStringContainsString('value="mark_read" class="alert-action" title="Marcar como leida"', $html);
-        self::assertStringContainsString('value="mark_unread" class="alert-action" title="Marcar como no leida"', $html);
+        self::assertStringContainsString('value="mark_read" class="alert-action" title="Marcar como leída"', $html);
+        self::assertStringContainsString('value="mark_unread" class="alert-action" title="Marcar como no leída"', $html);
         self::assertSame(2, substr_count($html, 'value="delete" class="alert-action alert-action-delete"'));
         self::assertSame(4, substr_count($html, 'name="alert_id"'));
         self::assertSame(6, substr_count($html, 'name="csrf_token"'));
@@ -97,7 +97,7 @@ final class AlertsPageTest extends TestCase
 
     public function testAvisoDeLimiteSoloAlAlcanzarlo(): void
     {
-        self::assertStringNotContainsString('alertas mas recientes', $this->render());
+        self::assertStringNotContainsString('alertas más recientes', $this->render());
 
         $llena = [];
 
@@ -105,7 +105,7 @@ final class AlertsPageTest extends TestCase
             $llena[] = new Alert($i, 'AAPL', 'Cambio de recomendacion.', new DateTimeImmutable('2026-08-09 10:00:00', new DateTimeZone('UTC')), null);
         }
 
-        self::assertStringContainsString('Mostrando las 30 alertas mas recientes.', AlertsPage::render($this->user(), $llena, 30, 'all', 30, 'token', null, null));
+        self::assertStringContainsString('Mostrando las 30 alertas más recientes.', AlertsPage::render($this->user(), $llena, 30, 'all', 30, 'token', null, null));
     }
 
     public function testEstadoVacioSegunElFiltro(): void
@@ -115,7 +115,7 @@ final class AlertsPageTest extends TestCase
         self::assertStringContainsString('?page=watchlist', $todas);
 
         $sinLeer = AlertsPage::render($this->user(), [], 0, 'unread', 30, 'token', null, null);
-        self::assertStringContainsString('Todo leido', $sinLeer);
+        self::assertStringContainsString('Todo leído', $sinLeer);
         self::assertStringContainsString('?page=alerts&amp;filter=all', $sinLeer);
     }
 

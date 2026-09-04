@@ -44,7 +44,7 @@ class AlertsPage
         $toolbar = self::renderToolbar($alerts, $filter, $token);
         $rows = self::renderRows($alerts, $filter, $token);
         $limitNote = count($alerts) >= $limit ? sprintf(
-            '<p class="muted panel-note">Mostrando las %d alertas mas recientes.</p>',
+            '<p class="muted panel-note">Mostrando las %d alertas más recientes.</p>',
             $limit
         ) : '';
 
@@ -54,7 +54,7 @@ class AlertsPage
 
         <section class="panel">
             <h2>Alertas ({$unreadCount} sin leer)</h2>
-            <p class="muted panel-note">Avisos cuando una accion de tu cartera o de tu watchlist cambia de recomendacion (por ejemplo, a STRONG SELL). Solo se muestran aqui, dentro de la aplicacion: no se envian por correo ni notificacion push.</p>
+            <p class="muted panel-note">Avisos cuando una acción de tu cartera o de tu watchlist cambia de recomendación (por ejemplo, a Venta fuerte). Solo se muestran aquí, dentro de la aplicación: no se envían por correo ni notificación push.</p>
             {$toolbar}
             {$rows}
             {$limitNote}
@@ -81,8 +81,8 @@ HTML;
             $filter === 'unread' ? ' alert-filter-active' : ''
         );
 
-        $markAll = $hasUnread ? self::bulkForm($csrfToken, 'mark_all_read', 'Marcar todas como leidas', '') : '';
-        $deleteRead = $hasRead ? self::bulkForm($csrfToken, 'delete_read', 'Borrar las leidas', ' class="secondary-button"') : '';
+        $markAll = $hasUnread ? self::bulkForm($csrfToken, 'mark_all_read', 'Marcar todas como leídas', '') : '';
+        $deleteRead = $hasRead ? self::bulkForm($csrfToken, 'delete_read', 'Borrar las leídas', ' class="secondary-button"') : '';
 
         return sprintf('<div class="alert-toolbar">%s%s%s</div>', $filters, $markAll, $deleteRead);
     }
@@ -168,7 +168,7 @@ HTML;
             // que hacia el boton. La leida usa la marca con el trazo mas
             // fino de "deshacer".
             $read ? '&#10227;' : '&#10003;',
-            $read ? 'Marcar como no leida' : 'Marcar como leida',
+            $read ? 'Marcar como no leída' : 'Marcar como leída',
             'alert-action'
         );
     }
@@ -200,10 +200,10 @@ HTML;
     private static function renderEmptyState(string $filter): string
     {
         if ($filter === 'unread') {
-            return '<div class="alert-empty"><h3>Todo leido</h3><p class="muted">No te queda ninguna alerta sin leer.</p><p><a href="?page=alerts&amp;filter=all">Ver todas las alertas</a></p></div>';
+            return '<div class="alert-empty"><h3>Todo leído</h3><p class="muted">No te queda ninguna alerta sin leer.</p><p><a href="?page=alerts&amp;filter=all">Ver todas las alertas</a></p></div>';
         }
 
-        return '<div class="alert-empty"><h3>Sin alertas</h3><p class="muted">Las alertas se generan cuando la recomendacion de un ticker de tu cartera o de tu watchlist cambia respecto a la ultima vez que la vimos.</p><p><a href="?page=watchlist">Ir a mi watchlist</a> &middot; <a href="?page=portfolio">Ir a mi cartera</a></p></div>';
+        return '<div class="alert-empty"><h3>Sin alertas</h3><p class="muted">Las alertas se generan cuando la recomendación de un ticker de tu cartera o de tu watchlist cambia respecto a la última vez que la vimos.</p><p><a href="?page=watchlist">Ir a mi watchlist</a> &middot; <a href="?page=portfolio">Ir a mi cartera</a></p></div>';
     }
 
     /**

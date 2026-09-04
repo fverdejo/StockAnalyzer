@@ -74,7 +74,7 @@ HTML;
     private static function renderRows(array $items, array $analyses, array $errors, string $csrfToken, User $user): string
     {
         if ($items === []) {
-            return '<div class="muted">Todavia no sigues ningun ticker. Anade uno arriba, o pulsa la estrella en la ficha de detalle de cualquier accion.</div>';
+            return '<div class="muted">Todavía no sigues ningún ticker. Añade uno arriba, o pulsa la estrella en la ficha de detalle de cualquier acción.</div>';
         }
 
         $rows = [];
@@ -98,7 +98,7 @@ HTML;
         // su precio, su recomendacion y sus niveles de riesgo) y hasta
         // ahora lo hacia con otra altura de fila y las cifras a la
         // izquierda, asi que las dos pantallas no se leian igual.
-        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th class="star-cell">&#9733;</th><th>Ticker</th><th>Siguiendo desde</th><th class="num">Precio</th><th class="num">Score</th><th>Recomendacion</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th class="star-cell">&#9733;</th><th>Ticker</th><th>Siguiendo desde</th><th class="num">Precio</th><th class="num">Score</th><th>Recomendación</th><th>Stop/Objetivo</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>';
     }
 
     private static function renderAnalysisCells(?StockAnalysis $analysis, ?string $errorMessage): string
@@ -116,7 +116,7 @@ HTML;
             Layout::escape(Layout::formatMoney($analysis->getStock()->getQuote()->getPrice(), $currency)),
             Layout::formatNumber($score->getPercentage()),
             Layout::recommendationClass($recommendation),
-            Layout::escape($recommendation),
+            Layout::escape(RecommendationLabel::translate($recommendation)),
             RiskLevelsBadge::render($analysis->getRiskLevels(), $currency)
         );
     }

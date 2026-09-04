@@ -25,7 +25,7 @@ class RegisterPage
                     <input id="email" name="email" type="email" value="{$emailValue}" autocomplete="email" required>
                 </div>
                 <div>
-                    <label for="password">Contrasena</label>
+                    <label for="password">Contraseña</label>
                     <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
                 </div>
                 <button type="submit">Crear cuenta</button>

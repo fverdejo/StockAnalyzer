@@ -97,11 +97,11 @@ class MeasuredEdgeNotice
             '<p class="muted panel-note">%s %s</p>',
             Layout::escape(self::headline($alpha, $config)),
             Layout::escape(sprintf(
-                'Medido sobre %s: las %d primeras del ranking rindieron %s puntos porcentuales %s que la media de su universo a %d dias.',
+                'Medido sobre %s: las %d primeras del ranking rindieron %s puntos porcentuales %s que la media de su universo a %d días.',
                 $config->sample(),
                 $config->topN(),
                 Layout::formatNumber(abs($alpha)),
-                $alpha < 0 ? 'MENOS' : 'mas',
+                $alpha < 0 ? 'MENOS' : 'más',
                 $config->horizonDays()
             ))
         );
@@ -124,14 +124,14 @@ class MeasuredEdgeNotice
     private static function body(float $alpha, MeasuredEdgeConfig $config): string
     {
         return sprintf(
-            'La ultima medicion da %s puntos porcentuales %s que la media del universo a %d dias, comprando las %d primeras del ranking por puntuacion. %s %s',
+            'La última medición da %s puntos porcentuales %s que la media del universo a %d días, comprando las %d primeras del ranking por puntuación. %s %s',
             Layout::formatNumber(abs($alpha)),
-            $alpha < 0 ? 'MENOS' : 'MAS',
+            $alpha < 0 ? 'MENOS' : 'MÁS',
             $config->horizonDays(),
             $config->topN(),
             $config->isSignificant()
-                ? 'La diferencia es estadisticamente significativa.'
-                : 'La diferencia no alcanza significancia estadistica, asi que lo que se puede afirmar es que no hay evidencia de ventaja, no que la haya en contra.',
+                ? 'La diferencia es estadísticamente significativa.'
+                : 'La diferencia no alcanza significancia estadística, así que lo que se puede afirmar es que no hay evidencia de ventaja, no que la haya en contra.',
             // v2.99: sin esto, "las N primeras del ranking" se lee como si
             // fuera lo mismo que "las que llevan BUY" — no lo es. El top-N
             // es por PUESTO (las N mejores puntuaciones haya lo que haya
@@ -139,7 +139,7 @@ class MeasuredEdgeNotice
             // recommendationFor(), independiente de en que puesto quede
             // cada una). En un dia flojo, el top-N puede tener menos BUY
             // que N -- el resto son HOLD que igual entran por puesto.
-            'Esto no equivale a seguir solo las señales BUY: el top-N son las mejores puntuaciones por puesto, y puede incluir HOLD si ese dia no hay suficientes BUY para llenarlo.'
+            'Esto no equivale a seguir solo las señales Comprar: el top-N son las mejores puntuaciones por puesto, y puede incluir Mantener si ese día no hay suficientes Comprar para llenarlo.'
         );
     }
 

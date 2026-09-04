@@ -52,7 +52,7 @@ final class EarningsProximityNoticeTest extends TestCase
         $html = EarningsProximityNotice::renderInline($events, 'BUY');
 
         self::assertStringContainsString('resultados trimestrales', $html);
-        self::assertStringContainsString('en 3 dias', $html);
+        self::assertStringContainsString('en 3 días', $html);
         self::assertStringNotContainsString('estimada sin confirmar', $html);
     }
 

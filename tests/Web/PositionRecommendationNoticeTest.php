@@ -31,30 +31,30 @@ final class PositionRecommendationNoticeTest extends TestCase
     {
         $html = PositionRecommendationNotice::renderInline('SELL', null);
 
-        self::assertStringContainsString('No se recomienda abrir posicion en este valor.', $html);
+        self::assertStringContainsString('No se recomienda abrir posición en este valor.', $html);
     }
 
     public function testStrongSellSinPosicionRecomiendaNoAbrir(): void
     {
         $html = PositionRecommendationNotice::renderInline('STRONG SELL', null);
 
-        self::assertStringContainsString('No se recomienda abrir posicion en este valor.', $html);
+        self::assertStringContainsString('No se recomienda abrir posición en este valor.', $html);
     }
 
     public function testSellConPosicionAbiertaMatizaQueNoEsOrdenDeLiquidar(): void
     {
         $html = PositionRecommendationNotice::renderInline('SELL', $this->position());
 
-        self::assertStringContainsString('Tienes una posicion abierta en este valor', $html);
-        self::assertStringContainsString('no es una orden automatica de liquidarla', $html);
-        self::assertStringNotContainsString('No se recomienda abrir posicion', $html);
+        self::assertStringContainsString('Tienes una posición abierta en este valor', $html);
+        self::assertStringContainsString('no es una orden automática de liquidarla', $html);
+        self::assertStringNotContainsString('No se recomienda abrir posición', $html);
     }
 
     public function testStrongSellConPosicionAbiertaMatizaQueNoEsOrdenDeLiquidar(): void
     {
         $html = PositionRecommendationNotice::renderInline('STRONG SELL', $this->position());
 
-        self::assertStringContainsString('Tienes una posicion abierta en este valor', $html);
+        self::assertStringContainsString('Tienes una posición abierta en este valor', $html);
     }
 
     private function position(): Holding

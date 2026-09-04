@@ -55,7 +55,7 @@ class EarningsProximityNotice
         return sprintf(
             '<p class="muted panel-note">%s</p>',
             Layout::escape(sprintf(
-                'Aviso: presenta resultados trimestrales el %s (en %d dias%s). Un catalizador de este tipo puede abrir un hueco de precio que las señales tecnicas de este analisis no anticipan.',
+                'Aviso: presenta resultados trimestrales el %s (en %d días%s). Un catalizador de este tipo puede abrir un hueco de precio que las señales técnicas de este análisis no anticipan.',
                 $earningsDate->format('d/m/Y'),
                 $daysUntil,
                 $corporateEvents->isEarningsDateEstimate() ? ', fecha estimada sin confirmar' : ''

@@ -79,16 +79,16 @@ class StockDetailPage
             Layout::escape($backHref),
             $watchlistButton,
             Layout::recommendationClass($recommendation),
-            Layout::escape($recommendation),
+            Layout::escape(RecommendationLabel::translate($recommendation)),
             Layout::formatNumber($score->getPercentage())
         );
 
         // La version de una linea del aviso de ventaja medida (v2.94): aqui
         // la recomendacion ya sale destacada arriba, asi que el aviso
         // acompaña en vez de competir con ella.
-        $summary = sprintf('<section class="panel"><h2>Por que en la acción %s dice %s</h2><div class="summary-box">%s</div>%s%s%s</section>',
+        $summary = sprintf('<section class="panel"><h2>Por qué en la acción %s dice %s</h2><div class="summary-box">%s</div>%s%s%s</section>',
             Layout::escape($company->getTicker()),
-            Layout::escape($recommendation),
+            Layout::escape(RecommendationLabel::translate($recommendation)),
             Layout::escape($explanation->getSummary()),
             MeasuredEdgeNotice::renderInline(),
             // Separa "no abrir posicion" de "mantener/reducir/vigilar" (ver
@@ -128,7 +128,7 @@ class StockDetailPage
         ] : [];
 
         $riskLevelsNote = $riskLevels !== null
-            ? '<p class="muted panel-note">Stop y objetivo sugeridos: referencia informativa de gestion de riesgo calculada a partir de la volatilidad historica (ATR14), no una recomendacion de inversion. No indican que el precio vaya a alcanzarlos. Ademas, un stop-loss no siempre se ejecuta al nivel calculado: en el historico de la app (10 años, 6 sectores) el 15,77% de las salidas por stop abrieron el mercado ya por debajo de ese nivel, con una perdida real un 22% peor que la teorica cuando ocurre.</p>'
+            ? '<p class="muted panel-note">Stop y objetivo sugeridos: referencia informativa de gestión de riesgo calculada a partir de la volatilidad histórica (ATR14), no una recomendación de inversión. No indican que el precio vaya a alcanzarlos. Además, un stop-loss no siempre se ejecuta al nivel calculado: en el histórico de la app (10 años, 6 sectores) el 15,77% de las salidas por stop abrieron el mercado ya por debajo de ese nivel, con una pérdida real un 22% peor que la teórica cuando ocurre.</p>'
             : '';
 
         $technicalValues = sprintf(
@@ -141,7 +141,7 @@ class StockDetailPage
                 self::valueBox('EMA 26', Layout::formatNullableMoney($technical->getEma26(), $currency)),
                 self::valueBox('RSI (14)', Layout::formatNullable($technical->getRsi14())),
                 self::valueBox('MACD', Layout::formatNullable($technical->getMacd())),
-                self::valueBox('MACD senal', Layout::formatNullable($technical->getMacdSignal())),
+                self::valueBox('MACD señal', Layout::formatNullable($technical->getMacdSignal())),
                 self::valueBox('MACD histograma', Layout::formatNullable($technical->getMacdHistogram())),
                 self::valueBox('Bollinger superior', Layout::formatNullableMoney($technical->getBollingerUpper(), $currency)),
                 self::valueBox('Bollinger inferior', Layout::formatNullableMoney($technical->getBollingerLower(), $currency)),
@@ -149,10 +149,10 @@ class StockDetailPage
             ], $riskLevelsBoxes, [
                 self::valueBox('Momentum 30d', self::percentOrDash($technical->getMomentum30())),
                 self::valueBox('Volatilidad 20d', self::percentOrDash($technical->getVolatility20())),
-                self::valueBox('Volumen ultima sesion', $technical->getLastVolume() !== null ? number_format($technical->getLastVolume(), 0, ',', '.') : '-'),
+                self::valueBox('Volumen última sesión', $technical->getLastVolume() !== null ? number_format($technical->getLastVolume(), 0, ',', '.') : '-'),
                 self::valueBox('Volumen medio 20d', $technical->getAvgVolume20() !== null ? number_format((int) $technical->getAvgVolume20(), 0, ',', '.') : '-'),
-                self::valueBox('Maximo (periodo)', Layout::formatNullableMoney($technical->getHigh52w(), $currency)),
-                self::valueBox('Minimo (periodo)', Layout::formatNullableMoney($technical->getLow52w(), $currency)),
+                self::valueBox('Máximo (periodo)', Layout::formatNullableMoney($technical->getHigh52w(), $currency)),
+                self::valueBox('Mínimo (periodo)', Layout::formatNullableMoney($technical->getLow52w(), $currency)),
                 self::valueBox('Sesiones analizadas', (string) $technical->getHistoryCount()),
             ])),
             $riskLevelsNote
@@ -168,11 +168,11 @@ class StockDetailPage
                 self::valueBox('ROE', self::percentOrDash($fundamentals->getRoe())),
                 self::valueBox('ROIC', self::percentOrDash($fundamentals->getRoic())),
                 self::valueBox('EPS', Layout::formatNullableMoney($fundamentals->getEps(), $currency)),
-                self::valueBox('Capitalizacion', self::formatLarge($fundamentals->getMarketCap())),
+                self::valueBox('Capitalización', self::formatLarge($fundamentals->getMarketCap())),
                 self::valueBox('Deuda/Patrimonio', Layout::formatNullable($fundamentals->getDebtToEquity())),
                 self::valueBox('Ratio de liquidez', Layout::formatNullable($fundamentals->getCurrentRatio())),
                 self::valueBox('Flujo de caja libre', self::formatLarge($fundamentals->getFreeCashFlow())),
-                self::valueBox('FCF / Capitalizacion', self::percentOrDash($fundamentals->getFreeCashFlowYield())),
+                self::valueBox('FCF / Capitalización', self::percentOrDash($fundamentals->getFreeCashFlowYield())),
                 self::valueBox('Margen bruto', self::percentOrDash($fundamentals->getGrossMargin())),
                 self::valueBox('Margen operativo', self::percentOrDash($fundamentals->getOperatingMargin())),
                 self::valueBox('Margen neto', self::percentOrDash($fundamentals->getNetMargin())),
@@ -294,8 +294,8 @@ class StockDetailPage
 
         if ($nextEarnings !== null) {
             $label = $corporateEvents->isEarningsDateEstimate()
-                ? 'Proximos resultados (estimada)'
-                : 'Proximos resultados';
+                ? 'Próximos resultados (estimada)'
+                : 'Próximos resultados';
             $boxes[] = self::overviewValue($label, $nextEarnings->format('Y-m-d'));
         }
 
@@ -303,9 +303,9 @@ class StockDetailPage
 
         if ($nextExDividend !== null) {
             if ($nextExDividend > new DateTimeImmutable('today')) {
-                $boxes[] = self::overviewValue('Proxima fecha ex-dividendo', $nextExDividend->format('Y-m-d'));
+                $boxes[] = self::overviewValue('Próxima fecha ex-dividendo', $nextExDividend->format('Y-m-d'));
             } else {
-                $boxes[] = self::overviewValue('Ultimo dividendo conocido (fecha pasada)', $nextExDividend->format('Y-m-d'));
+                $boxes[] = self::overviewValue('Último dividendo conocido (fecha pasada)', $nextExDividend->format('Y-m-d'));
             }
         }
 
@@ -350,7 +350,7 @@ class StockDetailPage
             return '';
         }
 
-        $summary = '<p class="muted">Ya no tienes posicion abierta en este valor. Este es el historial de lo que operaste.</p>';
+        $summary = '<p class="muted">Ya no tienes posición abierta en este valor. Este es el historial de lo que operaste.</p>';
 
         if ($position !== null) {
             $boxes = [
@@ -379,7 +379,7 @@ class StockDetailPage
         }
 
         return sprintf(
-            '<section class="panel"><h2>Tu posicion en %s</h2>%s%s</section>',
+            '<section class="panel"><h2>Tu posición en %s</h2>%s%s</section>',
             Layout::escape($position !== null ? $position->getTicker() : $transactions[0]->getTicker()),
             $summary,
             self::renderPositionTransactions($transactions, $currency)
@@ -435,13 +435,13 @@ class StockDetailPage
 
         if (!$currentUser instanceof User) {
             return sprintf(
-                '<section class="panel"><h2>Cartera simulada</h2><p class="muted">Inicia sesion para registrar compras y ventas hipoteticas de %s.</p><a class="back-link" href="?page=login">Entrar</a></section>',
+                '<section class="panel"><h2>Cartera simulada</h2><p class="muted">Inicia sesión para registrar compras y ventas hipotéticas de %s.</p><a class="back-link" href="?page=login">Entrar</a></section>',
                 Layout::escape($ticker)
             );
         }
 
         return sprintf(
-            '<section class="panel"><h2>Comprar o vender %s</h2><p class="muted panel-note">La operacion es siempre sobre %s, el valor que estas viendo. Indica cantidad de acciones (admite decimales) o un importe en euros; el importe tiene prioridad si rellenas ambos, y se convierte a la divisa del valor con el tipo de cambio de hoy si cotiza en otra distinta. Si dejas el precio en blanco se usa el precio de mercado actual; indicalo para registrar una compra o venta real ya hecha a otro precio (en la divisa nativa del valor, tal y como la confirmo tu broker).</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en euros (€)</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><div><label for="price">Precio de compra/venta (opcional)</label><input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form><p class="muted panel-note"><a href="?page=portfolio">Ver mi cartera completa</a></p></section>',
+            '<section class="panel"><h2>Comprar o vender %s</h2><p class="muted panel-note">La operación es siempre sobre %s, el valor que estás viendo. Indica cantidad de acciones (admite decimales) o un importe en euros; el importe tiene prioridad si rellenas ambos, y se convierte a la divisa del valor con el tipo de cambio de hoy si cotiza en otra distinta. Si dejas el precio en blanco se usa el precio de mercado actual; indícalo para registrar una compra o venta real ya hecha a otro precio (en la divisa nativa del valor, tal y como la confirmó tu broker).</p><form method="post" action="?page=trade" class="trade-form"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="ticker" value="%s"><div><label for="quantity">Cantidad (acciones)</label><input id="quantity" name="quantity" type="number" min="0.000001" step="0.000001"></div><div><label for="amount">o importe en euros (€)</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" placeholder="150"></div><div><label for="price">Precio de compra/venta (opcional)</label><input id="price" name="price" type="number" min="0.000001" step="0.000001" placeholder="Precio actual si se deja en blanco"></div><button type="submit" name="trade_action" value="buy">Comprar a mercado</button><button type="submit" name="trade_action" value="sell" class="secondary-button">Vender a mercado</button></form><p class="muted panel-note"><a href="?page=portfolio">Ver mi cartera completa</a></p></section>',
             Layout::escape($ticker),
             Layout::escape($ticker),
             Layout::escape($csrfToken),
@@ -467,8 +467,8 @@ class StockDetailPage
         return <<<HTML
         <section class="panel signal-history" id="{$containerId}" data-ticker="{$rawTicker}">
             <h2>Historial de la señal de compra en {$escapedTicker}</h2>
-            <p class="muted panel-note">De las veces que el modelo emitio una senal de compra (BUY) en este valor con stop-loss/objetivo calculables (mismo metodo que las lineas del grafico de arriba), esto es lo que habria pasado siguiendo esa gestion de riesgo. Datos historicos, no una garantia de resultado futuro.</p>
-            <button type="button" class="secondary-button signal-history-toggle">Ver historial de esta senal</button>
+            <p class="muted panel-note">De las veces que el modelo emitió una señal de compra en este valor con stop-loss/objetivo calculables (mismo método que las líneas del gráfico de arriba), esto es lo que habría pasado siguiendo esa gestión de riesgo. Datos históricos, no una garantía de resultado futuro.</p>
+            <button type="button" class="secondary-button signal-history-toggle">Ver historial de esta señal</button>
             <div class="signal-history-body" hidden></div>
         </section>
         <script>
@@ -484,7 +484,7 @@ class StockDetailPage
             button.addEventListener('click', function () {
                 if (loaded) {
                     body.hidden = !body.hidden;
-                    button.textContent = body.hidden ? 'Ver historial de esta senal' : 'Ocultar historial';
+                    button.textContent = body.hidden ? 'Ver historial de esta señal' : 'Ocultar historial';
                     return;
                 }
 
@@ -495,7 +495,7 @@ class StockDetailPage
                     .then(function (response) { return response.json(); })
                     .then(function (data) {
                         if (!data || !data.buy_managed_samples) {
-                            body.innerHTML = '<div class="muted">Este valor no ha tenido señales de compra con niveles de riesgo calculables en el historico disponible.</div>';
+                            body.innerHTML = '<div class="muted">Este valor no ha tenido señales de compra con niveles de riesgo calculables en el histórico disponible.</div>';
                         } else {
                             var stop = data.stop_loss_rate;
                             var target = data.target_rate;
@@ -513,11 +513,11 @@ class StockDetailPage
                                     '<span class="signal-history-segment-horizon" style="width:' + horizon + '%"></span>' +
                                 '</div>' +
                                 '<ul class="signal-history-legend">' +
-                                    '<li><span class="dot dot-stop"></span>Toco stop-loss: ' + stop + '%</li>' +
-                                    '<li><span class="dot dot-target"></span>Alcanzo objetivo: ' + target + '%</li>' +
+                                    '<li><span class="dot dot-stop"></span>Tocó stop-loss: ' + stop + '%</li>' +
+                                    '<li><span class="dot dot-target"></span>Alcanzó objetivo: ' + target + '%</li>' +
                                     '<li><span class="dot dot-horizon"></span>Sin disparo en ' + data.horizon_days + ' sesiones: ' + horizon + '%</li>' +
                                 '</ul>' +
-                                '<p class="muted panel-note">Basado en ' + data.buy_managed_samples + ' señales historicas' + (lowSample ? ' (muestra pequena, interpretar con cautela)' : '') + '.</p>';
+                                '<p class="muted panel-note">Basado en ' + data.buy_managed_samples + ' señales históricas' + (lowSample ? ' (muestra pequeña, interpretar con cautela)' : '') + '.</p>';
 
                             if (data.peer_group) {
                                 var peerRet = data.peer_group.avg_buy_managed_return;
@@ -526,7 +526,7 @@ class StockDetailPage
 
                                 body.innerHTML +=
                                     '<p class="signal-history-return ' + peerRetClass + '">Retorno medio gestionado del grupo sectorial (' + data.peer_group.sector_label + '): ' + peerRetText + '</p>' +
-                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' señales historicas de todo el grupo sectorial. Cifra ampliada a todo el grupo sectorial de esta accion (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta accion en particular.</p>';
+                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' señales históricas de todo el grupo sectorial. Cifra ampliada a todo el grupo sectorial de esta acción (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta acción en particular.</p>';
                             }
                         }
 
@@ -585,7 +585,7 @@ class StockDetailPage
 
         return <<<HTML
         <div class="chart-wrap">
-            <h2>Evolucion del precio - {$ticker}</h2>
+            <h2>Evolución del precio - {$ticker}</h2>
             <div class="chart-toolbar" data-target="{$canvasId}">
                 <button type="button" data-days="7">1S</button>
                 <button type="button" data-months="1">1M</button>
@@ -594,14 +594,14 @@ class StockDetailPage
                 <button type="button" data-months="12" class="active">1A</button>
                 <button type="button" data-months="24">2A</button>
             </div>
-            <p class="muted panel-note">Intradia: velas mas finas que una sesion diaria, pensadas para operar a corto plazo. Se piden a Yahoo Finance al pulsar el boton, no viajan con el resto de la pagina.</p>
+            <p class="muted panel-note">Intradía: velas más finas que una sesión diaria, pensadas para operar a corto plazo. Se piden a Yahoo Finance al pulsar el botón, no viajan con el resto de la página.</p>
             <div class="chart-toolbar" data-intraday-target="{$canvasId}" data-ticker="{$rawTicker}">
                 <button type="button" data-interval="1h">Velas 1h</button>
                 <button type="button" data-interval="15m">Velas 15m</button>
                 <button type="button" data-interval="5m">Velas 5m</button>
-                <button type="button" data-interval="1m">Velas 1m (ultimo dia)</button>
+                <button type="button" data-interval="1m">Velas 1m (último día)</button>
             </div>
-            <p class="muted panel-note">Rueda del raton o gesto de pellizco para hacer zoom sobre las velas; arrastrar para desplazar.</p>
+            <p class="muted panel-note">Rueda del ratón o gesto de pellizco para hacer zoom sobre las velas; arrastrar para desplazar.</p>
             <div class="chart-toolbar">
                 <button type="button" data-reset-zoom="{$canvasId}">Restablecer zoom</button>
             </div>
@@ -617,14 +617,14 @@ class StockDetailPage
         </div>
         <div class="chart-wrap">
             <h2>RSI (14)</h2>
-            <p class="muted panel-note">El RSI oscila entre 0 y 100, con lineas de referencia en 30 (sobreventa) y 70 (sobrecompra). No disponible en velas intradia.</p>
+            <p class="muted panel-note">El RSI oscila entre 0 y 100, con líneas de referencia en 30 (sobreventa) y 70 (sobrecompra). No disponible en velas intradía.</p>
             <div class="chart-canvas-medium">
                 <canvas id="{$rsiCanvasId}"></canvas>
             </div>
         </div>
         <div class="chart-wrap">
             <h2>MACD</h2>
-            <p class="muted panel-note">MACD y su señal se muestran en unidades de precio pero sin simbolo de divisa, igual que en cualquier plataforma de trading: son osciladores, no un nivel de precio a alcanzar. No disponible en velas intradia.</p>
+            <p class="muted panel-note">MACD y su señal se muestran en unidades de precio pero sin símbolo de divisa, igual que en cualquier plataforma de trading: son osciladores, no un nivel de precio a alcanzar. No disponible en velas intradía.</p>
             <div class="chart-canvas-medium">
                 <canvas id="{$macdCanvasId}"></canvas>
             </div>
@@ -821,19 +821,88 @@ class StockDetailPage
                                 // su codigo fuente son genericos, no
                                 // especificos del eje x), asi que es valido
                                 // aqui igual que en x.
+                                //
+                                // pan.enabled queda a false a proposito: el
+                                // pan integrado del plugin usa Hammer.js
+                                // (startHammer(), fuente real del propio
+                                // paquete) y crea su reconocedor con
+                                // `new Hammer.Pan({ threshold, enable })`
+                                // SIN pasar `direction` -- Hammer.js por
+                                // defecto usa DIRECTION_HORIZONTAL para Pan,
+                                // asi que un arrastre puramente vertical
+                                // nunca dispara `panstart`/`panmove`,
+                                // pase lo que pase en `pan.mode` ('xy' aqui
+                                // no sirve de nada: ese valor solo decide
+                                // que ejes se actualizan una vez Hammer YA
+                                // reconocio el gesto, y Hammer nunca lo
+                                // reconoce si es vertical). No hay ninguna
+                                // opcion del plugin para cambiar esa
+                                // `direction` -- version 2.2.0 es ademas la
+                                // ultima publicada (verificado en npm). El
+                                // arrastre real lo gestiona el listener de
+                                // pointer events de mas abajo, que llama al
+                                // metodo publico `chart.pan()` que el propio
+                                // plugin expone (misma funcion interna que
+                                // Hammer llamaria, con el mismo respeto a
+                                // `limits`), evitando Hammer por completo.
                                 limits: {
                                     x: { min: 'original', max: 'original' },
                                     y: { min: 'original', max: 'original' }
                                 },
-                                pan: { enabled: true, mode: 'xy' },
+                                pan: { enabled: false },
                                 zoom: {
                                     wheel: { enabled: true },
                                     pinch: { enabled: true },
-                                    mode: 'x'
+                                    // 'xy', no solo 'x': el pan vertical de
+                                    // mas abajo solo puede desplazarse a
+                                    // "zonas que no se ven" si el zoom deja
+                                    // alguna zona vertical fuera de la vista
+                                    // -- con el eje Y siempre a su rango
+                                    // completo (zoom solo en X) no habria
+                                    // nunca nada a lo que desplazarse en
+                                    // vertical, limits.y coincidiria siempre
+                                    // con el rango ya visible.
+                                    mode: 'xy'
                                 }
                             }
                         }
                     }
+                });
+
+                // Arrastre manual con Pointer Events (ver el comentario de
+                // pan.enabled=false de arriba): un unico listener por eje,
+                // sin Hammer.js de por medio. `chart.pan({x, y})` es la API
+                // publica que expone chartjs-plugin-zoom@2.2.0 (misma
+                // funcion interna que usa su propio Hammer.Pan cuando esta
+                // activo), asi que reutiliza tal cual el respeto a
+                // `limits`/`plugins.zoom.limits` ya configurado arriba --
+                // sin reimplementar ese clamping aqui.
+                var priceDragState = null;
+
+                priceCtx.addEventListener('pointerdown', function (event) {
+                    if (!priceChart) {
+                        return;
+                    }
+
+                    priceDragState = { x: event.clientX, y: event.clientY };
+                    priceCtx.setPointerCapture(event.pointerId);
+                });
+
+                priceCtx.addEventListener('pointermove', function (event) {
+                    if (!priceDragState || !priceChart) {
+                        return;
+                    }
+
+                    var deltaX = event.clientX - priceDragState.x;
+                    var deltaY = event.clientY - priceDragState.y;
+                    priceDragState = { x: event.clientX, y: event.clientY };
+                    priceChart.pan({ x: deltaX, y: deltaY });
+                });
+
+                ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (type) {
+                    priceCtx.addEventListener(type, function () {
+                        priceDragState = null;
+                    });
                 });
             }
 

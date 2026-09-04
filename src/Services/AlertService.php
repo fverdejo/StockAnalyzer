@@ -14,6 +14,7 @@ use StockAnalyzer\Repository\TickerDividendAlertStateRepository;
 use StockAnalyzer\Repository\TickerEarningsAlertStateRepository;
 use StockAnalyzer\Repository\TickerStopLossAlertStateRepository;
 use StockAnalyzer\Web\Layout;
+use StockAnalyzer\Web\RecommendationLabel;
 
 /**
  * Alertas basicas (ver versions.md v2.15): "avisar cuando una accion de la
@@ -63,7 +64,12 @@ class AlertService
         $this->alerts->create(
             $user,
             $ticker,
-            sprintf('%s ha pasado de %s a %s.', strtoupper($ticker), $previous, $currentRecommendation)
+            sprintf(
+                '%s ha pasado de %s a %s.',
+                strtoupper($ticker),
+                RecommendationLabel::translate($previous),
+                RecommendationLabel::translate($currentRecommendation)
+            )
         );
     }
 

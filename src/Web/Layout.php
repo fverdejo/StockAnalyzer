@@ -1796,6 +1796,6 @@ HTML;
             $links[] = sprintf('<a class="alert-filter" href="%s%spage_num=%d">Siguiente &raquo;</a>', $safeBase, $separator, $pageNum + 1);
         }
 
-        return sprintf('<nav class="alert-toolbar" aria-label="Paginacion">%s</nav>', implode('', $links));
+        return sprintf('<nav class="alert-toolbar" aria-label="Paginación">%s</nav>', implode('', $links));
     }
 }

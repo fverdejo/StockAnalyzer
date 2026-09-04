@@ -32,8 +32,8 @@ class PositionRecommendationNotice
         }
 
         $message = $position !== null
-            ? 'Tienes una posicion abierta en este valor: esta recomendacion no es una orden automatica de liquidarla. Valora reducirla o vigilarla de cerca segun tu precio de entrada, horizonte, impuestos y el peso que tiene en tu cartera antes de decidir.'
-            : 'No se recomienda abrir posicion en este valor.';
+            ? 'Tienes una posición abierta en este valor: esta recomendación no es una orden automática de liquidarla. Valora reducirla o vigilarla de cerca según tu precio de entrada, horizonte, impuestos y el peso que tiene en tu cartera antes de decidir.'
+            : 'No se recomienda abrir posición en este valor.';
 
         return sprintf('<p class="muted panel-note">%s</p>', Layout::escape($message));
     }

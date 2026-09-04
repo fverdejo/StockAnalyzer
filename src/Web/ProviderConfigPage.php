@@ -24,7 +24,7 @@ class ProviderConfigPage
             $implemented = in_array($key, ['yahoo', 'financial_modeling_prep'], true);
             $disabled = $implemented ? '' : ' disabled';
             $note = match (true) {
-                !$implemented => '<span class="muted">Preparado, sin implementacion activa todavia</span>',
+                !$implemented => '<span class="muted">Preparado, sin implementación activa todavía</span>',
                 default => '',
             };
             $providers[] = sprintf(
@@ -51,11 +51,11 @@ class ProviderConfigPage
                 <div class="provider-list">
                     {$providersHtml}
                 </div>
-                <button type="submit">Guardar configuracion</button>
+                <button type="submit">Guardar configuración</button>
             </form>
         </section>
 HTML;
 
-        return Layout::render('Configuracion - Stock Analyzer', '', $body, $user, 'provider');
+        return Layout::render('Configuración - Stock Analyzer', '', $body, $user, 'provider');
     }
 }

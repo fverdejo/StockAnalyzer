@@ -36,17 +36,17 @@ final class StockDetailPageTest extends TestCase
     {
         $html = $this->render($this->scoreWithPercentage(50.0), null);
 
-        self::assertStringContainsString('No se recomienda abrir posicion en este valor.', $html);
-        self::assertStringNotContainsString('Tienes una posicion abierta en este valor', $html);
+        self::assertStringContainsString('No se recomienda abrir posición en este valor.', $html);
+        self::assertStringNotContainsString('Tienes una posición abierta en este valor', $html);
     }
 
     public function testConPosicionAbiertaYSellMatizaQueNoEsOrdenDeLiquidar(): void
     {
         $html = $this->render($this->scoreWithPercentage(50.0), new Holding('ACME', 10.0, 100.0, 90.0));
 
-        self::assertStringContainsString('Tienes una posicion abierta en este valor', $html);
-        self::assertStringContainsString('no es una orden automatica de liquidarla', $html);
-        self::assertStringNotContainsString('No se recomienda abrir posicion', $html);
+        self::assertStringContainsString('Tienes una posición abierta en este valor', $html);
+        self::assertStringContainsString('no es una orden automática de liquidarla', $html);
+        self::assertStringNotContainsString('No se recomienda abrir posición', $html);
     }
 
     public function testBuyNoMuestraNingunAvisoDePosicionConOSinHolding(): void
@@ -54,10 +54,10 @@ final class StockDetailPageTest extends TestCase
         $conHolding = $this->render($this->scoreWithPercentage(80.0), new Holding('ACME', 10.0, 100.0, 110.0));
         $sinHolding = $this->render($this->scoreWithPercentage(80.0), null);
 
-        self::assertStringNotContainsString('No se recomienda abrir posicion', $conHolding);
-        self::assertStringNotContainsString('Tienes una posicion abierta en este valor', $conHolding);
-        self::assertStringNotContainsString('No se recomienda abrir posicion', $sinHolding);
-        self::assertStringNotContainsString('Tienes una posicion abierta en este valor', $sinHolding);
+        self::assertStringNotContainsString('No se recomienda abrir posición', $conHolding);
+        self::assertStringNotContainsString('Tienes una posición abierta en este valor', $conHolding);
+        self::assertStringNotContainsString('No se recomienda abrir posición', $sinHolding);
+        self::assertStringNotContainsString('Tienes una posición abierta en este valor', $sinHolding);
     }
 
     private function render(Score $score, ?Holding $position): string

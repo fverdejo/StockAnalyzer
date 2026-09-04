@@ -22,7 +22,7 @@ class WatchlistStar
 
         $action = $isWatched ? 'remove' : 'add';
         $symbol = $isWatched ? '&#9733;' : '&#9734;';
-        $title = $isWatched ? 'Quitar de mi watchlist' : 'Anadir a mi watchlist';
+        $title = $isWatched ? 'Quitar de mi watchlist' : 'Añadir a mi watchlist';
         $class = $isWatched ? 'watch-star watch-star-active' : 'watch-star';
 
         return sprintf(

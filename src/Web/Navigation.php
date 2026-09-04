@@ -19,14 +19,14 @@ class Navigation
             $items[] = self::link('watchlist', 'Mi watchlist', '?page=watchlist', $active);
             $items[] = self::link('alerts', 'Alertas', '?page=alerts', $active);
             $items[] = self::link('backtest', 'Backtesting', '?page=backtest', $active);
-            $items[] = self::link('provider', 'Configuracion', '?page=provider', $active);
+            $items[] = self::link('provider', 'Configuración', '?page=provider', $active);
             $items[] = self::link('account', 'Mi cuenta', '?page=account', $active);
         } else {
             $items[] = self::link('login', 'Login', '?page=login', $active);
             $items[] = self::link('register', 'Registro', '?page=register', $active);
         }
 
-        return '<nav class="main-nav" aria-label="Navegacion principal">' . implode('', $items) . '</nav>';
+        return '<nav class="main-nav" aria-label="Navegación principal">' . implode('', $items) . '</nav>';
     }
 
     private static function link(string $key, string $label, string $href, string $active): string

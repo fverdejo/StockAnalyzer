@@ -31,17 +31,17 @@ class SectorLabel
      * @var array<string,string>
      */
     private const LABELS = [
-        'Utilities' => 'Servicios Publicos',
+        'Utilities' => 'Servicios Públicos',
         'Healthcare' => 'Salud',
         'Consumer Defensive' => 'Consumo Defensivo',
-        'Technology' => 'Tecnologia',
+        'Technology' => 'Tecnología',
         'Industrials' => 'Industria',
-        'Basic Materials' => 'Materiales Basicos',
-        'Consumer Cyclical' => 'Consumo Ciclico',
+        'Basic Materials' => 'Materiales Básicos',
+        'Consumer Cyclical' => 'Consumo Cíclico',
         'Financial Services' => 'Servicios Financieros',
         'Real Estate' => 'Inmobiliario',
-        'Communication Services' => 'Servicios de Comunicacion',
-        'Energy' => 'Energia',
+        'Communication Services' => 'Servicios de Comunicación',
+        'Energy' => 'Energía',
     ];
 
     public static function translate(string $sector): string
