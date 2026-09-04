@@ -21,6 +21,7 @@ use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Infrastructure\Mail\LogMailer;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
 use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
+use StockAnalyzer\Interfaces\SymbolSearchProviderInterface;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\CachedMarketMoversProvider;
@@ -299,7 +300,7 @@ class Application
     {
         [$rawTickers, $tickers, $universe] = $this->resolveTickerRequest();
         $recommendation = $this->queryString('recommendation');
-        [$results, $errors] = $this->analyzeTickers($tickers);
+        [$results, $errors] = $this->analyzeTickers($tickers, $universe);
         $results = $this->filterAndSort($results, $recommendation, 'score_desc');
         $currentUser = $this->auth->currentUser();
 
@@ -342,10 +343,15 @@ class Application
     }
 
     /**
+     * $universe es el mismo valor que devuelve resolveTickerRequest(): ''
+     * para una busqueda de texto libre, la clave del universo configurado
+     * en caso contrario. Solo se usa aqui para decidir si tiene sentido
+     * intentar el fallback de busqueda de simbolo en vivo (ver mas abajo).
+     *
      * @param list<string> $tickers
      * @return array{0: list<StockAnalysis>, 1: array<string,string>}
      */
-    private function analyzeTickers(array $tickers): array
+    private function analyzeTickers(array $tickers, string $universe): array
     {
         $results = [];
         $errors = [];
@@ -353,12 +359,54 @@ class Application
         foreach ($tickers as $ticker) {
             try {
                 $results[] = $this->analysisService->analyze($ticker);
+                continue;
             } catch (Throwable $exception) {
                 $errors[$ticker] = $exception->getMessage();
+            }
+
+            $resolved = $this->resolveTickerViaSymbolSearch($ticker, $universe);
+
+            if ($resolved === null) {
+                continue;
+            }
+
+            try {
+                $results[] = $this->analysisService->analyze($resolved);
+                unset($errors[$ticker]);
+            } catch (Throwable) {
+                // El reintento tambien fallo: se deja el error original de
+                // $ticker, ya guardado arriba.
             }
         }
 
         return [$results, $errors];
+    }
+
+    /**
+     * Fallback de busqueda de simbolo en vivo (ver roadmap.md, "Buscador
+     * del Home", 2026-09-04), SOLO para busqueda de texto libre del Home
+     * ($universe === ''): un universo configurado puede tener tickers ya
+     * conocidos como rotos/deslistados (ver roadmap.md, "Segundo bloque",
+     * los siete tickers reciclados EMC/BEAM/MMI/S/STI/VAL/SBNY) y no tiene
+     * sentido gastar una llamada de red extra por cada uno en cada carga
+     * del ranking por defecto.
+     *
+     * Un unico intento: si searchSymbol() no encuentra nada, o devuelve el
+     * mismo ticker que ya fallo, no hay nada mas que probar.
+     */
+    private function resolveTickerViaSymbolSearch(string $ticker, string $universe): ?string
+    {
+        if ($universe !== '' || !$this->marketDataProvider instanceof SymbolSearchProviderInterface) {
+            return null;
+        }
+
+        $resolved = $this->marketDataProvider->searchSymbol($ticker);
+
+        if ($resolved === null || strtoupper($resolved) === strtoupper($ticker)) {
+            return null;
+        }
+
+        return $resolved;
     }
 
     private function renderDetail(string $ticker): string
@@ -1117,7 +1165,7 @@ class Application
         [$rawTickers, $tickers, $universe] = $this->resolveTickerRequest();
         $recommendation = $this->queryString('recommendation');
         $sort = $this->queryString('sort') ?: 'score_desc';
-        [$results, $errors] = $this->analyzeTickers($tickers);
+        [$results, $errors] = $this->analyzeTickers($tickers, $universe);
         $results = $this->filterAndSort($results, $recommendation, $sort);
         $payload = $this->jsonPresenter->ranking($results, $errors, $universe, $rawTickers);
 

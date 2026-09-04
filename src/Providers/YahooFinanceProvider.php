@@ -8,11 +8,12 @@ use JsonException;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Http\HttpClient;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
+use StockAnalyzer\Interfaces\SymbolSearchProviderInterface;
 use StockAnalyzer\Models\Fundamentals;
 use StockAnalyzer\Models\Stock;
 use Throwable;
 
-class YahooFinanceProvider implements MarketDataProviderInterface
+class YahooFinanceProvider implements MarketDataProviderInterface, SymbolSearchProviderInterface
 {
     /**
      * Rangos de historico diario que acepta el endpoint de Yahoo. La lista
@@ -197,6 +198,56 @@ class YahooFinanceProvider implements MarketDataProviderInterface
         }
 
         return $this->parser->parseHistoricalQuotes($payload);
+    }
+
+    /**
+     * Busqueda de simbolos en vivo (ver roadmap.md, "Buscador del Home",
+     * 2026-09-04), endpoint no oficial de autocompletado de Yahoo Finance,
+     * distinto del de cotizacion/historico (v1/finance/search, no
+     * v8/finance/chart). Confirmada su forma real con una llamada directa
+     * antes de escribir este metodo: `quotes` es una lista y cada elemento
+     * trae el ticker en la clave `symbol` (p.ej. buscar "Nokia" devuelve
+     * `symbol: "NOK"`). Con `quotesCount=1` Yahoo ya ordena por su propio
+     * `score` de relevancia, asi que basta con el primer elemento.
+     *
+     * Best effort, igual criterio que getDividendHistory(): cualquier fallo
+     * (HTTP, JSON invalido, `quotes` vacio o con forma inesperada) devuelve
+     * null en vez de propagar, nunca debe tumbar el analisis que lo llama.
+     */
+    public function searchSymbol(string $query): ?string
+    {
+        $query = trim($query);
+
+        if ($query === '') {
+            return null;
+        }
+
+        try {
+            $url = sprintf(
+                'https://query1.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=1&newsCount=0&lang=en-US',
+                rawurlencode($query)
+            );
+
+            $response = $this->httpClient->get($url);
+            $body = (string) $response->getBody();
+            $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+
+            if (!is_array($payload) || !isset($payload['quotes']) || !is_array($payload['quotes'])) {
+                return null;
+            }
+
+            $firstQuote = $payload['quotes'][0] ?? null;
+
+            if (!is_array($firstQuote) || !isset($firstQuote['symbol']) || !is_string($firstQuote['symbol'])) {
+                return null;
+            }
+
+            $symbol = trim($firstQuote['symbol']);
+
+            return $symbol !== '' ? $symbol : null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**

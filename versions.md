@@ -6318,3 +6318,62 @@ El split-half (ejecutado por Claude directamente via `ddev`, ya que el sandbox d
 Calendario de rebalanceo comun en vez de rejilla por ticker, calidad point-in-time a nivel snapshot en vez de exclusion del ticker completo (afecta solo ~4% del universo), diagnosticos Rank-IC/quintiles/monotonicidad (validos pero con regla de lectura fijada de antemano, no como menu), e hipotesis combinada puerta-fundamental+momentum en modo sombra (sin sentido mientras ambos bloques por separado sigan nulos). Detalle completo en `roadmap.md`, "Prioridad cero-ter". **Con esto, el segundo documento de Codex queda cerrado en su parte accionable.**
 
 Con esto, el plan de Codex del `2026-09-02` (P0 a P3.4) queda cerrado del todo, incluida su verificacion final.
+
+---
+
+## 2026-09-04 (segunda entrada) - Buscador del Home: fallback de busqueda de simbolo en vivo contra Yahoo (arregla "Nokia")
+
+Estado: implementado. Bug reportado por el usuario, anotado en `roadmap.md` ("Prioridad baja", "Buscador del Home", `2026-09-04`): buscar "Nokia" en el campo de texto libre del Home no devuelve nada, pero buscar directamente por su ticker (`0K8D.L`) si funciona.
+
+Causa raiz: `CompanyDirectory` (`src/Config/CompanyDirectory.php`) es un diccionario LOCAL, estatico, ticker->nombre, cerrado a las empresas que ya aparecen en `config/universes.php` -- no habia ninguna busqueda EN VIVO de simbolos en toda la app. `Nokia` se trataba como ticker literal (`TickerNormalizer::normalize()` es una funcion pura sin red) y Yahoo no tiene ningun ticker llamado asi, asi que `analyze('NOKIA')` lanzaba y esa fila desaparecia del ranking sin ningun aviso.
+
+### Decisiones de arquitectura
+
+- **`Interfaces\SymbolSearchProviderInterface`** (`searchSymbol(string $query): ?string`, best effort, nunca lanza), deliberadamente NO añadida a `MarketDataProviderInterface`: forzaria a los ~9 test doubles del proyecto (que implementan esa interfaz sin necesitar busqueda de simbolos) a implementar un metodo que no usan. Mismo patron ya establecido para `IndexMembershipCheckerInterface` en `BacktestingService`: capacidad OPCIONAL, comprobada con `instanceof` antes de usarla.
+- **`YahooFinanceProvider::searchSymbol()`** implementa la interfaz, contra el endpoint no oficial `v1/finance/search` (distinto del `v8/finance/chart` que usa el resto de la clase). Forma real de la respuesta confirmada con una llamada de control antes de escribir el parseo (buscar "Nokia" devuelve `quotes: [{"symbol": "NOK", ...}]`, ordenados por relevancia por el propio `score` de Yahoo con `quotesCount=1`). Sin `User-Agent` el endpoint devuelve "Edge: Too Many Requests" incluso para la primera peticion; `HttpClient` ya manda uno por defecto (`StockAnalyzer/1.0`), asi que no hizo falta ningun cambio ahi.
+- **`CachedMarketDataProvider::searchSymbol()`** reenvia a `$this->inner` solo si `$this->inner instanceof SymbolSearchProviderInterface`, si no `null` -- mismo patron de "capacidad opcional reenviada" que el resto de la clase. Deliberadamente SIN pasar por `$this->cache`: es una busqueda rara, pedida por el usuario en el momento, cachearla no aporta nada.
+- **`Application::analyzeTickers()`** (bucle compartido por `renderDashboard()` y `renderApiRanking()`, ambos ya recibian `$universe` de `resolveTickerRequest()`) ahora recibe tambien `$universe` y, si `analyze($ticker)` falla Y `$universe === ''` (busqueda de texto libre, no un universo configurado) Y el proveedor de mercado implementa la interfaz, intenta EXACTAMENTE UN reintento con el ticker que devuelva `searchSymbol()` (si no es `null` ni el mismo ticker de origen). Si el reintento funciona, el resultado entra en el ranking con su propio ticker resuelto y desaparece de `$errors`; si falla tambien, se conserva el mensaje de error ORIGINAL. Extendido a `analyzeTickers()` en vez de duplicar la logica solo en `renderDashboard()`: es el mismo metodo privado compartido por las dos rutas que ya pasan `$universe`, y ambas representan busqueda de usuario (Home y su API JSON equivalente), no iteracion de universo.
+- **Deliberadamente NO aplicado cuando `$universe !== ''`**: un universo configurado grande puede tener tickers ya conocidos como rotos/deslistados (ver `roadmap.md`, "Segundo bloque", los siete tickers reciclados `EMC`/`BEAM`/`MMI`/`S`/`STI`/`VAL`/`SBNY`) y no compensa gastar una llamada de red extra por cada uno en cada carga del ranking por defecto.
+
+### Incluye
+
+Nuevo: `src/Interfaces/SymbolSearchProviderInterface.php`. Modificados: `src/Providers/YahooFinanceProvider.php` (`searchSymbol()`), `src/Providers/CachedMarketDataProvider.php` (`searchSymbol()`, reenvio opcional), `src/Services/Application.php` (`analyzeTickers()` con `$universe`, `resolveTickerViaSymbolSearch()` nuevo, los dos puntos de llamada actualizados). Tests nuevos: `tests/Providers/YahooFinanceProviderSearchSymbolTest.php` (resultado real, `quotes` vacio, JSON invalido, error HTTP, query vacia sin gastar llamada), `tests/Providers/CachedMarketDataProviderSymbolSearchTest.php` (delega cuando el inner implementa la interfaz, `null` sin tocar la cache cuando no), `tests/Services/ApplicationSymbolSearchFallbackTest.php` (caso motivador Nokia->0K8D.L, universo configurado no intenta la busqueda, sin match conserva el error original, reintento fallido conserva el error ORIGINAL no el del reintento, proveedor sin la capacidad no rompe nada).
+
+### Verificado en ddev con
+
+El sandbox que implemento esto no tenia PHPUnit/PHPStan disponibles (sin Docker/PHP, ver limitacion ya documentada en otras entradas); Claude corrio ambos despues en `ddev` real. PHPStan encontro 2 fallos menores en los tests nuevos (no en el codigo de produccion): `searchSymbol()` de un doble de test declarado `?string` cuando siempre devolvia un string (`return.unusedType`, corregido a `string`) y dos asserts leyendo `$provider->searchCalls` sobre una variable tipada por la interfaz, que no declara esa propiedad (`property.notFound`, corregido pasando un contador `\stdClass` mutable aparte en vez de una propiedad publica del doble). Con eso: **521/521 tests, PHPStan limpio**. El endpoint real de Yahoo (`v1/finance/search?q=Nokia&quotesCount=1&newsCount=0&lang=en-US`) SI se pudo consultar en vivo desde el sandbox original (curl con `User-Agent`) para confirmar la forma exacta de la respuesta antes de escribir el parseo -- devolvio `symbol: "NOK"` para "Nokia", no `0K8D.L` (el ADR estadounidense de Nokia es un ticker igual de valido para el analisis que el original europeo, el fallback no necesita reproducir el ticker exacto que el usuario tenia en mente, solo uno que Yahoo reconozca).
+
+### Resultado esperado
+
+Buscar "Nokia" en el buscador de texto libre del Home ahora deberia devolver una fila en el ranking (via `NOK`, resuelto en vivo), en vez de desaparecer sin aviso. Ningun universo configurado gana llamadas de red adicionales.
+
+---
+
+## 2026-09-04 (tercera entrada) - Grafico de velas: pan vertical y huecos en los bordes cerrados (`roadmap.md`, "Prioridad baja")
+
+Estado: implementado. Cierra las dos mejoras que el usuario pidio dejar anotadas sin implementar el `2026-09-02` (`versions.md`, decima entrada de ese dia; `roadmap.md`, "Prioridad baja"): pan vertical tras hacer zoom y los huecos vacios a ambos lados del grafico de velas (capturado con WFC, rango `6M`).
+
+### Causa raiz de los huecos, confirmada leyendo el codigo fuente real de las dos librerias (no adivinada)
+
+Descargado el bundle no minificado de `chart.js@4.4.4`, `chartjs-chart-financial@0.2.1` y `chartjs-plugin-zoom@2.2.0` desde el mismo CDN que ya usa `StockDetailPage.php`, para verificar las dos hipotesis planteadas antes de tocar nada:
+
+- **Hipotesis (a) descartada**: `LinearScale`/`LinearScaleBase` (chart.js) no fija `bounds: 'ticks'` por defecto (solo `TimeScale` lo hace, a `'data'`) y `determineDataLimits()` calcula `min`/`max` directamente del rango real de los datos, sin redondear a valores "bonitos" salvo que se pida explicitamente `bounds: 'ticks'` -- cosa que el codigo de este proyecto nunca hace. El eje `'linear'` de las velas ya respetaba el dominio real 0..n-1.
+- **Hipotesis (b) confirmada, variante `offset`**: `FinancialController.overrides.scales.x` (el tipo de controlador que usan `'candlestick'`/`'ohlc'`, heredado de `BarController`) trae `offset: true` por defecto, pensado para su eje `'category'` original (separar la primera/ultima barra del borde medio ancho de categoria). El codigo de `StockDetailPage.php` sustituye `scales.x.type` por `'linear'` pero nunca sobreescribe `offset`, asi que el valor `true` heredado seguia aplicando -- y en `LinearScaleBase.configure()` (no en `CategoryScale`, que es donde se esperaria por el nombre del defecto) `offset: true` añade `(max-min)/(numero de ticks-1)/2` de margen a CADA lado del rango visible, leido linea a linea en el bundle real. Con `ticks.maxTicksLimit: 12`, ese margen puede llegar a ser un doceavo del rango total a cada lado -- mucho mas que "medio ancho de vela", coincide con el hueco grande visible en la captura del usuario. `categoryPercentage`/`barPercentage` (la otra parte de la hipotesis (b), que si afecta al ANCHO de cada vela dentro de su hueco) no se tocan: no son la causa de este hueco, siguen en su valor por defecto de `BarController` (0.8/0.9).
+
+Arreglo: `offset: false` añadido explicitamente en `scales.x` del grafico de precio (`priceChart`), con un comentario en el propio codigo citando la fuente exacta del comportamiento para que no se repita la duda en el futuro.
+
+### Pan vertical
+
+`plugins.zoom.pan.mode` pasa de `'x'` a `'xy'` (el zoom con rueda/pellizco se queda en `'x'`, tal como pidio el usuario -- no se toca `zoom.zoom.mode`). `plugins.zoom.limits` gana una entrada `y` con el mismo criterio `'original'` que ya tenia `x`. Verificado en el codigo fuente de `chartjs-plugin-zoom@2.2.0` que esto es valido antes de escribirlo, no copiado a ciegas: `getLimit()`/`storeOriginalScaleLimits()` (el codigo que resuelve `'original'`) son genericos por `scale.id`/`scale.axis`, no especificos del eje X -- `limits[scale.id] || limits[scale.axis]` es literalmente la linea que lee la configuracion, sin ninguna rama especial para `x`. `limits.y: { min: 'original', max: 'original' }` ata el pan vertical al rango que Chart.js auto-escala al renderizar (precio minimo/maximo de las velas mas SMA/Bollinger/Stop/Objetivo visibles), igual que `limits.x` ya ataba el horizontal a los datos cargados.
+
+### Incluye
+
+Modificado: `src/Web/StockDetailPage.php` (`options.scales.x.offset: false`, `options.plugins.zoom.pan.mode: 'xy'`, `options.plugins.zoom.limits.y`, mas los comentarios explicando el porque). Sin cambios en PHP fuera del bloque de JS embebido, sin cambios de esquema ni de backend.
+
+### Verificado en ddev con
+
+El sandbox que implemento esto no tenia `php` ni `docker`/`ddev` operativo (mismo hueco de entorno documentado en otras entradas recientes), asi que no pudo correr `php -l` ni levantar un navegador; se apoyo en lectura directa del codigo fuente real de las tres librerias (confirmado arriba) y en revision visual del diff. Claude verifico despues en `ddev` real, con Chrome headless (`chrome.exe --headless=new --screenshot`) contra `https://stockanalyzer.ddev.site/?page=detail&ticker=WFC` (rango `1A`, el que carga por defecto): **confirmado que las velas llegan ahora hasta el borde del area de grafico, alineadas con el eje X del grafico de Volumen inmediatamente debajo** (mismo rango de fechas, mismo margen minimo a ambos lados) -- el hueco grande de la captura original del usuario ha desaparecido. No se automatizo la verificacion del arrastre (pan) interactivo con el navegador headless; se confia en la lectura del codigo fuente de `chartjs-plugin-zoom@2.2.0` ya citada arriba para `mode: 'xy'`/`limits.y`, cambio de bajo riesgo (una opcion de configuracion del propio plugin, sin logica nueva).
+
+### Resultado esperado
+
+El grafico de velas aprovecha todo el ancho disponible (hueco residual solo del orden de medio ancho de vela, por `categoryPercentage`/`barPercentage`, no del `offset` de eje ya quitado) y permite navegar en las dos direcciones tras hacer zoom, sin poder desplazarse fuera del rango de datos cargado en ningun eje.

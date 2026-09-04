@@ -793,7 +793,18 @@ class StockDetailPage
                         responsive: true,
                         maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
-                        scales: { x: { type: 'linear', ticks: { maxTicksLimit: 12, callback: priceAxisLabel } } },
+                        // offset:false anula el valor por defecto que
+                        // chartjs-chart-financial hereda de BarController
+                        // (scales.x.offset=true, pensado para su eje
+                        // 'category' original) y que sobrevive al cambio a
+                        // 'linear' de mas arriba: LinearScaleBase.configure()
+                        // (chart.js@4.4.4) añade medio intervalo de tick de
+                        // margen a cada lado del rango cuando offset es
+                        // true, y eso -- no el redondeo de min/max, que
+                        // 'linear' ya respeta el dominio real de los datos
+                        // por defecto -- es lo que dejaba hueco vacio antes
+                        // de la primera vela y despues de la ultima.
+                        scales: { x: { type: 'linear', offset: false, ticks: { maxTicksLimit: 12, callback: priceAxisLabel } } },
                         plugins: {
                             tooltip: {
                                 callbacks: {
@@ -803,8 +814,18 @@ class StockDetailPage
                                 }
                             },
                             zoom: {
-                                limits: { x: { min: 'original', max: 'original' } },
-                                pan: { enabled: true, mode: 'x' },
+                                // limits.y con el mismo criterio 'original'
+                                // que limits.x: chartjs-plugin-zoom@2.2.0
+                                // resuelve 'original' por id de escala
+                                // (getLimit()/storeOriginalScaleLimits() en
+                                // su codigo fuente son genericos, no
+                                // especificos del eje x), asi que es valido
+                                // aqui igual que en x.
+                                limits: {
+                                    x: { min: 'original', max: 'original' },
+                                    y: { min: 'original', max: 'original' }
+                                },
+                                pan: { enabled: true, mode: 'xy' },
                                 zoom: {
                                     wheel: { enabled: true },
                                     pinch: { enabled: true },

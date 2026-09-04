@@ -6,10 +6,11 @@ namespace StockAnalyzer\Providers;
 
 use DateInterval;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
+use StockAnalyzer\Interfaces\SymbolSearchProviderInterface;
 use StockAnalyzer\Models\Stock;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 
-class CachedMarketDataProvider implements MarketDataProviderInterface
+class CachedMarketDataProvider implements MarketDataProviderInterface, SymbolSearchProviderInterface
 {
     /**
      * TTL del historico por rango, usado cuando no se pasa uno explicito.
@@ -213,6 +214,25 @@ class CachedMarketDataProvider implements MarketDataProviderInterface
         }
 
         return $payments;
+    }
+
+    /**
+     * Capacidad opcional reenviada al proveedor envuelto (ver roadmap.md,
+     * "Buscador del Home", 2026-09-04): solo si `$this->inner` implementa
+     * `SymbolSearchProviderInterface`, si no `null`, mismo patron ya usado
+     * para `IndexMembershipCheckerInterface` en `BacktestingService`. A
+     * diferencia del resto de metodos de esta clase, DELIBERADAMENTE no pasa
+     * por `$this->cache`: es una busqueda rara, pedida por el usuario en el
+     * momento (buscador de texto libre del Home), no un dato de mercado que
+     * se repita entre peticiones -- cachearla no aporta nada.
+     */
+    public function searchSymbol(string $query): ?string
+    {
+        if (!$this->inner instanceof SymbolSearchProviderInterface) {
+            return null;
+        }
+
+        return $this->inner->searchSymbol($query);
     }
 
     /**
