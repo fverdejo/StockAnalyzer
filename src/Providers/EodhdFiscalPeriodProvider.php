@@ -81,6 +81,19 @@ class EodhdFiscalPeriodProvider
 {
     private const BASE_URL = 'https://eodhd.com/api/fundamentals/';
 
+    /**
+     * Fundamentals v1.1, la version que EODHD recomienda hoy para
+     * integraciones nuevas (Bloque B1 del plan de Codex del 2026-09-04,
+     * `PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md`). Confirmado
+     * en vivo el 2026-09-04 contra AAPL y JPM (10 anhos consultados en
+     * ambos, sin excepcion): la legacy de arriba pierde SILENCIOSAMENTE el
+     * trimestre Q4 de `Earnings.Trend` cuando su fecha de cierre de periodo
+     * coincide con la de cierre de ejercicio fiscal -- la entrada anual
+     * sobrescribe la trimestral en el mismo dict indexado por fecha. v1.1
+     * separa `Trend.Quarterly`/`Trend.Annual` y no pierde ningun Q4.
+     */
+    private const BASE_URL_V11 = 'https://eodhd.com/api/v1.1/fundamentals/';
+
     /** Una sola llamada HTTP trae todo el historico de un ticker. */
     public const CALLS_PER_TICKER = 1;
 
@@ -138,6 +151,41 @@ class EodhdFiscalPeriodProvider
      */
     public function fetchRawJson(string $ticker, ?string $eodhdSymbolOverride = null): string
     {
+        return $this->fetchRawJsonFrom(self::BASE_URL, $ticker, $eodhdSymbolOverride, 'EODHD');
+    }
+
+    /**
+     * La misma llamada que `fetchRawJson()` pero contra Fundamentals **v1.1**
+     * (`https://eodhd.com/api/v1.1/fundamentals/{ticker}`) -- Bloque B1 del
+     * plan de Codex del 2026-09-04. Comparte con `fetchRawJson()` la misma
+     * normalizacion de ticker, el mismo `$eodhdSymbolOverride` para los
+     * tickers `_old` (roadmap.md, "Segundo bloque" punto 3) y el mismo
+     * manejo de errores (la API key nunca aparece en el mensaje); la unica
+     * diferencia real es la URL base. Devuelve el cuerpo ORIGINAL, sin
+     * decodificar ni re-codificar, por el mismo motivo que `fetchRawJson()`:
+     * lo que se archiva debe ser bit a bit lo que EODHD envio.
+     */
+    public function fetchRawJsonV11(string $ticker, ?string $eodhdSymbolOverride = null): string
+    {
+        return $this->fetchRawJsonFrom(self::BASE_URL_V11, $ticker, $eodhdSymbolOverride, 'EODHD (v1.1)');
+    }
+
+    /**
+     * Logica comun de `fetchRawJson()`/`fetchRawJsonV11()`: normaliza el
+     * ticker, resuelve el simbolo real de EODHD, pide el cuerpo en crudo y
+     * valida que decodifica como JSON antes de darlo por archivable
+     * (roadmap.md: "validacion de JSON antes de marcar un ticker
+     * completo"), pero devuelve el CUERPO ORIGINAL sin re-codificar: un
+     * json_encode(json_decode(...)) podria reordenar claves o cambiar el
+     * formato numerico, y el objetivo es archivar exactamente lo que EODHD
+     * envio.
+     */
+    private function fetchRawJsonFrom(
+        string $baseUrl,
+        string $ticker,
+        ?string $eodhdSymbolOverride,
+        string $errorLabel
+    ): string {
         $rawTicker = strtoupper(trim($ticker));
 
         if ($rawTicker === '') {
@@ -147,26 +195,21 @@ class EodhdFiscalPeriodProvider
         $eodhdSymbol = $eodhdSymbolOverride !== null && trim($eodhdSymbolOverride) !== ''
             ? trim($eodhdSymbolOverride)
             : $this->toEodhdSymbol($rawTicker);
-        $body = $this->requestBody($eodhdSymbol, $rawTicker);
+        $body = $this->requestBody($baseUrl, $eodhdSymbol, $rawTicker);
 
-        // Se valida que decodifica como JSON antes de darlo por archivable
-        // (roadmap.md: "validacion de JSON antes de marcar un ticker
-        // completo"), pero se devuelve el CUERPO ORIGINAL sin re-codificar:
-        // un json_encode(json_decode(...)) podria reordenar claves o
-        // cambiar el formato numerico, y el objetivo es archivar
-        // exactamente lo que EODHD envio.
         try {
             $decoded = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
             throw new MarketDataException(sprintf(
-                'EODHD no devolvio JSON valido para %s: %s',
+                '%s no devolvio JSON valido para %s: %s',
+                $errorLabel,
                 $rawTicker,
                 substr($body, 0, 160)
             ), 0, $exception);
         }
 
         if (!is_array($decoded) || $decoded === []) {
-            throw new MarketDataException(sprintf('EODHD no devolvio datos para %s.', $rawTicker));
+            throw new MarketDataException(sprintf('%s no devolvio datos para %s.', $errorLabel, $rawTicker));
         }
 
         return $body;
@@ -389,13 +432,16 @@ class EodhdFiscalPeriodProvider
 
     /**
      * La peticion HTTP en crudo, sin decodificar: el cuerpo tal cual EODHD
-     * lo envio. Extraida de `fetchJson()` para que `fetchRawJson()` pueda
-     * archivar exactamente esto, sin pasar por un decode+encode que
-     * pudiera alterar el formato original.
+     * lo envio. Extraida de `fetchJson()` para que `fetchRawJson()`/
+     * `fetchRawJsonV11()` puedan archivar exactamente esto, sin pasar por un
+     * decode+encode que pudiera alterar el formato original. `$baseUrl`
+     * distingue legacy (`fetch()`/`fetchRawJson()`) de v1.1
+     * (`fetchRawJsonV11()`); el resto de la peticion (api_token, fmt,
+     * manejo de errores sin filtrar la API key) es identico en ambas.
      */
-    private function requestBody(string $eodhdSymbol, string $ticker): string
+    private function requestBody(string $baseUrl, string $eodhdSymbol, string $ticker): string
     {
-        $url = self::BASE_URL . rawurlencode($eodhdSymbol) . '?' . http_build_query([
+        $url = $baseUrl . rawurlencode($eodhdSymbol) . '?' . http_build_query([
             'api_token' => $this->apiKey,
             'fmt' => 'json',
         ]);
@@ -427,7 +473,7 @@ class EodhdFiscalPeriodProvider
      */
     private function fetchJson(string $eodhdSymbol, string $ticker): array
     {
-        $body = $this->requestBody($eodhdSymbol, $ticker);
+        $body = $this->requestBody(self::BASE_URL, $eodhdSymbol, $ticker);
 
         try {
             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);

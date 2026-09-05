@@ -153,6 +153,35 @@ final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCas
         self::assertNull($versions[0]['error_message']);
     }
 
+    /**
+     * hasVersion() (Bloque B1 del plan de Codex del 2026-09-04) es lo que
+     * hace reanudable `bin/archive-eodhd-fundamentals-v11.php`: distingue
+     * por api_version/section igual que el resto del repositorio, y no se
+     * confunde por un ticker con version en OTRO api_version/section.
+     */
+    public function testHasVersionDistingueApiVersionYSeccion(): void
+    {
+        self::assertFalse($this->repository->hasVersion('AAPL', 'v1.1', 'full'));
+
+        $this->repository->store('AAPL', '{"v":1}', 'legacy', 'full', new DateTimeImmutable('2026-09-01'));
+
+        self::assertTrue($this->repository->hasVersion('AAPL', 'legacy', 'full'));
+        self::assertFalse($this->repository->hasVersion('AAPL', 'v1.1', 'full'));
+        self::assertFalse($this->repository->hasVersion('MSFT', 'legacy', 'full'));
+
+        $this->repository->store('AAPL', '{"v":1}', 'v1.1', 'full', new DateTimeImmutable('2026-09-01'));
+
+        self::assertTrue($this->repository->hasVersion('AAPL', 'v1.1', 'full'));
+    }
+
+    public function testHasVersionSeNormalizaAMayusculas(): void
+    {
+        $this->repository->store('aapl', '{}', 'v1.1', 'full', new DateTimeImmutable());
+
+        self::assertTrue($this->repository->hasVersion('AAPL', 'v1.1', 'full'));
+        self::assertTrue($this->repository->hasVersion('aapl', 'v1.1', 'full'));
+    }
+
     public function testCountYCountDistinctTickersReflejanLoGuardado(): void
     {
         $this->repository->store('AAPL', '{"v":1}', 'legacy', 'full', new DateTimeImmutable('2026-09-01'));

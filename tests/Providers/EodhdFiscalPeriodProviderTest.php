@@ -442,4 +442,165 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
 
         (new EodhdFiscalPeriodProvider('clave', new HttpClient()))->parse(['Financials' => []], '   ');
     }
+
+    /**
+     * fetchRawJsonV11() (Bloque B1 del plan de Codex del 2026-09-04) tiene
+     * que golpear /api/v1.1/fundamentals/, no /api/fundamentals/, y devolver
+     * el CUERPO ORIGINAL sin recodificar, exactamente como fetchRawJson().
+     */
+    public function testFetchRawJsonV11GolpeaLaUrlV11YDevuelveElCuerpoOriginal(): void
+    {
+        $original = '{"z_ultimo":1,"a_primero":2,"Financials":{"Income_Statement":{"quarterly":[]},'
+            . '"Balance_Sheet":{"quarterly":[]},"Cash_Flow":{"quarterly":[]}}}';
+        $urls = [];
+        $capture = static function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        };
+
+        $http = new class ($original, $capture) extends HttpClient {
+            public function __construct(private readonly string $body, private $onGet)
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                ($this->onGet)($url);
+
+                return new Response(200, [], $this->body);
+            }
+        };
+
+        $raw = (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJsonV11('AAPL');
+
+        self::assertSame($original, $raw);
+        self::assertStringContainsString('/v1.1/fundamentals/AAPL.US', $urls[0]);
+        self::assertStringNotContainsString('/v1.1/fundamentals/AAPL.US.', $urls[0]);
+    }
+
+    /**
+     * fetchRawJsonV11() comparte el mismo override de simbolo que
+     * fetchRawJson() (tickers `_old`, roadmap.md "Segundo bloque" punto 3):
+     * cuando se pasa, se usa EXACTAMENTE tal cual, sin derivarlo del ticker.
+     */
+    public function testFetchRawJsonV11RespetaElOverrideDeSimbolo(): void
+    {
+        $urls = [];
+        $capture = static function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        };
+
+        $http = new class ('{"Financials":{}}', $capture) extends HttpClient {
+            public function __construct(private readonly string $body, private $onGet)
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                ($this->onGet)($url);
+
+                return new Response(200, [], $this->body);
+            }
+        };
+
+        (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJsonV11('APC_OLD', 'APC_old.US');
+
+        self::assertStringContainsString('/v1.1/fundamentals/APC_old.US', $urls[0]);
+    }
+
+    /**
+     * Un cuerpo que no decodifica como JSON no se puede dar por archivado,
+     * igual que en fetchRawJson().
+     */
+    public function testFetchRawJsonV11RechazaUnCuerpoQueNoEsJson(): void
+    {
+        $http = new class extends HttpClient {
+            public function __construct()
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                return new Response(200, [], 'esto no es json');
+            }
+        };
+
+        $this->expectException(MarketDataException::class);
+
+        (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJsonV11('AAPL');
+    }
+
+    /**
+     * Un 404 en v1.1 llega como error legible con el mismo criterio que
+     * fetchRawJson(): la API key nunca aparece en el mensaje.
+     */
+    public function testFetchRawJsonV11UnSimboloNoEncontradoLlegaComoErrorLegibleSinFiltrarLaApiKey(): void
+    {
+        $http = new class extends HttpClient {
+            public function __construct()
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                return new Response(404, [], 'Not Found');
+            }
+        };
+
+        try {
+            (new EodhdFiscalPeriodProvider('CLAVE-SECRETA-123', $http))->fetchRawJsonV11('XYZQ');
+            self::fail('Se esperaba una MarketDataException.');
+        } catch (MarketDataException $exception) {
+            self::assertStringContainsString('XYZQ', $exception->getMessage());
+            self::assertStringContainsString('404', $exception->getMessage());
+            self::assertStringNotContainsString('CLAVE-SECRETA-123', $exception->getMessage());
+        }
+    }
+
+    public function testFetchRawJsonV11ConTickerVacioNoLlegaAGastarUnaLlamada(): void
+    {
+        $http = new class extends HttpClient {
+            public function __construct()
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                throw new \LogicException('No deberia llamarse al proveedor con un ticker vacio.');
+            }
+        };
+
+        $this->expectException(MarketDataException::class);
+
+        (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJsonV11('   ');
+    }
+
+    /**
+     * fetchRawJson() (legacy) sigue golpeando /api/fundamentals/ SIN el
+     * prefijo v1.1: el metodo nuevo no debe alterar el camino existente.
+     */
+    public function testFetchRawJsonLegacySigueGolpeandoLaUrlSinV11(): void
+    {
+        $urls = [];
+        $capture = static function (string $url) use (&$urls): void {
+            $urls[] = $url;
+        };
+
+        $http = new class ('{"Financials":{}}', $capture) extends HttpClient {
+            public function __construct(private readonly string $body, private $onGet)
+            {
+            }
+
+            public function get(string $url, array $options = []): Response
+            {
+                ($this->onGet)($url);
+
+                return new Response(200, [], $this->body);
+            }
+        };
+
+        (new EodhdFiscalPeriodProvider('clave', $http))->fetchRawJson('AAPL');
+
+        self::assertStringContainsString('/api/fundamentals/AAPL.US', $urls[0]);
+        self::assertStringNotContainsString('/v1.1/', $urls[0]);
+    }
 }

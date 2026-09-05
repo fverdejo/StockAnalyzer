@@ -6472,3 +6472,58 @@ Tras desplegar y aplicar la migracion 025 en la Pi (`938` filas confirmadas en `
 **Arreglo**: `bin/backfill-eodhd-fundamental-versions.php` ya no hace un unico SELECT de las 4 columnas para las 938 filas. Primero pide solo los tickers (`SELECT ticker FROM eodhd_raw_fundamentals`, coste de memoria insignificante) y despues, dentro del bucle, pide el payload de UN ticker a la vez con una consulta preparada (`WHERE ticker = :ticker`) -- en memoria hay como mucho un payload a la vez (unos pocos MB en el peor caso de los 938), nunca los 580 MB completos. Reprobado en `ddev` contra los 938 reales: sigue siendo idempotente (`Copiados ahora: 0 | ya existian: 938`, misma cobertura 938/938), PHPStan limpio.
 
 **Leccion para cualquier script futuro que toque la Pi**: nunca asumir que un patron que funciona en `ddev` (mucha mas RAM disponible en la maquina de desarrollo) es seguro sin cambios en un dispositivo de 906 MiB de RAM. Antes de repetir el backfill en la Pi, comprobar memoria/carga en directo (`free -h`, `uptime`) mientras corre, no solo lanzarlo y esperar.
+
+---
+
+## 2026-09-05 - Bloque B1 del plan de Codex: Fundamentals v1.1 archivado para los 938 tickers, Q4 confirmado y recuperado
+
+Estado: implementado y ejecutado contra los 938 tickers reales de `ddev` (938/938 archivados, 0 errores). Cierra el Bloque B1 de `PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md` (Codex): "Fundamentals v1.1 para los 938 tickers" + informe obligatorio de diferencias de esquema/Q4 recuperados. Trabajo hecho ENTERAMENTE contra `ddev`; ningun SSH ni conexion a la Raspberry Pi de produccion (192.168.1.156), por instruccion explicita del usuario tras el incidente de memoria de la entrada anterior.
+
+Motivo: `EodhdFiscalPeriodProvider` solo sabia hablar con `/api/fundamentals/` (legacy). Confirmado el 2026-09-04 contra AAPL y JPM que esa version pierde SILENCIOSAMENTE el trimestre Q4 de `Earnings.Trend` cuando su fecha de cierre coincide con la de cierre de ejercicio fiscal -- la entrada anual sobrescribe la trimestral en el mismo dict indexado por fecha. `/api/v1.1/fundamentals/` es la version que EODHD recomienda para integraciones nuevas y separa `Trend.Quarterly`/`Trend.Annual`.
+
+### Implementado
+
+- **`EodhdFiscalPeriodProvider::fetchRawJsonV11(string $ticker, ?string $eodhdSymbolOverride = null): string`** -- mismo contrato que `fetchRawJson()` (normalizacion de ticker, override de simbolo para los 18 tickers `_old`/`_old1`, cuerpo original sin recodificar, API key nunca en el mensaje de error), pero contra `https://eodhd.com/api/v1.1/fundamentals/`. Refactor interno sin cambiar comportamiento observable: `requestBody()` gano un parametro `$baseUrl` y ambos metodos publicos (`fetchRawJson()`/`fetchRawJsonV11()`) delegan en un `fetchRawJsonFrom()` privado compartido; `fetch()`/`fetchJson()` (camino legacy usado por scripts existentes) siguen exactamente igual, pasando `self::BASE_URL` explicitamente.
+- **`EodhdRawFundamentalVersionsRepository::hasVersion(string $ticker, string $apiVersion, string $section): bool`** -- comprobacion ligera (un `SELECT 1 ... LIMIT 1`) para no traer los metadatos completos de `allVersionsFor()` solo para verificar existencia; es lo que hace reanudable el script nuevo.
+- **`bin/archive-eodhd-fundamentals-v11.php`** -- mismo estilo que `bin/archive-eodhd-fundamentals.php`/`bin/archive-legacy-fundamentals.php`: opciones `--tickers`, `--max-tickers`, `--force`, reintento de 5s en 429, universo por defecto = `EodhdRawFundamentalsRepository::archivedTickers()` (los 938 ya archivados en legacy, NO `config/universes.php`, que no coincide exactamente porque incluye 310 antiguos componentes del S&P 500), mismo `$symbolFor()` para reconstruir el simbolo real de los 18 tickers `_old`/`_old1` que ya usaba `archive-legacy-fundamentals.php`. Escribe en `eodhd_raw_fundamental_versions` con `api_version='v1.1'`, `section='full'`, vía `EodhdRawFundamentalVersionsRepository::store()` -- NUNCA en `eodhd_raw_fundamentals` (tabla legacy intacta, ningun consumidor actual tocado).
+
+### Resultado real del archivado (ddev, 2026-09-05)
+
+Ejecutado en dos tandas (una manual de verificacion con 6 tickers para el informe de comparacion, seguida del lote completo en segundo plano) mas dos reintentos automaticos de 429 durante el lote completo, sin ningun fallo definitivo:
+
+- **938/938 tickers con version `v1.1`/`full` archivada. 0 errores, 0 tickers saltados por fallo.**
+- Verificacion de cobertura tras la ejecucion: `COUNT(*) FROM eodhd_raw_fundamentals` = 938, `COUNT(DISTINCT ticker) FROM eodhd_raw_fundamental_versions WHERE api_version='v1.1' AND section='full'` = 938, `COUNT(*)` de esas mismas filas = 938 (ninguna duplicada), 0 tickers de legacy sin su version v1.1 correspondiente.
+- Reanudabilidad verificada en vivo: una segunda invocacion sobre tickers ya archivados (`AAPL MSFT JPM`) los reporta como "ya archivado (v1.1), se salta" sin gastar cuota; un `_old` (`APC_OLD` -> simbolo real `APC_old.US`) se archiva correctamente en la misma pasada.
+- Almacenamiento comprimido: `legacy` 938 filas / 55,9 MB; `v1.1` 938 filas / 56,4 MB (practicamente el mismo tamano; v1.1 no infla el payload de forma relevante pese a anadir campos nuevos en `Earnings.Trend`).
+- Cuota gastada: 938 peticiones x 10 unidades = 9.380 de las 100.000/dia disponibles, muy por debajo del limite diario, en una suscripcion que vence el 2026-10-01.
+
+### Informe de comparacion legacy vs v1.1 (obligatorio del Bloque B1)
+
+Muestra: `AAPL`/`MSFT` (ejercicio fiscal no natural, septiembre/junio), `JPM` (financiera, ejercicio natural), `O` (REIT), `SAN.MC` (IBEX, moneda no USD), `APC_OLD` (antiguo componente delistado con sufijo de desambiguacion `_old`). Analisis hecho sobre los payloads YA ARCHIVADOS de ambas versiones (sin gastar cuota extra), con scripts de inspeccion de un solo uso en `storage/scratch/` (`inspect-v11-vs-legacy.php`, `dump-trend-entry.php`, `report-q4-recovery.php`, `compare-sections.php`).
+
+**Q4 recuperado, confirmado con evidencia exacta (no solo conteo):** para cada ticker se identificaron las fechas donde v1.1 tiene SIMULTANEAMENTE una entrada en `Trend.Quarterly` (con `fiscalQuarter: "Q4"`) y otra en `Trend.Annual` con la MISMA fecha (colision real, la unica situacion donde legacy puede perder algo). En las 49 fechas de colision encontradas en la muestra, legacy se quedo **exactamente con la entrada anual en el 100% de los casos** (verificado comparando el campo `period` de la entrada legacy contra el de `Trend.Annual` en la misma fecha), perdiendo siempre la trimestral:
+
+- `AAPL`: 10/10 colisiones (2017-09-30 a 2026-09-30, FYE septiembre).
+- `MSFT`: 10/10 colisiones (2017-06-30 a 2026-06-30, FYE junio).
+- `JPM`: 10/10 colisiones (2017-12-31 a 2026-12-31, FYE diciembre).
+- `O`: 10/10 colisiones (2017-12-31 a 2026-12-31, FYE diciembre).
+- `SAN.MC`: 6/6 colisiones (2017, 2021, 2022, 2024, 2025, 2026 -12-31; los años 2018/2019/2023/2027 tienen entrada anual en v1.1 pero SIN contraparte trimestral -- no son perdidas reales, EODHD simplemente no tenia consenso trimestral Q4 esos años para este valor, algo esperable en un ticker no estadounidense con menor cobertura de analistas).
+- `APC_OLD`: 3/3 colisiones (2017-12-31 a 2019-12-31; ticker delistado, cobertura de analistas mas corta).
+
+Ejemplo concreto (AAPL, `2024-09-30`): legacy `Earnings.Trend["2024-09-30"]` solo trae la fila anual (`period: "0y"`, EPS estimado ~6,70, ingresos ~390.498M); v1.1 `Trend.Quarterly["2024-09-30"]` trae la fila trimestral perdida (`period: "0q"`, `fiscalQuarter: "Q4"`, EPS estimado ~1,60, ingresos ~94.580M) ADEMAS de `Trend.Annual["2024-09-30"]` con la misma fila anual que legacy.
+
+**Diferencias de esquema:** la UNICA diferencia estructural real es `Earnings.Trend`, que pasa de un dict plano indexado por fecha (legacy) a `{"Quarterly": {...}, "Annual": {...}}` (v1.1), cada entrada con dos campos nuevos que legacy no tiene: `type` (`"quarterly"`/`"yearly"`) y, solo en las trimestrales, `fiscalQuarter` (`"Q1"`-`"Q4"`). El resto de la respuesta es IDENTICO en la muestra completa: mismas claves de primer nivel en `General` (37, o 34/38 en `SAN.MC`/`APC_OLD` por diferencias normales de cobertura, no de version), `Highlights` (25), `Valuation` (7), `SharesStats` (9), `Earnings` (3) y `Financials` (3); mismo esquema de fila en `Financials.Income_Statement.quarterly` (ambas versiones, cero claves exclusivas de una u otra); mismo numero de entradas en `Earnings.History` en los 6 tickers (132/132 AAPL y MSFT, 126/126 JPM, 114/114 O, 88/88 SAN.MC, 11/11 APC_OLD).
+
+**Campos ausentes:** ninguno detectado en ninguna direccion mas alla del split de `Trend` (que es aditivo: v1.1 no quita ningun campo de las filas de `Trend`, solo las separa y etiqueta). No se encontraron periodos presentes en una version y ausentes en la otra en `Financials.Income_Statement.quarterly` (164/164 AAPL y MSFT, 164/164 JPM y O con distinto total cada uno segun antigüedad de cada ticker, 157/157 SAN.MC, 78/78 APC_OLD -- mismo conteo en ambas versiones en los 6 casos).
+
+### Incluye
+
+Nuevo: `bin/archive-eodhd-fundamentals-v11.php`. Modificado: `src/Providers/EodhdFiscalPeriodProvider.php` (`fetchRawJsonV11()`, `BASE_URL_V11`, refactor de `requestBody()`/`fetchRawJsonFrom()` sin tocar el comportamiento de `fetch()`/`fetchRawJson()`), `src/Repository/EodhdRawFundamentalVersionsRepository.php` (`hasVersion()`), `tests/Providers/EodhdFiscalPeriodProviderTest.php` (7 tests nuevos: URL v1.1 correcta, cuerpo original sin recodificar, override de simbolo `_old` respetado, cuerpo no-JSON rechazado, 404 legible sin filtrar la API key, ticker vacio no gasta llamada, camino legacy sigue golpeando la URL sin `v1.1`), `tests/Integration/EodhdRawFundamentalVersionsRepositoryTest.php` (2 tests nuevos para `hasVersion()`).
+
+### Verificado en ddev con
+
+`ddev exec vendor/bin/phpunit`: **558 tests, 1.574 assertions, OK** (1 skip preexistente sin relacion). `ddev exec vendor/bin/phpstan analyse`: sin errores (259 ficheros), limpio. Archivado real de los 938 tickers ejecutado y verificado por conteo/cobertura como se detalla arriba (no simulado).
+
+### Resultado esperado
+
+El historico de `Earnings.Trend` de los 938 tickers ya no depende de una API que pierde silenciosamente su Q4 -- la version `v1.1` archivada en `eodhd_raw_fundamental_versions` (junto a la `legacy` ya copiada en la entrada anterior) tiene el trimestre completo disponible para cuando se decida construir un consumidor real sobre ella (fuera del alcance de esta tarea: hoy es solo archivo, ningun `Service`/`Repository` de la aplicacion lee todavia de `eodhd_raw_fundamental_versions`). Bloque B1 cerrado. B2-B4 y los bloques C-F del plan siguen sin empezar.

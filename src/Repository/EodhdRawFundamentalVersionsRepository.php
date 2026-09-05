@@ -106,6 +106,30 @@ class EodhdRawFundamentalVersionsRepository
     }
 
     /**
+     * Si ya hay al menos una version archivada de un `(ticker, api_version,
+     * section)`. Es lo que hace REANUDABLE `bin/archive-eodhd-fundamentals-v11.php`
+     * (Bloque B1 del plan de Codex del 2026-09-04): un proceso cortado a
+     * mitad de camino no vuelve a pedir a EODHD lo que ya se guardo con
+     * exito, sin tener que traer los metadatos completos de
+     * `allVersionsFor()` solo para comprobar existencia.
+     */
+    public function hasVersion(string $ticker, string $apiVersion, string $section): bool
+    {
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT 1 FROM eodhd_raw_fundamental_versions
+             WHERE ticker = :ticker AND api_version = :api_version AND section = :section
+             LIMIT 1'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'api_version' => $apiVersion,
+            'section' => $section,
+        ]);
+
+        return $statement->fetchColumn() !== false;
+    }
+
+    /**
      * Metadatos (sin el payload completo) de todas las versiones archivadas
      * de un ticker, de mas reciente a mas antigua. Sirve para inspeccionar
      * el historial sin cargar megabytes de JSON comprimido a memoria.
