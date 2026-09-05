@@ -9,6 +9,7 @@ use DateTimeImmutable;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
+use StockAnalyzer\DTO\FundamentalTtmSnapshot;
 use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Enums\ScoreCategory;
 use StockAnalyzer\Interfaces\IndexMembershipCheckerInterface;
@@ -95,7 +96,17 @@ class BacktestingService
          * `$dividendGrowthCalculator`/`$backtestingConfig` -- ningun test
          * que no use `mode='fundamental'` necesita inyectar nada distinto.
          */
-        private readonly RelativeFundamentalScorer $fundamentalScorer = new RelativeFundamentalScorer()
+        private readonly RelativeFundamentalScorer $fundamentalScorer = new RelativeFundamentalScorer(),
+        /**
+         * E1 (`PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md`,
+         * Bloque E, `2026-09-05`): bandera compuesta de deterioro
+         * fundamental simultaneo, consumida solo por
+         * `runDeteriorationRiskAnalysis()`. Pura (sin red ni base de
+         * datos, ver su propio docblock), mismo patron de "instanciar por
+         * defecto" que `$fundamentalScorer` -- ningun test que no llame a
+         * ese metodo necesita inyectar nada distinto.
+         */
+        private readonly FundamentalDeteriorationFlagger $deteriorationFlagger = new FundamentalDeteriorationFlagger()
     ) {
     }
 
@@ -634,6 +645,352 @@ class BacktestingService
                 'errors' => $errors,
             ]
         );
+    }
+
+    /**
+     * E1 del plan de aprovechamiento de EODHD ("Deterioro fundamental",
+     * `PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md`, Bloque E,
+     * formula predeclarada por `auditor-estadistico` el 2026-09-05):
+     * pregunta de RIESGO DE COLA, no de ranking/alpha. Arquitectonicamente
+     * distinto de `runCrossSectional()` (top-N por una puntuacion): aqui no
+     * se elige ningun top-N, cada fecha separa los tickers en dos grupos --
+     * "deterioro=true" (`FundamentalDeteriorationFlagger::isDeteriorating()`,
+     * ver su docblock para la formula exacta y la interpretacion de "caja"
+     * como FCF yield) contra el universo ELEGIBLE completo de esa fecha
+     * (superconjunto que INCLUYE al propio grupo deterioro, mismo criterio
+     * "top vs eligible" que `runCrossSectional()`, no "deterioro vs el
+     * resto") -- y se mide la PROPORCION de retornos por debajo de
+     * `$tailReturnThreshold` en cada grupo, no la media.
+     *
+     * Reutiliza `collectSamplesWithHistory()` (mode='fundamental': no exige
+     * Momentum 12-1, igual que P3.3/P3.4) para el calendario bursatil real
+     * y el TTM "actual" de cada muestra (mismos campos ya recopilados:
+     * `operating_margin`, `roic`, `free_cash_flow_yield`,
+     * `debt_to_equity`, `fundamentals_is_point_in_time`). El TTM de "hace
+     * un año" NO esta en esa muestra: exige una consulta PROPIA y
+     * ADICIONAL a `FundamentalsHistoryRepository::findAsOf()` con la fecha
+     * desplazada 365 dias -- `fundamentalsAt()` no sirve aqui porque cae
+     * al fallback de HOY cuando no hay snapshot, que seria mirar el futuro
+     * para "hace un año". Sin snapshot de hace un año, `findAsOf()`
+     * devuelve `null` y los cuatro factores quedan excluidos (ver
+     * `FundamentalDeteriorationFlagger`): la muestra SIGUE en el universo
+     * elegible (tiene retorno real y TTM actual point-in-time valido) pero
+     * nunca puede marcarse `deterioro=true` -- "no se puede confirmar
+     * deterioro" no es lo mismo que "no elegible".
+     *
+     * Metrica PRINCIPAL: diferencia de proporciones de eventos de cola
+     * (`forward_return < $tailReturnThreshold`) entre el grupo deterioro y
+     * el universo elegible, PAREADA POR FECHA (mismo diseño de
+     * independencia P0.2 que `runCrossSectional()`: `$step >=
+     * $horizonDays` y hueco minimo de `$horizonDays` sesiones reales entre
+     * dos fechas evaluadas, via `tradingSessionGap()`). El p10 de cada
+     * grupo (`percentile()`, sobre las muestras agrupadas de TODAS las
+     * fechas) es diagnostico SECUNDARIO: nunca decide significancia, eso
+     * lo hace el t-stat de la diferencia de proporciones -- y ese umbral
+     * (Bonferroni o sin corregir) lo interpreta quien invoque este metodo,
+     * no el metodo mismo (mismo criterio que
+     * `storage/scratch/run_fundamental_only_backtest.php`: "no calcula
+     * Bonferroni ni declara significancia").
+     *
+     * Una fecha se descarta (`dates_dropped_low_breadth`) si NINGUN ticker
+     * quedo marcado `deterioro=true` esa fecha: sin ningun miembro en el
+     * grupo no hay proporcion de grupo que calcular (division por cero),
+     * no es un umbral de amplitud arbitrario.
+     *
+     * @param list<string> $tickers Mismo significado que en
+     *        `runCrossSectional()` (universo amplio si `$indexCode` viene
+     *        acompañado de un `IndexMembershipCheckerInterface` conectado).
+     * @param ?string $indexCode Mismo significado que en
+     *        `runCrossSectional()`. Sin efecto si el servicio no tiene un
+     *        `IndexMembershipCheckerInterface` conectado.
+     * @param float $tailReturnThreshold Umbral de perdida FIJADO ANTES DE
+     *        MEDIR (Bloque E1, `auditor-estadistico` 2026-09-05): -10,0 por
+     *        defecto, eleccion arbitraria pero predeclarada, NO ajustada
+     *        despues de ver resultados. Cambiar este valor tras haber visto
+     *        un resultado real anularia la garantia que este diseño pide.
+     * @return array<string,mixed>
+     */
+    public function runDeteriorationRiskAnalysis(
+        array $tickers,
+        int $horizonDays,
+        int $step,
+        ?string $indexCode = null,
+        float $tailReturnThreshold = -10.0
+    ): array {
+        if ($step < $horizonDays) {
+            throw new \InvalidArgumentException(
+                "Un backtest transversal necesita fechas independientes: el paso ($step) no puede ser menor que el horizonte ($horizonDays)."
+            );
+        }
+
+        if (!$this->fundamentalsHistory instanceof FundamentalsHistoryRepository) {
+            throw new \LogicException(
+                'runDeteriorationRiskAnalysis() necesita FundamentalsHistoryRepository conectado: sin el no hay forma de consultar el TTM de hace un año, que es la mitad de la comparacion.'
+            );
+        }
+
+        $membershipActive = $indexCode !== null && $this->indexMembership instanceof IndexMembershipCheckerInterface;
+        $samplesByDate = [];
+        $errors = [];
+        $droppedNotMember = 0;
+        $droppedNoFundamentalsPit = 0;
+        $samplesKept = 0;
+        $tradingCalendar = [];
+
+        foreach ($tickers as $ticker) {
+            try {
+                $collected = $this->collectSamplesWithHistory($ticker, $horizonDays, $step, 'fundamental');
+
+                foreach ($collected['history'] as $quote) {
+                    $tradingCalendar[$quote->getDate()->format('Y-m-d')] = true;
+                }
+
+                foreach ($collected['samples'] as $sample) {
+                    if ($sample['fundamentals_is_point_in_time'] !== true) {
+                        // Sin TTM actual point-in-time real, ni siquiera el
+                        // lado "actual" de la comparacion es de fiar --
+                        // mismo criterio que el paso (a) de
+                        // rankByFundamentalNeutral().
+                        $droppedNoFundamentalsPit++;
+
+                        continue;
+                    }
+
+                    $sampleDate = new DateTimeImmutable((string) $sample['date']);
+
+                    if ($membershipActive && !$this->indexMembership->isMemberAt($ticker, (string) $indexCode, $sampleDate)) {
+                        $droppedNotMember++;
+
+                        continue;
+                    }
+
+                    $previousPayload = $this->fundamentalsHistory->findAsOf(
+                        $ticker,
+                        $sampleDate->modify('-365 days')
+                    );
+                    $isDeteriorating = false;
+
+                    if ($previousPayload !== null) {
+                        $previous = FundamentalsHistoryRepository::fromArray($previousPayload);
+                        $isDeteriorating = $this->deteriorationFlagger->isDeteriorating(
+                            new FundamentalTtmSnapshot(
+                                operatingMargin: $sample['operating_margin'],
+                                roic: $sample['roic'],
+                                freeCashFlowYield: $sample['free_cash_flow_yield'],
+                                debtToEquity: $sample['debt_to_equity']
+                            ),
+                            new FundamentalTtmSnapshot(
+                                operatingMargin: $previous->getOperatingMargin(),
+                                roic: $previous->getRoic(),
+                                freeCashFlowYield: $previous->getFreeCashFlowYield(),
+                                debtToEquity: $previous->getDebtToEquity()
+                            )
+                        );
+                    }
+
+                    $samplesKept++;
+                    $samplesByDate[$sample['date']][] = [
+                        'ticker' => strtoupper($ticker),
+                        'forward_return' => $sample['forward_return'],
+                        'is_deteriorating' => $isDeteriorating,
+                    ];
+                }
+            } catch (\Throwable $exception) {
+                $errors[$ticker] = $exception->getMessage();
+            }
+        }
+
+        ksort($samplesByDate);
+        ksort($tradingCalendar);
+        $sessionIndex = array_flip(array_keys($tradingCalendar));
+
+        $dates = [];
+        $lastEvaluatedDate = null;
+        $droppedLowBreadth = 0;
+        $droppedOverlapping = 0;
+        $tailDiffs = [];
+        $deteriorationRates = [];
+        $universeRates = [];
+        $deteriorationCounts = [];
+        $universeSizes = [];
+        $pooledDeterioratingReturns = [];
+        $pooledUniverseReturns = [];
+
+        foreach ($samplesByDate as $date => $daySamples) {
+            $deteriorating = array_values(array_filter(
+                $daySamples,
+                static fn (array $sample): bool => $sample['is_deteriorating']
+            ));
+
+            if ($deteriorating === []) {
+                $droppedLowBreadth++;
+
+                continue;
+            }
+
+            if ($lastEvaluatedDate !== null) {
+                $sessionGap = $this->tradingSessionGap($lastEvaluatedDate, (string) $date, $sessionIndex);
+
+                if ($sessionGap === null || $sessionGap < $horizonDays) {
+                    $droppedOverlapping++;
+
+                    continue;
+                }
+            }
+
+            $lastEvaluatedDate = (string) $date;
+
+            $universeReturns = array_column($daySamples, 'forward_return');
+            $deterioratingReturns = array_column($deteriorating, 'forward_return');
+
+            $universeTailRate = $this->tailRate($universeReturns, $tailReturnThreshold);
+            $deteriorationTailRate = $this->tailRate($deterioratingReturns, $tailReturnThreshold);
+
+            $tailDiffs[] = $deteriorationTailRate - $universeTailRate;
+            $deteriorationRates[] = $deteriorationTailRate;
+            $universeRates[] = $universeTailRate;
+            $deteriorationCounts[] = count($deteriorating);
+            $universeSizes[] = count($daySamples);
+            $pooledDeterioratingReturns = array_merge($pooledDeterioratingReturns, $deterioratingReturns);
+            $pooledUniverseReturns = array_merge($pooledUniverseReturns, $universeReturns);
+
+            $dates[] = [
+                'date' => (string) $date,
+                'universe_size' => count($daySamples),
+                'deteriorating_count' => count($deteriorating),
+                'universe_tail_rate' => round($universeTailRate * 100, 2),
+                'deterioration_tail_rate' => round($deteriorationTailRate * 100, 2),
+                'tail_rate_diff' => round(($deteriorationTailRate - $universeTailRate) * 100, 2),
+            ];
+        }
+
+        return array_merge(
+            [
+                'horizon_days' => $horizonDays,
+                'step' => $step,
+                'tail_return_threshold' => $tailReturnThreshold,
+                'generated_at' => (new DateTimeImmutable())->format(DATE_ATOM),
+                'dates_evaluated' => count($dates),
+                'dates_dropped_low_breadth' => $droppedLowBreadth,
+                'dates_dropped_overlapping' => $droppedOverlapping,
+                'point_in_time_universe' => $membershipActive,
+                'index_code' => $membershipActive ? strtoupper((string) $indexCode) : null,
+                'samples_kept' => $samplesKept,
+                'samples_dropped_not_member' => $droppedNotMember,
+                'samples_dropped_no_fundamentals_pit' => $droppedNoFundamentalsPit,
+                'avg_universe_size_per_date' => $this->average(array_map(static fn (int $v): float => (float) $v, $universeSizes)),
+                'avg_deteriorating_tickers_per_date' => $this->average(array_map(static fn (int $v): float => (float) $v, $deteriorationCounts)),
+            ],
+            $this->tailRiskStatistics($tailDiffs, $deteriorationRates, $universeRates, $pooledDeterioratingReturns, $pooledUniverseReturns),
+            [
+                'dates' => $dates,
+                'errors' => $errors,
+            ]
+        );
+    }
+
+    /**
+     * Proporcion (fraccion 0-1, no porcentaje) de retornos por debajo de
+     * `$threshold`: el evento de cola que mide `runDeteriorationRiskAnalysis()`.
+     * Quien la publica en el resultado la multiplica por 100. `0.0` con una
+     * lista vacia -- en la practica nunca ocurre aqui (el grupo deterioro ya
+     * se comprueba no vacio antes de llamar, y el universo lo contiene por
+     * construccion), pero se documenta en vez de dividir por cero.
+     *
+     * @param list<float> $returns
+     */
+    private function tailRate(array $returns, float $threshold): float
+    {
+        if ($returns === []) {
+            return 0.0;
+        }
+
+        $tailCount = 0;
+
+        foreach ($returns as $return) {
+            if ($return < $threshold) {
+                $tailCount++;
+            }
+        }
+
+        return $tailCount / count($returns);
+    }
+
+    /**
+     * Percentil por interpolacion lineal entre las dos posiciones mas
+     * cercanas (mismo metodo que "PERCENTILE.INC" de Excel/el percentil por
+     * defecto de NumPy): con `$values` ordenados, la posicion exacta es
+     * `(n-1) * $percentile/100`, y el valor devuelto interpola entre los dos
+     * valores mas cercanos si esa posicion no es entera. Diagnostico
+     * SECUNDARIO de `runDeteriorationRiskAnalysis()` (p10): nunca decide
+     * significancia, solo describe la cola de la distribucion agrupada.
+     *
+     * @param list<float> $values
+     */
+    private function percentile(array $values, float $percentile): ?float
+    {
+        if ($values === []) {
+            return null;
+        }
+
+        sort($values);
+        $count = count($values);
+        $rank = ($count - 1) * ($percentile / 100);
+        $lowerIndex = (int) floor($rank);
+        $upperIndex = (int) ceil($rank);
+
+        if ($lowerIndex === $upperIndex) {
+            return $values[$lowerIndex];
+        }
+
+        $weight = $rank - $lowerIndex;
+
+        return $values[$lowerIndex] + $weight * ($values[$upperIndex] - $values[$lowerIndex]);
+    }
+
+    /**
+     * Estadistica de `runDeteriorationRiskAnalysis()`: mismo diseño pareado
+     * por fecha que `crossSectionalStatistics()` (ver su docblock), pero
+     * sobre una diferencia de PROPORCIONES de eventos de cola, no una
+     * diferencia de medias de retorno. `p10_*` es diagnostico SECUNDARIO
+     * (`percentile()`, sobre las muestras agrupadas de todas las fechas
+     * juntas, no por fecha): nunca decide significancia.
+     *
+     * @param list<float> $tailDiffs Diferencia (deterioro - universo) por
+     *        fecha evaluada, fraccion 0-1.
+     * @param list<float> $deteriorationRates Proporcion de cola del grupo
+     *        deterioro, una por fecha evaluada, fraccion 0-1.
+     * @param list<float> $universeRates Proporcion de cola del universo
+     *        elegible, una por fecha evaluada, fraccion 0-1.
+     * @param list<float> $pooledDeterioratingReturns Todos los
+     *        forward_return del grupo deterioro, de todas las fechas
+     *        evaluadas juntas.
+     * @param list<float> $pooledUniverseReturns Todos los forward_return
+     *        del universo elegible, de todas las fechas evaluadas juntas.
+     * @return array<string,mixed>
+     */
+    private function tailRiskStatistics(
+        array $tailDiffs,
+        array $deteriorationRates,
+        array $universeRates,
+        array $pooledDeterioratingReturns,
+        array $pooledUniverseReturns
+    ): array {
+        $meanDiff = $tailDiffs !== [] ? array_sum($tailDiffs) / count($tailDiffs) : null;
+        $diffStdDev = $this->stdDev($tailDiffs);
+        $diffStdErr = $diffStdDev !== null ? $diffStdDev / sqrt(count($tailDiffs)) : null;
+
+        return [
+            'avg_deterioration_tail_rate' => $this->average(array_map(static fn (float $rate): float => $rate * 100, $deteriorationRates)),
+            'avg_universe_tail_rate' => $this->average(array_map(static fn (float $rate): float => $rate * 100, $universeRates)),
+            'avg_tail_rate_diff' => $meanDiff !== null ? round($meanDiff * 100, 2) : null,
+            'tail_rate_diff_stderr' => $diffStdErr !== null ? round($diffStdErr * 100, 2) : null,
+            'tail_rate_diff_t_stat' => ($meanDiff !== null && $diffStdErr !== null && $diffStdErr > 0.0)
+                ? round($meanDiff / $diffStdErr, 2)
+                : null,
+            'p10_deteriorating' => $this->percentile($pooledDeterioratingReturns, 10.0),
+            'p10_universe' => $this->percentile($pooledUniverseReturns, 10.0),
+        ];
     }
 
     /**

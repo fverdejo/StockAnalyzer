@@ -25,6 +25,19 @@ final class InMemoryFundamentalsHistoryRepository extends FundamentalsHistoryRep
     /** @var array<string,array<string,float|null>> */
     private array $snapshotsByTicker = [];
 
+    /**
+     * Snapshots FECHADOS, por ticker (E1, `BacktestingService::runDeteriorationRiskAnalysis()`,
+     * `PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md` Bloque E):
+     * a diferencia de `$snapshotsByTicker` (un unico payload por ticker,
+     * devuelto para CUALQUIER fecha pedida), esta investigacion pide DOS
+     * fechas distintas del MISMO ticker (el TTM actual de la muestra y el
+     * de hace ~365 dias) y necesita que cada una devuelva un valor
+     * DIFERENTE -- ver `withFundamentalsSnapshotAt()`.
+     *
+     * @var array<string,array<string,array<string,float|null>>>
+     */
+    private array $datedSnapshotsByTicker = [];
+
     public function __construct()
     {
     }
@@ -53,10 +66,44 @@ final class InMemoryFundamentalsHistoryRepository extends FundamentalsHistoryRep
     }
 
     /**
+     * Snapshot FECHADO (ver el docblock de `$datedSnapshotsByTicker`): un
+     * ticker con al menos un snapshot fechado deja de leer
+     * `$snapshotsByTicker` por completo -- `findAsOf()` elige, entre los
+     * fechados de ESE ticker, el mas reciente que no sea POSTERIOR a la
+     * fecha pedida (mismo criterio "el snapshot anterior mas cercano" que
+     * la implementacion real, `FundamentalsHistoryRepository::findAsOf()`),
+     * y devuelve `null` si ninguno cumple esa condicion -- nunca cae al
+     * mapa sin fechar como respaldo silencioso.
+     *
+     * @param array<string,float|null> $fields
+     */
+    public function withFundamentalsSnapshotAt(string $ticker, string $date, array $fields): self
+    {
+        $this->datedSnapshotsByTicker[strtoupper($ticker)][$date] = $fields;
+
+        return $this;
+    }
+
+    /**
      * @return array<string,float|null>|null
      */
     public function findAsOf(string $ticker, DateTimeImmutable $date): ?array
     {
-        return $this->snapshotsByTicker[strtoupper($ticker)] ?? null;
+        $ticker = strtoupper($ticker);
+
+        if (isset($this->datedSnapshotsByTicker[$ticker])) {
+            $requestedDate = $date->format('Y-m-d');
+            $bestDate = null;
+
+            foreach (array_keys($this->datedSnapshotsByTicker[$ticker]) as $snapshotDate) {
+                if ($snapshotDate <= $requestedDate && ($bestDate === null || $snapshotDate > $bestDate)) {
+                    $bestDate = $snapshotDate;
+                }
+            }
+
+            return $bestDate !== null ? $this->datedSnapshotsByTicker[$ticker][$bestDate] : null;
+        }
+
+        return $this->snapshotsByTicker[$ticker] ?? null;
     }
 }

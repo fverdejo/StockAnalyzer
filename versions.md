@@ -6639,7 +6639,7 @@ Bloque B del plan de Codex CERRADO por completo: B1 (Fundamentals v1.1), B2/B3 (
 
 ---
 
-## 2026-09-05 (segunda entrada) - Diagnostico fundamental D1+D2: salud actual y cambio interanual, puramente informativo
+## 2026-09-05 (cuarta entrada) - Diagnostico fundamental D1+D2: salud actual y cambio interanual, puramente informativo
 
 Estado: implementado y verificado (visual incluida). Cierra, en su version de diagnostico puro, el "Bloque D" del plan de Codex del `2026-09-04` -- consultado antes de escribir nada con `auditor-estadistico`, `inversor-fundamental` y `analista-mercado` en paralelo, mas la lectura del estudio independiente de Codex `RESULTADOS_OPTIMIZACION_MOTOR_CODEX_2026-09-05.md` (que ya habia probado la hipotesis central de D2 -- "momentum fundamental interanual" -- con veredicto nulo y hasta signo contrario en la mejora de deuda, t=-2,764). Las tres consultas y el propio Codex convergieron en la misma recomendacion: usar los fundamentales como diagnostico (salud + cambio), nunca como señal de decision ni implicando una ventaja de retorno demostrada. `ScoreCalculator`/`Score`/`config/weights.php` NO se tocan.
 
@@ -6672,3 +6672,114 @@ El primer intento de implementar esto (un agente `desarrollador-php`) fallo a mi
 ### Resultado esperado
 
 La ficha de detalle explica salud y tendencia fundamental de una empresa sin fingir una ventaja de inversion que la propia sesion de hoy (P3.3, mas el estudio independiente de Codex) ya midio como nula. Pendiente, fuera de este encargo: extender `daily_rankings` con sector/ratios crudos si algun dia se decide construir la version de percentil sectorial que el plan original pedia; D3 ("Catalizador de resultados", sorpresa de BPA + revisiones de consenso) sigue bloqueado por el mismo motivo que Bloque B3 (dato en vivo, no historico congelado).
+
+---
+
+## 2026-09-05 (quinta entrada) - Bloque C del plan de Codex: `earnings_events` normalizado desde el calendario ya archivado, sin llamadas nuevas a la API
+
+Estado: implementado y ejecutado contra los 938 tickers reales de `ddev`. Cierra la UNICA tabla del Bloque C del plan de Codex del 2026-09-04 (`PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md`) con un consumidor real identificado hoy -- `fiscal_periods`, `estimate_trends` y `corporate_actions` (las otras tres propuestas por el plan) siguen SIN construir, deliberadamente, por no tener consumidor todavia. Trabajo hecho ENTERAMENTE sobre el JSON YA ARCHIVADO en `eodhd_raw_fundamental_versions` (`api_version='calendar'`, `section='earnings'`, Bloque B2 de la primera entrada de hoy): ninguna llamada de red, ninguna cuota de EODHD consumida.
+
+### Forma real del JSON, verificada contra los 938 tickers antes de decidir el esquema
+
+```json
+{"type":"...", "description":"...", "symbols":"...",
+ "earnings": [{"code","report_date","date","before_after_market",
+               "currency","actual","estimate","difference","percent"}, ...]}
+```
+
+`date` es el cierre del periodo fiscal, `report_date` cuando se publico. Sobre las 80.238 filas reales: 0 fechas ausentes o con formato invalido en ninguna de las dos.
+
+### Tres hallazgos reales que cambiaron el diseño frente a lo que el plan asumia
+
+1. **La clave unica no puede ser `(ticker, report_date)`.** Colisiona en 2 casos reales de 80.238: `COST` y `ROST` tienen cada uno DOS periodos fiscales distintos con la MISMA fecha de reporte (`COST` reporta `2026-05-28` tanto para el periodo que cierra `2026-02-28` como para el que cierra `2026-05-31`, con estimaciones distintas -- anomalia real de la fuente, no un bug de este pipeline). `(ticker, fiscal_period_end)` en cambio NUNCA colisiona (0 casos en 80.238 filas): cada periodo fiscal se reporta una sola vez aunque su fecha de reporte coincida por error con la de otro periodo. Se uso `(ticker, fiscal_period_end)` como clave unica real de `earnings_events` (migracion 026).
+2. **`eps_difference`/`eps_surprise_percent` se RECALCULAN, no se copian de `difference`/`percent`.** EODHD escribe `difference=0` (nunca `null`) cuando falta `actual` o `estimate` -- copiarlo tal cual confundiria "sorpresa real de cero" con "sin dato para calcularla". Verificado antes de decidirlo: la formula propia (`actual-estimate`; `(actual-estimate)/|estimate|*100`) coincide EXACTAMENTE con los valores de EODHD en las 80.238 filas donde ambos operandos estan presentes y `estimate!=0` (0 discrepancias) -- no es una formula inventada, es la misma que ya usa EODHD, aplicada explicitamente para no heredar su ambiguedad del cero.
+3. **`estimate=0` en 414/80.238 filas (0,5%) es casi siempre "sin cobertura de analistas", no una estimacion real de cero.** Se concentra en historico muy antiguo (años 90) o empresas recien salidas a bolsa. EODHD deja `percent=null` en estos 414 casos; `EodhdEarningsEventsNormalizer` hace lo mismo (`epsSurprisePercent` nulo cuando `estimate===0.0`, para no dividir por un denominador que en realidad significa "no hay estimacion"), pero SI calcula `epsDifference` (`actual-0=actual`), igual que EODHD.
+
+Hallazgo adicional sin impacto en el diseño: `currency` es `NULL` en 2.500/80.238 filas (3%) aun con EPS presente -- laguna real de la fuente, no un patron por mercado/fecha detectable, se conserva tal cual.
+
+### Esquema final (`database/migrations/026_create_earnings_events.sql`)
+
+`ticker`, `report_date`, `fiscal_period_end`, `before_after_market` (nullable, solo 3 valores reales vistos: `BeforeMarket`/`AfterMarket`/null), `eps_actual`/`eps_estimate`/`eps_difference` (`DECIMAL(18,6)`, mismo ancho que `transactions.price`), `eps_surprise_percent` (`DECIMAL(14,4)`, dimensionado tras encontrar un caso real de -181.100% en `TV.US` por un `estimate` de 0,01), `currency`, `source_hash` (el `payload_hash` de la version de `eodhd_raw_fundamental_versions` usada, trazabilidad para poder rehacer la normalizacion sin perder de que captura procede cada fila), `captured_at` (el `fetched_at` de ESA version -- cuando EODHD sirvio el dato, NO cuando se normalizo), `created_at` (cuando se escribio esta fila). `UNIQUE KEY (ticker, fiscal_period_end)` + indices por `(ticker, report_date)` y `report_date` solo para las consultas por rango de fecha que necesitara E2.
+
+### Implementado
+
+- **`src/DTO/CalendarEarningsEvent.php`** (nuevo): DTO puro de una fila ya validada. Deliberadamente SEPARADO de `StockAnalyzer\DTO\EarningsEvent` (DTO de otro trabajo en curso en paralelo sobre `Earnings.History` de Fundamentals, no tocado aqui): mismos campos porque describen el mismo hecho del mundo real, pero acoplarlos arriesgaria que cambiar el parseo de una fuente rompiera en silencio al consumidor de la otra.
+- **`src/Services/EodhdEarningsEventsNormalizer.php`** (nuevo): `parse(ticker, payloadJson): list<CalendarEarningsEvent>`, puro (sin red ni DB), mismo estilo que `EodhdFiscalPeriodProvider::parse()`. Descarta filas sin fecha valida, deduplica por `fiscal_period_end` (la ultima fila del JSON gana, defensivo: hoy no hace falta en ninguno de los 938 tickers, pero la clave unica de la tabla lo exigiria si algun re-armado futuro lo produjera).
+- **`src/Repository/EarningsEventsRepository.php`** (nuevo): `isNormalizedFromSource()` (reanudabilidad, mismo criterio que `hasVersion()` de `EodhdRawFundamentalVersionsRepository`) y `replaceForTicker()` (DELETE+INSERT transaccional por ticker, no UPSERT fila a fila: mas simple y no deja filas huerfanas si un periodo fiscal desapareciera de una captura futura).
+- **`bin/normalize-eodhd-earnings-events.php`** (nuevo): universo = `EodhdRawFundamentalsRepository::archivedTickers()` (938, mismo criterio que los scripts de archivado), reanudable via `isNormalizedFromSource()`, `--force` para renormalizar, SIN ninguna llamada de red.
+- **Tests nuevos**: `tests/Services/EodhdEarningsEventsNormalizerTest.php` (12 tests: extraccion/orden realista, calculo de diferencia/sorpresa en vez de copiarlas del JSON, base en valor absoluto con `estimate` negativo, `estimate=0` deja el porcentaje nulo pero no la diferencia, `actual` ausente deja ambos nulos, filas sin fecha valida descartadas, ticker sin seccion `earnings`/sin la clave `earnings` devuelve lista vacia, el caso real `COST`/`ROST` de dos periodos fiscales con la misma `report_date` se conserva como dos eventos, dos filas con el mismo periodo fiscal se quedan con la ultima, JSON invalido y ticker vacio fallan explicitamente).
+
+### Resultado real de la normalizacion (ddev, 2026-09-05)
+
+**938/938 tickers procesados, 0 errores.** 878 tickers con al menos un evento normalizado (80.238 filas en total, coincide EXACTO con el total de filas del calendario archivado en el Bloque B2), 60 tickers con el calendario archivado pero sin ninguna fila utilizable (`ANR`, `APOL`, `ARG`, `BMC`, `BRCM`, `BXLT`, `CAM_OLD`, `CBE`, `CFN`, `CMCSK`, `COV`, `CPGX`, `CVC`, `CVH`, `DELL_OLD`, `DTV`, `FDO`, `FRX`, `GAS`, `GMCR`, y el resto en el log de ejecucion -- en su mayoria empresas fusionadas/adquiridas hace años, mismo patron que ya se documento para `sec-form4` en el Bloque B7). Verificado por consulta directa: `SELECT COUNT(*) FROM earnings_events` = 80.238, `COUNT(DISTINCT ticker)` = 878, `COUNT(DISTINCT source_hash)` = 878 (un hash por ticker, como se espera de una tabla poblada desde la version mas reciente de cada uno). Reanudabilidad verificada relanzando el script sobre una muestra: la segunda ejecucion salta los 7 tickers ya normalizados y solo reprocesa el que no tenia eventos (0 filas, coste nulo).
+
+### Fuera de alcance de esta tarea, documentado explicitamente
+
+- `fiscal_periods`, `estimate_trends` y `corporate_actions` (las otras tres tablas del Bloque C) NO se construyen: ninguna tiene consumidor real identificado hoy, tal como advierte el propio plan ("normalizar solo lo que tenga consumidor").
+- El consumidor real de `earnings_events` (E2, "sorpresa de resultados" del Bloque E) sigue "en pausa corta" -- `auditor-estadistico` ya documento hoy que hace falta repetir la captura de `calendar/earnings` dentro de unas semanas y confirmar que `epsEstimate`/`epsActual` no cambian entre capturas antes de poder usarlo en un backtest honesto. No se ha ejecutado ningun backtest de E2 en esta tarea.
+- Un error preexistente de PHPStan en `bin/research-recommendation-calibration.php` (linea 82, comparacion siempre falsa) pertenece a un trabajo distinto y en curso en paralelo sobre este mismo repositorio (ver los ficheros nuevos no relacionados con esta tarea que aparecieron en `git status` durante esta sesion: `src/Services/FundamentalMomentumCalculator.php`, `src/Services/EarningsEventReturnCalculator.php`, etc.) -- no se ha tocado ese fichero.
+
+### Verificado con
+
+`ddev exec vendor/bin/phpunit`: **611 tests, 1.688 assertions, OK** (1 skip preexistente sin relacion) sobre TODO el proyecto, incluidos los 12 tests nuevos. `ddev exec vendor/bin/phpstan analyse` sobre los ficheros de esta tarea (`src/DTO/CalendarEarningsEvent.php`, `src/Services/EodhdEarningsEventsNormalizer.php`, `src/Repository/EarningsEventsRepository.php`, `bin/normalize-eodhd-earnings-events.php`, `tests/Services/EodhdEarningsEventsNormalizerTest.php`): sin errores. El analisis sobre TODO el proyecto muestra 1 error preexistente ajeno a esta tarea (ver arriba).
+
+### Incluye
+
+Nuevo: `database/migrations/026_create_earnings_events.sql`, `src/DTO/CalendarEarningsEvent.php`, `src/Services/EodhdEarningsEventsNormalizer.php`, `src/Repository/EarningsEventsRepository.php`, `bin/normalize-eodhd-earnings-events.php`, `tests/Services/EodhdEarningsEventsNormalizerTest.php`. No se toca `eodhd_raw_fundamental_versions`, `eodhd_raw_fundamentals` ni ningun consumidor existente.
+
+### Resultado esperado
+
+`earnings_events` deja el calendario de resultados de los 938 tickers en una forma consultable sin releer JSON crudo, lista para cuando `auditor-estadistico` confirme que la semantica temporal de la captura permite construir el backtest E2 de sorpresa de resultados. Hasta entonces, esta tabla es solo infraestructura: ningun `Service` de recomendacion la consume todavia.
+
+---
+
+## 2026-09-05 (sexta entrada) - E1 del plan de Codex: deterioro fundamental compuesto, riesgo de cola medido y descartado
+
+Estado: cerrado, veredicto nulo (y de signo contrario al hipotetizado) en los dos horizontes predeclarados. Cierra "E1. Deterioro fundamental" del Bloque E de `PLAN_APROVECHAMIENTO_EODHD_Y_FUNDAMENTALES_2026-09-04.md`, con formula y metrica predeclaradas hoy mismo por `auditor-estadistico`. Pregunta DISTINTA de P3.3/P3.4 y del diagnostico D1/D2 (ambos ya cerrados hoy) y del estudio independiente de Codex (`RESULTADOS_OPTIMIZACION_MOTOR_CODEX_2026-09-05.md`, secciones "Momentum fundamental interanual" y "¿Sirve la deuda baja al menos como filtro de riesgo?"): no es alpha/ranking, es riesgo de cola -- ¿el deterioro fundamental simultaneo eleva la probabilidad de un retorno muy malo, no solo baja la media?
+
+### Formula exacta (predeclarada, no ajustada tras ver resultados)
+
+Bandera COMPUESTA (no un ranking): en cada fecha de evaluacion y cada ticker, `Services\FundamentalDeteriorationFlagger::isDeteriorating()` compara el TTM actual contra el TTM de hace ~365 dias (mismo patron de comparacion punto-en-el-tiempo que `FundamentalChangeAssessor`, pero con consulta PROPIA a `FundamentalsHistoryRepository::findAsOf()` -- ver "Decisiones de arquitectura") de margen operativo, ROIC, FCF yield y deuda/patrimonio:
+
+`deterioro = (margen BAJA Y ROIC BAJA Y FCF BAJA) O (deuda/patrimonio SUBE Y FCF BAJA)`
+
+**Interpretacion documentada de "caja"**: se usa flujo de caja libre en yield (`Fundamentals::getFreeCashFlowYield()`, el mismo que ya usa `RelativeFundamentalScorer`/P3.3, para mantener consistencia con esa medicion previa) porque no existe ningun campo de caja/tesoreria en el balance de `Fundamentals` hoy -- si la intencion original del auditor era otra, `FundamentalDeteriorationFlagger` es el sitio a corregir.
+
+Ausencia de dato en cualquiera de las dos fechas EXCLUYE ese factor de la formula -- nunca se cuenta como "no empeoro" (mismo criterio "ausencia no es neutral" que P3.3/D2, verificado con tests que cubren ausencia en la fecha actual, en la anterior y en ninguna de las dos). Consecuencia estructural documentada en el codigo: como las dos clausulas comparten "FCF baja", sin dato de FCF yield NINGUNA clausula puede cumplirse, sea cual sea el resto de factores.
+
+Metrica PRINCIPAL: no es alpha media, es la proporcion de eventos de cola (retorno < -10%, umbral FIJADO ANTES DE MEDIR) del grupo `deterioro=true` frente al universo elegible COMPLETO de esa fecha (superconjunto que incluye al propio grupo, mismo criterio "top vs eligible" que P3.3/P3.4), pareada por fecha. El p10 de cada grupo es diagnostico SECUNDARIO, nunca decide significancia. Dos horizontes predeclarados, 60 y 120 sesiones (`step` = horizonte, igual criterio que P3.3/P3.4); umbral Bonferroni |t|>=2,24, sin corregir 1,96. Mismo universo point-in-time de P3.3/P3.4 (`storage/scratch/point_in_time_universe.txt`, filtro de calidad P3.1 recalculado en caliente, `indexCode='GSPC'`).
+
+### Decisiones de arquitectura
+
+**Metodo nuevo en `BacktestingService` (`runDeteriorationRiskAnalysis()`), no un servicio aparte.** La pregunta (dos grupos binarios + proporcion de cola pareada) es arquitectonicamente distinta de `runCrossSectional()` (top-N por puntuacion), pero comparte toda la infraestructura de bajo nivel ya existente y probada -- `collectSamplesWithHistory()` (calendario bursatil real + TTM "actual" ya recopilado por muestra), `tradingSessionGap()` (independencia P0.2), el filtro de membresia point-in-time (`IndexMembershipCheckerInterface`). Un servicio externo habria tenido que reimplementar esa infraestructura o forzar a hacer publicos metodos privados por una unica razon de reutilizacion, rompiendo la encapsulacion que existe precisamente para que no haya dos definiciones de "muestra" que puedan divergir (ver el docblock de `collectSamplesWithHistory()`). El TTM de "hace un año" NO esta en la muestra ya recopilada: exige una consulta PROPIA y ADICIONAL a `FundamentalsHistoryRepository::findAsOf()` con la fecha desplazada 365 dias -- `fundamentalsAt()` no sirve aqui porque cae al fallback de HOY cuando no hay snapshot, que seria mirar el futuro para "hace un año".
+
+**`Services\FundamentalDeteriorationFlagger` + `DTO\FundamentalTtmSnapshot` (nuevos, pura la primera).** La formula se extrajo a una clase SIN red ni base de datos (mismo patron que `RelativeFundamentalScorer`) para poder fijar su criterio exacto con tests unitarios aislados, sin montar todo el aparato de backtest (historico de precios, calendario de sesiones, `TechnicalAnalyzer`...) solo para probar un `if`. `FundamentalTtmSnapshot` evita fabricar un `Fundamentals` con campos inventados solo para poder llamar a `getFreeCashFlowYield()` (ahi es un valor DERIVADO de `freeCashFlow`/`marketCap`, no un campo propio) cuando quien construye el DTO ya tiene el yield calculado por dos vias distintas (la muestra del backtest para el TTM actual, `FundamentalsHistoryRepository::fromArray()` para el de hace un año).
+
+Sin ningun ticker marcado `deterioro=true` en una fecha, esa fecha se descarta (no hay proporcion de grupo que calcular, division por cero) -- consecuencia estructural documentada, no un umbral de amplitud inventado. Un ticker sin snapshot de hace un año SIGUE en el universo elegible (tiene retorno real y TTM actual point-in-time valido) pero nunca puede marcarse deteriorado: "no se puede confirmar deterioro" no es lo mismo que "no elegible".
+
+### Resultado real medido (ddev, universo point-in-time 610/636 tras el filtro P3.1, `indexCode='GSPC'`)
+
+| Horizonte | Fechas evaluadas | Marcados deterioro (media/fecha) | Universo (media/fecha) | Cola grupo deterioro | Cola universo | Diferencia | t-stat | p10 deterioro | p10 universo |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 60 sesiones | 37 | 115,84 | 400,43 | 14,52% | 15,51% | -0,99 pp | -1,67 | -13,20% | -13,68% |
+| 120 sesiones | 18 | 114,78 | 400,28 | 18,44% | 19,67% | -1,24 pp | -1,27 | -16,88% | -17,45% |
+
+1 error en las dos corridas (`LEG`: "Yahoo response is incomplete", fallo de proveedor, no del motor). Merma de muestras documentada en ambas corridas: 4.539/2.264 muestras sin fundamentales point-in-time reales (horizon 60/120), 2.455/1.264 descartadas por membresia (`samples_dropped_not_member`), 280/143 fechas descartadas por ningun ticker marcado deterioro esa fecha (`dates_dropped_low_breadth`), 128/60 por solape de fechas (`dates_dropped_overlapping`). Resultados completos en `storage/scratch/deterioration_risk_analysis_results.json`.
+
+### Veredicto
+
+**Nulo en los dos horizontes y con los dos umbrales** (|t|=1,67 y 1,27, ambos por debajo incluso del umbral sin corregir de 1,96, mucho mas del Bonferroni de 2,24). Y en los dos horizontes la diferencia tiene SIGNO CONTRARIO al de la hipotesis: el grupo `deterioro=true` tuvo una proporcion de eventos de cola LIGERAMENTE MENOR que el universo completo (no mayor), y su p10 fue tambien ligeramente menos negativo. No se interpreta esto como "el deterioro protege" -- la diferencia no es significativa en ningun sentido -- pero es el mismo patron de signo contrario que Codex ya encontro para la mejora de deuda (`RESULTADOS_OPTIMIZACION_MOTOR_CODEX_2026-09-05.md`, `t=-2,764`) y para "deuda baja como filtro de riesgo" (peor excursion/drawdown a cierre, tambien sin proteccion). Con un diseño metodologicamente distinto (bandera compuesta binaria + proporcion de cola pareada, en vez de factor continuo + media/drawdown a cierre) se llega a la misma conclusion: en este universo/periodo, el deterioro fundamental TTM interanual medido con estos cuatro factores no eleva el riesgo de cola de forma medible.
+
+Hallazgo colateral: la bandera de deterioro no es rara -- marca de media ~116/400 tickers elegibles por fecha (~29%), tanto a 60 como a 120 sesiones. Con casi un tercio del universo marcado en cualquier fecha dada, la señal es demasiado comun para funcionar como alerta de riesgo individual sin refinarse (p.ej. exigir mas factores simultaneos o una magnitud minima de caida) -- refinamiento NO probado aqui, quedaria como una hipotesis NUEVA distinta de la predeclarada hoy, no una correccion retroactiva de esta medicion.
+
+### Incluye
+
+Nuevo: `src/DTO/FundamentalTtmSnapshot.php`, `src/Services/FundamentalDeteriorationFlagger.php`, `tests/Services/FundamentalDeteriorationFlaggerTest.php` (11 tests: cada combinacion de las dos clausulas OR, ausencia de dato en fecha actual/anterior/ninguna de las dos, ruido de redondeo), `tests/Services/BacktestingServiceDeteriorationRiskAnalysisTest.php` (6 tests: grupo deterioro con evento de cola frente al universo elegible completo, ticker sin snapshot de hace un año se queda en el universo sin marcarse, muestra sin fundamentales point-in-time excluida del universo, excepciones de validacion de `$step`/repositorio no conectado, filtro de membresia point-in-time), `storage/scratch/run_deterioration_risk_analysis.php` (script de medicion real, mismo patron de instanciacion/filtro que `run_fundamental_only_backtest.php`). Modificado: `src/Services/BacktestingService.php` (`runDeteriorationRiskAnalysis()`, `tailRate()`, `percentile()`, `tailRiskStatistics()`, nueva dependencia `FundamentalDeteriorationFlagger` instanciada por defecto), `tests/Services/InMemoryFundamentalsHistoryRepository.php` (`withFundamentalsSnapshotAt()`, snapshots fechados para poder simular dos TTM distintos del mismo ticker en los tests). `config/weights.php` NO se toca -- es investigacion, no un cambio de produccion, sea cual sea el resultado.
+
+### Verificado con
+
+`ddev exec vendor/bin/phpunit`: **628 tests, 1.727 assertions, OK** (1 skip preexistente sin relacion) sobre TODO el proyecto, incluidos los 17 tests nuevos de esta tarea. `ddev exec vendor/bin/phpstan analyse` sobre los ficheros de esta tarea (`src/Services/BacktestingService.php`, `src/Services/FundamentalDeteriorationFlagger.php`, `src/DTO/FundamentalTtmSnapshot.php`, `tests/Services/FundamentalDeteriorationFlaggerTest.php`, `tests/Services/BacktestingServiceDeteriorationRiskAnalysisTest.php`, `tests/Services/InMemoryFundamentalsHistoryRepository.php`): sin errores. El analisis sobre TODO el proyecto (287 ficheros) sigue mostrando el mismo unico error preexistente y ajeno a esta tarea ya señalado en la entrada anterior (`bin/research-recommendation-calibration.php`, linea 82, trabajo en curso en paralelo de otro agente sobre este mismo repositorio -- no se ha tocado ese fichero). Medicion real ejecutada en ddev contra los 610 tickers del universo point-in-time para horizon=60 y horizon=120 (no simulada ni aproximada).
+
+### Resultado esperado
+
+E1 queda medido y cerrado con veredicto nulo: la bandera compuesta de deterioro fundamental TTM interanual (margen+ROIC+FCF, o deuda+FCF) no muestra una elevacion medible del riesgo de cola a 60 ni a 120 sesiones en el universo/periodo disponible, con signo incluso ligeramente contrario al hipotetizado. `Services\FundamentalDeteriorationFlagger`/`BacktestingService::runDeteriorationRiskAnalysis()` quedan como herramienta de investigacion reutilizable (p.ej. para probar una version refinada de la formula, u otro umbral de cola), no como señal de produccion: ningun `Score`/`config/weights.php` la conoce.
