@@ -106,6 +106,50 @@ class EodhdRawFundamentalVersionsRepository
     }
 
     /**
+     * TODAS las versiones archivadas de un `(ticker, api_version, section)`,
+     * de mas antigua a mas reciente, con su JSON original ya descomprimido.
+     * A diferencia de `latestFor()` (solo la ultima), este metodo existe
+     * para poder COMPARAR dos capturas separadas en el tiempo -- el proposito
+     * entero de esta tabla versionada (Bloque A, `2026-09-04`/`05`): saber si
+     * un dato que hoy parece "historico" (p.ej. `calendar/earnings`,
+     * `calendar/trends`) cambia entre una captura y otra mas adelante, o si
+     * de verdad quedo congelado. Ver `bin/compare-eodhd-calendar-versions.php`.
+     *
+     * @return list<array{fetched_at: string, payload_hash: string, payload: string}>
+     */
+    public function allPayloadsFor(string $ticker, string $apiVersion, string $section): array
+    {
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT fetched_at, payload_hash, payload_compressed FROM eodhd_raw_fundamental_versions
+             WHERE ticker = :ticker AND api_version = :api_version AND section = :section
+             ORDER BY fetched_at ASC, id ASC'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'api_version' => $apiVersion,
+            'section' => $section,
+        ]);
+
+        $rows = [];
+
+        while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+            $compressed = $row['payload_compressed'];
+
+            if (!is_string($compressed)) {
+                continue;
+            }
+
+            $rows[] = [
+                'fetched_at' => (string) $row['fetched_at'],
+                'payload_hash' => (string) $row['payload_hash'],
+                'payload' => $this->decompress($compressed),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
      * Si ya hay al menos una version archivada de un `(ticker, api_version,
      * section)`. Es lo que hace REANUDABLE `bin/archive-eodhd-fundamentals-v11.php`
      * (Bloque B1 del plan de Codex del 2026-09-04): un proceso cortado a

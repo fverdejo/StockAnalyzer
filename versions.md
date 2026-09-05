@@ -6783,3 +6783,27 @@ Nuevo: `src/DTO/FundamentalTtmSnapshot.php`, `src/Services/FundamentalDeteriorat
 ### Resultado esperado
 
 E1 queda medido y cerrado con veredicto nulo: la bandera compuesta de deterioro fundamental TTM interanual (margen+ROIC+FCF, o deuda+FCF) no muestra una elevacion medible del riesgo de cola a 60 ni a 120 sesiones en el universo/periodo disponible, con signo incluso ligeramente contrario al hipotetizado. `Services\FundamentalDeteriorationFlagger`/`BacktestingService::runDeteriorationRiskAnalysis()` quedan como herramienta de investigacion reutilizable (p.ej. para probar una version refinada de la formula, u otro umbral de cola), no como señal de produccion: ningun `Score`/`config/weights.php` la conoce.
+
+---
+
+## 2026-09-05 (septima entrada) - Herramienta de comparacion temporal para E2/E3: lista, a la espera de que pase el tiempo real que necesita
+
+Estado: implementado y probado de extremo a extremo (con una version sintetica insertada y borrada despues de confirmar la deteccion). El usuario pidio seguir tambien con las lineas bloqueadas del plan de Codex (E2 "en pausa corta", E3 bloqueado estructuralmente) -- ninguna de las dos se puede avanzar HOY de verdad porque ambas necesitan que pase tiempo REAL entre dos capturas de EODHD para contestar la misma pregunta: ¿el calendario de resultados/consenso que hoy parece "historico" es un vintage congelado, o EODHD lo reescribe con datos posteriores? Eso no se puede acelerar trabajando mas horas. Lo que si se puede hacer hoy es dejar lista la herramienta para que, en cuanto exista una segunda captura (dentro de unas semanas), la pregunta se conteste en un minuto.
+
+### `EodhdRawFundamentalVersionsRepository::allPayloadsFor()`
+
+Nuevo metodo junto a `latestFor()` (que solo devuelve la version mas reciente): devuelve TODAS las versiones archivadas de un `(ticker, api_version, section)`, de mas antigua a mas reciente, con su JSON ya descomprimido -- necesario para poder comparar dos capturas entre si, no solo leer la ultima. 3 tests nuevos de integracion (sin versiones, dos versiones en orden correcto, que no mezcla otro ticker ni otra `section`).
+
+### `bin/compare-eodhd-calendar-versions.php`
+
+No hace ninguna llamada de red: compara SOLO lo que ya este archivado. Dos niveles: (1) por hash (`payload_hash`), valido para cualquier `section` incluida `trends` (sin normalizador campo a campo todavia, mismo comodin que ya sirve para vigilar si algun dia deja de ser un dato en vivo); (2) por CAMPO, solo para `section='earnings'`, reutilizando `EodhdEarningsEventsNormalizer` ya existente -- para los tickers con hash distinto, dice EXACTAMENTE que `fiscal_period_end` cambio su `eps_actual`/`eps_estimate` entre las dos capturas, la pregunta real que hace falta contestar para E2.
+
+**Probado de extremo a extremo con un caso sintetico** (no solo "deberia funcionar"): se inserto una segunda version de AAPL con el `eps_actual` de un evento antiguo (1994-09-30) modificado +0,05 a proposito, se ejecuto el script y detecto correctamente el hash distinto Y el cambio exacto de campo (`0,0300 -> 0,0800`); la fila sintetica se borro inmediatamente despues de confirmar la deteccion, `AAPL` vuelve a tener una unica version real archivada. Contra los datos reales de hoy (todos los tickers con una sola captura, insertada hoy mismo), el script confirma correctamente "nada que comparar todavia" para el 100% del universo -- resultado esperado, no un fallo.
+
+### Verificado con
+
+`ddev exec vendor/bin/phpunit`: **631 tests, 1.735 assertions, OK** (1 skip preexistente). `ddev exec vendor/bin/phpstan analyse`: mismo unico error preexistente y ajeno de `bin/research-recommendation-calibration.php` (trabajo en curso en paralelo de otro agente, no tocado); el resto del proyecto, incluidos los ficheros de esta tarea, sin errores.
+
+### Resultado esperado
+
+Cuando vuelva a ejecutarse `bin/archive-eodhd-calendar-earnings.php`/`bin/archive-eodhd-calendar-trends.php` dentro de unas semanas (ver `roadmap.md`), `bin/compare-eodhd-calendar-versions.php --section=earnings` (o `--section=trends`) da la respuesta real a la pregunta que bloquea E2 y condiciona E3, sin trabajo adicional de codigo. Hasta entonces, ninguna de las dos lineas puede avanzar mas: no es una cuestion de esfuerzo, es una cuestion de tiempo real transcurrido.

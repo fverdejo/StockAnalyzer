@@ -191,4 +191,40 @@ final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCas
         self::assertSame(3, $this->repository->count());
         self::assertSame(2, $this->repository->countDistinctTickers());
     }
+
+    /**
+     * `allPayloadsFor()` (2026-09-05, preparacion de la validacion de E2):
+     * a diferencia de `latestFor()`, expone TODAS las versiones para poder
+     * comparar una captura antigua contra una mas reciente.
+     */
+    public function testAllPayloadsForDevuelveVacioSinVersiones(): void
+    {
+        self::assertSame([], $this->repository->allPayloadsFor('AAPL', 'calendar', 'earnings'));
+    }
+
+    public function testAllPayloadsForDevuelveTodasLasVersionesDeMasAntiguaAMasReciente(): void
+    {
+        $this->repository->store('AAPL', '{"v":1}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-01 10:00:00'));
+        $this->repository->store('AAPL', '{"v":2}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-20 10:00:00'));
+
+        $payloads = $this->repository->allPayloadsFor('AAPL', 'calendar', 'earnings');
+
+        self::assertCount(2, $payloads);
+        self::assertSame('{"v":1}', $payloads[0]['payload']);
+        self::assertSame('{"v":2}', $payloads[1]['payload']);
+        self::assertSame('2026-09-01 10:00:00', $payloads[0]['fetched_at']);
+        self::assertSame('2026-09-20 10:00:00', $payloads[1]['fetched_at']);
+    }
+
+    public function testAllPayloadsForNoMezclaOtroTickerNiOtraSeccion(): void
+    {
+        $this->repository->store('AAPL', '{"earnings":1}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-01'));
+        $this->repository->store('AAPL', '{"trends":1}', 'calendar', 'trends', new DateTimeImmutable('2026-09-01'));
+        $this->repository->store('MSFT', '{"earnings":1}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-01'));
+
+        $payloads = $this->repository->allPayloadsFor('AAPL', 'calendar', 'earnings');
+
+        self::assertCount(1, $payloads);
+        self::assertSame('{"earnings":1}', $payloads[0]['payload']);
+    }
 }
