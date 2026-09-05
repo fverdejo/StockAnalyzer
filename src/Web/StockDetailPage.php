@@ -7,13 +7,18 @@ namespace StockAnalyzer\Web;
 use DateTimeImmutable;
 use StockAnalyzer\DTO\CorporateEvents;
 use StockAnalyzer\DTO\Explanation;
+use StockAnalyzer\DTO\FundamentalChangeAssessment;
+use StockAnalyzer\DTO\FundamentalChangeFactor;
+use StockAnalyzer\DTO\FundamentalHealthAssessment;
 use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\StockAnalysis;
+use StockAnalyzer\Enums\FundamentalChangeVerdict;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Transaction;
 use StockAnalyzer\Models\User;
+use StockAnalyzer\Services\FundamentalHealthAssessor;
 
 /**
  * Pantalla de detalle de una accion: valores tecnicos y fundamentales,
@@ -39,6 +44,15 @@ class StockDetailPage
      * @param list<Transaction> $positionTransactions Compras y ventas del
      *        usuario en este valor, en orden cronologico. Se muestran
      *        completas aunque la posicion ya este cerrada.
+     * @param ?FundamentalChangeAssessment $fundamentalChange D2 del
+     *        diagnostico fundamental ("Cambio interanual", ver
+     *        Services\FundamentalChangeAssessor): lo calcula
+     *        Application::renderDetail() porque necesita
+     *        FundamentalsHistoryRepository, que esta pagina no tiene. `null`
+     *        si el calculo fallo (best effort, nunca debe tumbar la ficha) --
+     *        en ese caso el panel simplemente no muestra la seccion D2. D1
+     *        ("Salud fundamental") SI se calcula aqui dentro: es puro, no
+     *        necesita ningun repositorio.
      */
     public static function render(
         StockAnalysis $analysis,
@@ -52,7 +66,8 @@ class StockDetailPage
         ?string $message = null,
         ?string $error = null,
         ?Holding $position = null,
-        array $positionTransactions = []
+        array $positionTransactions = [],
+        ?FundamentalChangeAssessment $fundamentalChange = null
     ): string
     {
         $stock = $analysis->getStock();
@@ -184,6 +199,13 @@ class StockDetailPage
 
         $companyOverview = self::renderCompanyOverview($companyProfile, $corporateEvents);
 
+        // Diagnostico fundamental D1+D2 (ver versions.md, 2026-09-05):
+        // informativo, nunca afecta a $score/$recommendation. D1 es puro
+        // (se calcula aqui mismo); D2 llega ya calculado porque necesita
+        // FundamentalsHistoryRepository.
+        $fundamentalHealth = (new FundamentalHealthAssessor())->assess($fundamentals, $company);
+        $fundamentalDiagnostics = self::renderFundamentalDiagnostics($fundamentalHealth, $fundamentalChange);
+
         // Desde v2.71 comprar y vender solo se puede hacer aqui, asi que el
         // resultado de la operacion tiene que verse aqui tambien: antes el
         // exito y el error viajaban siempre a "Mi cartera", que era donde
@@ -203,11 +225,12 @@ class StockDetailPage
         $positionPanel = self::renderPositionPanel($position, $positionTransactions, $company->getCurrency());
 
         $body = sprintf(
-            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s<section class="panel"><h2>Puntuación por categoría (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s%s<section class="panel"><h2>Puntuación por categoría (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             $messageHtml,
             $errorHtml,
             $companyOverview,
+            $fundamentalDiagnostics,
             $positionPanel,
             $tradePanel,
             $charts,
@@ -317,6 +340,111 @@ class StockDetailPage
             '<section class="panel"><h2>Sobre la empresa</h2>%s%s</section>',
             $descriptionHtml,
             $boxes !== [] ? '<div class="values-grid">' . implode('', $boxes) . '</div>' : ''
+        );
+    }
+
+    /**
+     * Diagnostico fundamental D1 ("Salud fundamental") + D2 ("Cambio
+     * interanual"), ver versions.md 2026-09-05. Puramente informativo:
+     * describe hechos ("el margen operativo cae X puntos frente a hace un
+     * año"), nunca sugiere una accion ("vigilar", "revisar salida") ni
+     * implica una ventaja de decision -- esa fue precisamente la critica de
+     * `analista-mercado` al Bloque F del plan de Codex del 2026-09-04.
+     *
+     * Bancos/aseguradoras/inmobiliarias (`Services\FundamentalSectorExclusion`)
+     * muestran solo la nota de exclusion, una unica vez para D1+D2 juntos
+     * (las dos comparten el mismo criterio de sector, no tiene sentido
+     * repetir el aviso dos veces).
+     */
+    private static function renderFundamentalDiagnostics(
+        FundamentalHealthAssessment $health,
+        ?FundamentalChangeAssessment $change
+    ): string {
+        if ($health->sectorExcluded) {
+            return '<section class="panel"><h2>Diagnóstico fundamental</h2>'
+                . '<p class="muted panel-note">Sector financiero/inmobiliario: los ratios industriales (ROIC, margen operativo, deuda/patrimonio, conversión de caja) no son directamente comparables a los de una empresa industrial. No se evalúan aquí.</p></section>';
+        }
+
+        $healthHtml = self::renderFundamentalHealthSection($health);
+        $changeHtml = $change !== null ? self::renderFundamentalChangeSection($change) : '';
+
+        if ($healthHtml === '' && $changeHtml === '') {
+            return '';
+        }
+
+        return sprintf(
+            '<section class="panel"><h2>Diagnóstico fundamental</h2><p class="muted panel-note">Informativo: describe la situación y el cambio interanual de la empresa, no afecta a la puntuación ni implica una ventaja de inversión demostrada.</p>%s%s</section>',
+            $healthHtml,
+            $changeHtml
+        );
+    }
+
+    private static function renderFundamentalHealthSection(FundamentalHealthAssessment $health): string
+    {
+        if ($health->datosInsuficientes) {
+            return '<h3 class="panel-subtitle">Salud actual</h3><p class="muted">Datos insuficientes para evaluar la salud fundamental.</p>';
+        }
+
+        $alerts = [];
+
+        if ($health->endeudamientoNoEvaluable) {
+            $alerts[] = 'Endeudamiento no evaluable (patrimonio no positivo o sin dato de deuda en la fuente).';
+        }
+
+        if ($health->fcfNegativo) {
+            $alerts[] = 'Flujo de caja libre negativo.';
+        }
+
+        if ($health->margenOperativoNegativo) {
+            $alerts[] = 'Margen operativo negativo.';
+        }
+
+        $alertsHtml = $alerts !== []
+            ? '<ul class="panel-alerts">' . implode('', array_map(
+                static fn (string $alert): string => '<li>' . Layout::escape($alert) . '</li>',
+                $alerts
+            )) . '</ul>'
+            : '<p class="muted">Sin alertas de distress en los datos disponibles.</p>';
+
+        $values = implode('', [
+            self::valueBox('ROIC', self::percentOrDash($health->roic)),
+            self::valueBox('Margen operativo', self::percentOrDash($health->operatingMargin)),
+            self::valueBox('Deuda/Patrimonio', Layout::formatNullable($health->debtToEquity)),
+            self::valueBox('Conversión de caja', Layout::formatNullable($health->cashConversion)),
+        ]);
+
+        return sprintf(
+            '<h3 class="panel-subtitle">Salud actual</h3><div class="values-grid">%s</div>%s',
+            $values,
+            $alertsHtml
+        );
+    }
+
+    private static function renderFundamentalChangeSection(FundamentalChangeAssessment $change): string
+    {
+        if ($change->verdict === FundamentalChangeVerdict::NO_EVALUABLE && $change->factors === []) {
+            return '<h3 class="panel-subtitle">Cambio interanual</h3><p class="muted">No evaluable: sin histórico suficiente para comparar con hace un año.</p>';
+        }
+
+        $rows = implode('', array_map(
+            static fn (FundamentalChangeFactor $factor): string => sprintf(
+                '<li>%s: %s ahora, %s hace un año.</li>',
+                Layout::escape($factor->label),
+                Layout::escape($factor->isPercentage ? self::percentOrDash($factor->currentValue) : Layout::formatNullable($factor->currentValue)),
+                Layout::escape($factor->isPercentage ? self::percentOrDash($factor->previousValue) : Layout::formatNullable($factor->previousValue))
+            ),
+            $change->factors
+        ));
+
+        $note = $change->verdict === FundamentalChangeVerdict::NO_EVALUABLE
+            ? ' <span class="muted">(menos de dos factores comparables, no es un veredicto concluyente)</span>'
+            : '';
+
+        return sprintf(
+            '<h3 class="panel-subtitle">Cambio interanual: %s%s</h3><ul class="panel-list">%s</ul>',
+            Layout::escape($change->verdict->label()),
+            $note,
+            $rows
         );
     }
 

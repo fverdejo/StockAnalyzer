@@ -16,6 +16,7 @@ use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
+use StockAnalyzer\DTO\FundamentalChangeAssessment;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Infrastructure\Mail\LogMailer;
@@ -463,6 +464,23 @@ class Application
             $this->corporateProfileCache
         );
 
+        // D2 del diagnostico fundamental ("Cambio interanual", ver
+        // versions.md 2026-09-05): compara el snapshot actual contra el de
+        // hace ~365 dias en fundamentals_history. Best effort, mismo
+        // criterio que el resto de esta funcion -- un fallo aqui (o
+        // simplemente no haber snapshot de hace un año todavia) nunca debe
+        // tumbar la ficha, StockDetailPage::render() ya sabe tratar `null`
+        // como "sin D2 que mostrar".
+        try {
+            $fundamentalChange = (new FundamentalChangeAssessor($this->fundamentalsHistoryRepository))->assess(
+                $ticker,
+                $analysis->getStock()->getFundamentals(),
+                $analysis->getStock()->getCompany()
+            );
+        } catch (Throwable) {
+            $fundamentalChange = null;
+        }
+
         return StockDetailPage::render(
             $analysis,
             $explanation,
@@ -482,7 +500,8 @@ class Application
                 : null,
             $currentUser !== null
                 ? $this->portfolioService->getTransactionsFor($currentUser, $ticker)
-                : []
+                : [],
+            $fundamentalChange
         );
     }
 
