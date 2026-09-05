@@ -6586,3 +6586,53 @@ Nuevo: `src/Providers/EodhdCalendarProvider.php`, `src/Providers/EodhdSecFilings
 ### Resultado esperado
 
 `eodhd_raw_fundamental_versions` tiene ahora, ademas de `legacy`/`v1.1` (Bloque B1), el calendario de resultados y las tendencias de analistas completos para los 938 tickers, y las transacciones de insiders (SEC Form 4) para los 715 que EODHD reconoce como emisores vivos. Hoy es solo archivo: ningun `Service`/`Repository` de la aplicacion consume todavia estas secciones. La limitacion de semantica temporal de `calendar/trends` (y por extension, de `Fundamentals.Earnings.Trend`) queda documentada como bloqueo explicito para cualquier intento futuro de usarlo en un backtest, tal como pedia el Bloque B3 del plan. B4 (dividendos/splits), B5, B6 y los bloques C-F del plan siguen sin empezar.
+
+---
+
+## 2026-09-05 (tercera entrada) - Bloque B6 del plan de Codex: listas de simbolos activos/deslistados archivadas, Bloque B completo
+
+Estado: implementado y ejecutado contra `ddev`. Cierra B6 (`exchange-symbol-list`) del plan de Codex, y con el **el Bloque B completo** (B1/B2/B3/B6/B7 implementados; B4/B5 descartados con motivo ya documentado en `roadmap.md`/entradas anteriores). Trabajo hecho ENTERAMENTE contra `ddev`; **ningun SSH ni conexion a la Raspberry Pi de produccion (192.168.1.156)**, misma instruccion del usuario que en las dos entradas anteriores de hoy.
+
+### Que bolsas hacian falta de verdad, verificado ANTES de escribir nada
+
+El plan es explicito: "no descargar automaticamente fundamentales de todas las acciones estadounidenses". Revisando `config/universes.php` entero (`grep` de `'[A-Z0-9]+\.[A-Z]+'` sobre todo el fichero) el UNICO sufijo de bolsa no estadounidense que aparece es `.MC` (IBEX, Madrid); confirmado tambien contra los 938 tickers del universo point-in-time completo (`eodhd_raw_fundamentals`): exactamente 35/938 tickers llevan `.MC`, cero llevan cualquier otro sufijo. Todo lo demas son tickers de EEUU. Por tanto solo hacian falta DOS bolsas: `US` y `MC` -- no se ha llamado a ninguna bolsa que este proyecto no use.
+
+### Confirmado en vivo antes de escribir el proveedor
+
+- La respuesta es un ARRAY JSON de nivel superior (no un objeto con una clave `data`/`earnings` como el resto de endpoints de EODHD usados hasta ahora), cada elemento con `Code`, `Name`, `Country`, `Exchange`, `Currency`, `Type`, `Isin`.
+- Una sola llamada trae la bolsa ENTERA, sin paginacion: `US` con `delisted=0` trae 17.955 acciones comunes activas, `delisted=1` trae 32.907 deslistadas; `MC` trae 238 activas / 125 deslistadas.
+- Coste: **1 unidad POR LLAMADA** (no por elemento de la lista), medido en vivo comparando `/api/user` antes/despues de 5 llamadas reales (delta exacto de 5 unidades).
+- Una bolsa desconocida (`ZZ` de prueba) responde 404 "Exchange Not Found."; una lista vacia `[]` con 200 es un resultado LEGITIMO (bolsa real sin deslistados de ese tipo), no un error -- a diferencia del resto de proveedores de EODHD de este proyecto (Fundamentals/Calendar/SecFilings), donde un documento vacio SI se trata como fallo.
+
+### Implementado
+
+- **`src/Providers/EodhdExchangeSymbolListProvider.php`** (nuevo): `fetchRawSymbolListJson(exchange, delisted, type='common_stock')`. Clase separada de las tres anteriores (`EodhdFiscalPeriodProvider`/`EodhdCalendarProvider`/`EodhdSecFilingsProvider`): ninguna pide una BOLSA entera en vez de un ticker, y la validacion de "lista vacia valida" es opuesta al resto. Reutiliza el mismo criterio de seguridad (API key nunca en el mensaje de error) y el mismo patron de `HttpClient`/`http_errors=>false`.
+- **`bin/archive-eodhd-symbol-lists.php`** (nuevo): por defecto procesa `US`+`MC` (2 bolsas x 2 secciones = 4 peticiones), `--exchanges` para forzar otra lista, `--force` para re-descargar, reanudable via `hasVersion($exchange,'symbol-list',$section)`. A diferencia de `bin/archive-eodhd-*` anteriores, la CLAVE de `store()` es el CODIGO DE BOLSA (`US`/`MC`), no un ticker -- una fila por bolsa+seccion, tal como pedia el encargo, reutilizando el campo `ticker` del repositorio como "clave de la entidad archivada" generica (sin cambios de esquema).
+- **Tests nuevos**: `tests/Providers/EodhdExchangeSymbolListProviderTest.php` (8 tests: URL/parametros correctos, `delisted=1` cuando corresponde, exchange normalizado a mayusculas, lista vacia NO es un error, bolsa desconocida como error legible sin filtrar la API key, cuerpo no-JSON rechazado, cuerpo que decodifica pero NO es una lista -objeto- rechazado con `array_is_list()`, exchange vacio no gasta llamada).
+
+Escribe en `eodhd_raw_fundamental_versions` con `api_version='symbol-list'`, `section='active'` o `section='delisted'`. NUNCA en `eodhd_raw_fundamentals`. No se cruza contra nada ni se construye una tabla `symbols` normalizada (esa normalizacion es Bloque C, fuera de este encargo, solo se archiva el JSON crudo).
+
+### Resultado real del archivado (ddev, 2026-09-05)
+
+**4/4 peticiones archivadas, 0 errores** (2 de una verificacion manual previa de `MC` + 2 del lote de `US`, ambas resumibles via `hasVersion()` sin re-descargar `MC`):
+
+| Bolsa | Seccion | Simbolos | Bytes crudos | Bytes comprimidos |
+|---|---|---|---|---|
+| US | active | 17.955 | 2.538.380 | 338.213 |
+| US | delisted | 32.907 | 4.502.060 | 504.845 |
+| MC | active | 238 | 34.175 | 5.368 |
+| MC | delisted | 125 | 18.033 | 3.021 |
+
+Cuota gastada en este bloque: 5 unidades de verificacion en vivo + 4 unidades del archivado real = 9 unidades. **Cuota total consumida HOY** (acumulada desde el Bloque B1 de la primera entrada de hoy): **54.328 de 100.000**.
+
+### Incluye
+
+Nuevo: `src/Providers/EodhdExchangeSymbolListProvider.php`, `bin/archive-eodhd-symbol-lists.php`, `tests/Providers/EodhdExchangeSymbolListProviderTest.php`. Modificado: `roadmap.md` (Bloque B del plan marcado como completo). No se toca `eodhd_raw_fundamentals` ni ningun consumidor actual.
+
+### Verificado en ddev con
+
+`ddev exec vendor/bin/phpunit`: **581 tests, 1.618 assertions, OK** (1 skip preexistente sin relacion). `ddev exec vendor/bin/phpstan analyse`: sin errores (269 ficheros), limpio. Archivado real de `US`/`MC` ejecutado y verificado por consulta directa a `eodhd_raw_fundamental_versions` como se detalla arriba (no simulado).
+
+### Resultado esperado
+
+Bloque B del plan de Codex CERRADO por completo: B1 (Fundamentals v1.1), B2/B3 (Calendar earnings/trends, con el hallazgo bloqueante de semantica temporal ya documentado), B6 (listas de simbolos de `US`/`MC`) y B7 (SEC Form 4) archivados; B4 (dividendos) y B5 (MID/SML/OEX) descartados con motivo verificado en vivo (ver entradas anteriores). Como el resto de B, hoy es solo archivo crudo: ningun `Service`/`Repository` de la aplicacion consume todavia `eodhd_raw_fundamental_versions`. Bloque C (modelo de datos normalizado) y D/E (nuevo marco de señales) quedan fuera de este encargo, pendientes de consulta con el equipo segun `roadmap.md`.
