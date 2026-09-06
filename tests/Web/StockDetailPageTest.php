@@ -89,8 +89,13 @@ final class StockDetailPageTest extends TestCase
             Fundamentals::empty()
         );
 
+        // Suficientes indicadores reales (2026-09-06, Astra/Codex P1:
+        // TechnicalSnapshot::hasSufficientTechnicalData()) para que este
+        // analisis no se clasifique como "datos insuficientes" -- este test
+        // cubre el aviso de posicion segun el veredicto SELL/BUY dado, no
+        // la cobertura de datos en si.
         $snapshot = new TechnicalSnapshot(
-            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0
+            100.0, 95.0, null, null, 60.0, null, null, null, null, null, null, null, 3.0, null, 2.0, null, null, null, null, 0
         );
 
         return new StockAnalysis(

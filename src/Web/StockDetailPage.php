@@ -76,7 +76,7 @@ class StockDetailPage
         $technical = $analysis->getTechnicalSnapshot();
         $fundamentals = $stock->getFundamentals();
         $score = $analysis->getScore();
-        $recommendation = $score->getRecommendation();
+        $recommendation = $analysis->getRecommendation();
 
         $header = sprintf(
             '<div class="detail-title"><h1>%s <span class="muted">%s</span></h1><p class="subtitle">%s &middot; %s &middot; %s</p></div>',

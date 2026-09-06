@@ -44,7 +44,7 @@ class AnalysisJsonPresenter
             'volume' => $quote->getVolume(),
             'score' => $score->getTotal(),
             'percentage' => $score->getPercentage(),
-            'recommendation' => $score->getRecommendation(),
+            'recommendation' => $analysis->getRecommendation(),
             'categories' => $score->toArray()['categories'],
             'technical' => [
                 'sma20' => $analysis->getTechnicalSnapshot()->getSma20(),

@@ -165,8 +165,17 @@ final class RecommendationExplainerTest extends TestCase
             Fundamentals::empty()
         );
 
+        // Suficientes indicadores reales (sma20/sma50/cruce/rsi14/
+        // volatilidad20/atr14 = 6 de 10) para que
+        // `TechnicalSnapshot::hasSufficientTechnicalData()` (2026-09-06,
+        // Astra/Codex P1) no clasifique este analisis como "datos
+        // insuficientes" -- este test cubre el TEXTO de
+        // RecommendationExplainer a partir de un Score/Signals ya dados,
+        // no la cobertura de datos en si (eso lo cubre
+        // StockAnalysisRecommendationTest). Los valores concretos no
+        // importan para lo que se comprueba aqui.
         $snapshot = new TechnicalSnapshot(
-            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0
+            100.0, 95.0, null, null, 60.0, null, null, null, null, null, null, null, 3.0, null, 2.0, null, null, null, null, 0
         );
 
         return new StockAnalysis(

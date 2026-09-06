@@ -56,7 +56,19 @@ class RecommendationExplainer
         $score = $analysis->getScore();
         $company = $analysis->getStock()->getCompany();
         $name = $company->getName() !== '' ? $company->getName() : $company->getTicker();
-        $recommendation = $score->getRecommendation();
+        // `analysis->getRecommendation()`, no `score->getRecommendation()`
+        // (correccion del 2026-09-06, Astra/Codex, P1): con demasiados
+        // indicadores tecnicos ausentes, `Score` seguiria devolviendo
+        // BUY/HOLD/SELL como si el 50% neutro fuera una opinion real.
+        $recommendation = $analysis->getRecommendation();
+
+        if ($recommendation === 'DATOS_INSUFICIENTES') {
+            return sprintf(
+                '%s no tiene historico tecnico suficiente para calcular una recomendacion fiable ahora mismo. '
+                . 'Faltan demasiados indicadores (precio, medias moviles, momentum, volatilidad...) para que el porcentaje del score signifique nada.',
+                $name
+            );
+        }
 
         $intro = match ($recommendation) {
             'BUY' => sprintf('%s reune mas señales a favor que en contra', $name),

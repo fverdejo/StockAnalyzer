@@ -49,11 +49,29 @@ class AlertService
     }
 
     /**
+     * `DTO\StockAnalysis::getRecommendation()` puede devolver esto cuando
+     * hay demasiados indicadores tecnicos ausentes para que el score
+     * signifique nada (2026-09-06, bug real senalado por Astra/Codex en
+     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, P1).
+     */
+    private const INSUFFICIENT_DATA = 'DATOS_INSUFICIENTES';
+
+    /**
      * La primera vez que se ve un ticker (no hay estado previo) no genera
      * alerta: solo fija la base de comparacion para la siguiente visita.
+     *
+     * Una clasificacion no evaluable (`INSUFFICIENT_DATA`) tampoco genera
+     * alerta NI se guarda como "ultimo estado" -- no es una recomendacion
+     * de mercado que haya cambiado, es una falta de dato. Asi, cuando el
+     * dato vuelva a estar disponible, la comparacion sigue siendo contra
+     * la ultima recomendacion REAL conocida, no contra "sin datos".
      */
     public function checkRecommendationChange(User $user, string $ticker, string $currentRecommendation): void
     {
+        if ($currentRecommendation === self::INSUFFICIENT_DATA) {
+            return;
+        }
+
         $previous = $this->state->getLastRecommendation($user, $ticker);
         $this->state->setLastRecommendation($user, $ticker, $currentRecommendation);
 

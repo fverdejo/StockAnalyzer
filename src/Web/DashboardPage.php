@@ -231,7 +231,7 @@ HTML;
             $company = $stock->getCompany();
             $quote = $stock->getQuote();
             $score = $analysis->getScore();
-            $recommendation = $score->getRecommendation();
+            $recommendation = $analysis->getRecommendation();
             $detailHref = self::detailHref($company->getTicker(), $rawTickers);
             $starCell = $currentUser instanceof User
                 ? sprintf('<td class="star-cell">%s</td>', WatchlistStar::render($company->getTicker(), $currentUser, isset($watched[$company->getTicker()]), $csrfToken, $redirectTo))
@@ -278,7 +278,7 @@ HTML;
         $best = $results[0] ?? null;
         $buyCount = count(array_filter(
             $results,
-            static fn (StockAnalysis $analysis): bool => $analysis->getScore()->getRecommendation() === 'BUY'
+            static fn (StockAnalysis $analysis): bool => $analysis->getRecommendation() === 'BUY'
         ));
         $bestTicker = $best instanceof StockAnalysis
             ? sprintf(
@@ -306,7 +306,7 @@ HTML;
         $items = [];
 
         foreach ($results as $analysis) {
-            $recommendation = $analysis->getScore()->getRecommendation();
+            $recommendation = $analysis->getRecommendation();
 
             if (!in_array($recommendation, $recommendations, true)) {
                 continue;

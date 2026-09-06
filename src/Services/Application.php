@@ -776,7 +776,7 @@ class Application
                 try {
                     $analysis = $this->analysisService->analyze($item->getTicker());
                     $analyses[$item->getTicker()] = $analysis;
-                    $this->alertService->checkRecommendationChange($user, $item->getTicker(), $analysis->getScore()->getRecommendation());
+                    $this->alertService->checkRecommendationChange($user, $item->getTicker(), $analysis->getRecommendation());
 
                     // Version cacheada (ver CorporateProfileCacheRepository,
                     // TTL 24h): sin cache, esto pediria quoteSummary a Yahoo
@@ -1057,7 +1057,7 @@ class Application
 
             try {
                 $analysis = $this->analysisService->analyze($ticker);
-                $recommendation = $analysis->getScore()->getRecommendation();
+                $recommendation = $analysis->getRecommendation();
                 $recommendations[$ticker] = $recommendation;
                 $riskLevels[$ticker] = $analysis->getRiskLevels();
                 // Ya viene en el Stock del mismo analisis (v2.47): coste
@@ -1345,7 +1345,7 @@ class Application
         if ($recommendation !== '') {
             $results = array_values(array_filter(
                 $results,
-                static fn (StockAnalysis $analysis): bool => $analysis->getScore()->getRecommendation() === $recommendation
+                static fn (StockAnalysis $analysis): bool => $analysis->getRecommendation() === $recommendation
             ));
         }
 

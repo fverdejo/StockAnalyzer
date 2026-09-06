@@ -25,6 +25,10 @@ class RecommendationLabel
         'HOLD' => 'Mantener',
         'SELL' => 'Vender',
         'STRONG SELL' => 'Venta fuerte',
+        // `DTO\StockAnalysis::getRecommendation()` (2026-09-06): demasiados
+        // indicadores tecnicos ausentes para que el score signifique nada,
+        // no una orden de compra/venta/mantener.
+        'DATOS_INSUFICIENTES' => 'Datos insuficientes',
     ];
 
     /**

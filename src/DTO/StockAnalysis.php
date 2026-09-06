@@ -32,6 +32,40 @@ class StockAnalysis
         return $this->score;
     }
 
+    /**
+     * El valor canonico (`'BUY'`/`'HOLD'`/`'SELL'`/`'STRONG SELL'`/
+     * `'DATOS_INSUFICIENTES'`) que debe mostrarse/usarse para ESTE
+     * analisis en vivo -- unico punto de entrada para saber la
+     * recomendacion de un `StockAnalysis`, en vez de leer
+     * `getScore()->getRecommendation()` directamente.
+     *
+     * **Correccion del 2026-09-06** (bug real senalado por Astra/Codex,
+     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, P1): `TechnicalScoreAnalyzer`
+     * rellena con un valor neutro cada indicador ausente para no romper la
+     * suma, pero si faltan casi todos, el resultado no son "señales
+     * mixtas": es que no hay dato para opinar. Sin este metodo, un ticker
+     * sin historico tecnico utilizable (ej. una OPV con una sola sesion)
+     * aterrizaba exactamente en el 50% del score (TECHNICAL+MOMENTUM+RISK
+     * todo relleno neutro), que `Score::recommendationFor()` clasifica
+     * como `SELL` -- "no tengo datos" se convertia en una orden de venta.
+     *
+     * Deliberadamente NO se toca `Score::recommendationFor()` (formula
+     * pura sobre un porcentaje, reutilizada tal cual por
+     * `BacktestingService` sobre percentiles historicos que no tienen
+     * este concepto de cobertura en vivo) ni `TechnicalScoreAnalyzer`
+     * (sigue rellenando neutro para UN hueco aislado, que es correcto):
+     * la comprobacion vive aqui, en el analisis EN VIVO de un ticker
+     * concreto, que es donde "casi todo ausente" puede ocurrir de verdad.
+     */
+    public function getRecommendation(): string
+    {
+        if (!$this->technicalSnapshot->hasSufficientTechnicalData()) {
+            return 'DATOS_INSUFICIENTES';
+        }
+
+        return $this->score->getRecommendation();
+    }
+
     public function getTechnicalSnapshot(): TechnicalSnapshot
     {
         return $this->technicalSnapshot;

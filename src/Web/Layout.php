@@ -601,6 +601,10 @@ class Layout
         .hold { background: #fff1d2; color: var(--warn-text); }
         .sell { background: #f9dedb; color: var(--bad); }
         .strong-sell { background: var(--bad); color: var(--surface); }
+        /* "Datos insuficientes" (2026-09-06, Astra/Codex P1): deliberadamente
+           NI verde/ambar/rojo -- no es un punto en la escala compra-venta,
+           es la ausencia de suficiente dato tecnico para opinar. */
+        .insufficient-data { background: var(--surface-alt); color: var(--muted); }
 
         .chips {
             display: flex;
@@ -1742,6 +1746,11 @@ HTML;
             'BUY' => 'buy',
             'HOLD' => 'hold',
             'STRONG SELL' => 'strong-sell',
+            // DTO\StockAnalysis::getRecommendation() (2026-09-06, Astra/Codex
+            // P1): sin esto, "datos insuficientes" caia en el `default` de
+            // abajo y se pintaba con el mismo rojo que STRONG SELL/SELL --
+            // justo la confusion visual que motivo la correccion.
+            'DATOS_INSUFICIENTES' => 'insufficient-data',
             default => 'sell',
         };
     }

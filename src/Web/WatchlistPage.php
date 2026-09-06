@@ -108,7 +108,7 @@ HTML;
         }
 
         $score = $analysis->getScore();
-        $recommendation = $score->getRecommendation();
+        $recommendation = $analysis->getRecommendation();
         $currency = $analysis->getStock()->getCompany()->getCurrency();
 
         return sprintf(

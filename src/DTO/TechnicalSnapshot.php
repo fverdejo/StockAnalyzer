@@ -177,4 +177,70 @@ class TechnicalSnapshot
 
         return $this->lastVolume / $this->avgVolume20;
     }
+
+    /**
+     * Numero total de indicadores independientes que
+     * `Analyzer\TechnicalScoreAnalyzer` puede puntuar con dato real (los
+     * 10 "huecos" de sus tres categorias: precio vs SMA20, precio vs
+     * SMA50, cruce de medias, MACD, Bandas de Bollinger y Volumen en
+     * TECHNICAL; Momentum 12-1 y RSI14 en MOMENTUM; Volatilidad20 y ATR14
+     * en RISK). Cuando falta uno, `TechnicalScoreAnalyzer` no lo deja en
+     * blanco: le asigna un relleno "neutro" (la mitad de sus puntos) para
+     * no romper la suma -- correcto para UN hueco aislado, pero si faltan
+     * casi todos, el resultado no es "señales mixtas", es "no hay dato
+     * para opinar". Ver `availableIndicatorCount()`/
+     * `hasSufficientTechnicalData()`.
+     */
+    public const TOTAL_INDICATOR_COUNT = 10;
+
+    /**
+     * Cuantos de los `TOTAL_INDICATOR_COUNT` indicadores tienen dato real
+     * (no relleno neutro) en este snapshot. El cruce de medias y las
+     * Bandas de Bollinger cuentan como UN indicador cada uno (igual que
+     * los puntua `TechnicalScoreAnalyzer`: hace falta el PAR completo para
+     * calcularlos), no dos.
+     */
+    public function availableIndicatorCount(): int
+    {
+        return count(array_filter([
+            $this->sma20 !== null,
+            $this->sma50 !== null,
+            $this->sma20 !== null && $this->sma50 !== null,
+            $this->macdHistogram !== null,
+            $this->bollingerUpper !== null && $this->bollingerLower !== null,
+            $this->getVolumeRatio() !== null,
+            $this->momentum12m1 !== null,
+            $this->rsi14 !== null,
+            $this->volatility20 !== null,
+            $this->atr14 !== null,
+        ]));
+    }
+
+    /**
+     * Umbral minimo (2026-09-06, correccion del bug real senalado por
+     * Astra/Codex en `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, P1): con TODOS
+     * los indicadores ausentes, TECHNICAL+MOMENTUM+RISK suman exactamente
+     * la mitad de su maximo (15+5+5 de 30+10+10 = 25 de 50 = 50%), que
+     * `Score::recommendationFor()` clasifica como `SELL` -- "no tengo
+     * datos" se convertia en una orden de venta. La mitad de los 10
+     * indicadores es el corte mas simple y defendible que evita ese caso
+     * extremo (y cualquiera con una mayoria de huecos) sin descartar un
+     * ticker por faltarle uno o dos indicadores aislados, que es una
+     * situacion normal (una OPV reciente sin 250 sesiones de historico
+     * para Momentum 12-1, por ejemplo).
+     */
+    private const MIN_AVAILABLE_INDICATORS = self::TOTAL_INDICATOR_COUNT / 2;
+
+    /**
+     * `false` cuando hay demasiados indicadores ausentes para que
+     * TECHNICAL/MOMENTUM/RISK signifiquen "señales mixtas" en vez de
+     * "no hay dato para opinar" -- ver `MIN_AVAILABLE_INDICATORS`. Quien
+     * consuma esto debe mostrar un estado de "datos insuficientes" en vez
+     * de la recomendacion normal (`DTO\StockAnalysis::getRecommendation()`
+     * ya lo hace).
+     */
+    public function hasSufficientTechnicalData(): bool
+    {
+        return $this->availableIndicatorCount() >= self::MIN_AVAILABLE_INDICATORS;
+    }
 }
