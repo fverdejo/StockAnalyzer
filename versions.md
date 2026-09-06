@@ -7076,3 +7076,25 @@ Estado: implementado y verificado. El usuario pide un universo mas amplio para m
 Total de tickers unicos en `config/universes.php` tras esta entrada: **1.407** (sube desde 628 del `2026-09-01`). `tests/Utils/UniverseTickerResolverTest.php` actualizado con la nueva cifra real. Tests nuevos en `ApplicationTickerRequestTest.php`: un universo de mas de 60 tickers no se trunca en el camino web, y un universo `selectable=false` cae en el por defecto.
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **670 tests, 1.850 assertions, OK** (1 skip preexistente), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. Verificado tambien por HTTP contra `ddev` real (Home sin "MSCI World" en el desplegable, `?universe=msci_world` cae en `largecap60` en ~1,2s). `config/weights.php` no se toca.
+
+---
+
+## 2026-09-06 (undecima entrada) - Retirada de la "cantidad sugerida" (position sizing, v2.50/v2.65/v2.66/v2.83)
+
+Estado: implementado y verificado, a peticion explicita del usuario tras ensenarle una captura de "Mi cartera".
+
+El usuario senalo el mismo problema de fondo que ya motivo la retirada de "Calor de cartera" (entrada novena, mismo dia): un numero que no entendia para que servia y que ademas nunca era estable -- comprar la cantidad sugerida en una posicion cambiaba el valor de "otras posiciones" de TODAS las demas, asi que su propia cantidad sugerida tambien cambiaba. Ese comportamiento era intencional desde `v2.83` (el "punto fijo" se calcula sobre las OTRAS posiciones, no sobre la cartera total, precisamente para que no subiera sin limite al comprar), pero la app nunca explicaba esa logica en la interfaz -- el badge solo mostraba "Sugerido ~N acc." sin mas contexto. Explicado el diseno, el usuario confirmo que prefiere quitarla directamente en vez de explicarla mejor: mismo criterio que "Calor de cartera", si no se usa se elimina, no se parchea.
+
+Retirado por completo:
+
+- `DTO\SuggestedPosition` y `Services\SuggestedPositionCalculator` (con su test dedicado), sin ningun otro consumidor.
+- De `DTO\RiskLevels`: `suggestedQuantity()`, `isLimitedByMaxPositionWeight()` y los privados `areInputsUsable()`/`quantityByRisk()`/`quantityByMaxWeight()` -- se queda solo con el constructor, `compute()`, `getStopLoss()` y `getTarget()` (el stop-loss/objetivo por ATR14 de `v2.19`, que el usuario no ha cuestionado).
+- El parametro `?SuggestedPosition $suggestedPosition` de `Web\RiskLevelsBadge::render()` y sus metodos privados `renderSuggestedQuantity()`/`formatPercent()`/`formatQuantity()`.
+- El parametro `array $suggestedPositions` de `Web\PortfolioPage::render()`/`renderHoldings()` (quedaba entre `riskLevels` y `concentration`, no al final) y la llamada a `SuggestedPositionCalculator` en `Application::renderPortfolio()`.
+- Los campos `position_risk_percent`/`max_position_percent` de `config/risk_levels.php` y sus getters en `Config\RiskLevelsConfig` (`getPositionRiskPercent()`/`getMaxPositionPercent()`): sin la formula que los consumia, quedaban sin ningun otro punto de lectura en toda la aplicacion. `RiskLevelsConfig` conserva `atr_multiplier`/`reward_ratio`, que si sigue usando `RiskLevelsCalculator` para el stop-loss/objetivo.
+
+`bin/render-portfolio-fixture.php` (utilidad de verificacion visual, no parte de la app) ajustado a la nueva firma de `PortfolioPage::render()`. De paso, dos comentarios en `Models\Portfolio.php`/`Services\PortfolioService.php` que citaban a `SuggestedPositionCalculator` como "quien necesita" el tipo de cambio por ticker se corrigieron para apuntar al consumidor real que queda (`Web\PortfolioPage::currentPriceEur()`).
+
+**Tests**: `tests/DTO/RiskLevelsTest.php` conserva solo los cuatro tests de `compute()`; los diez que cubrian `suggestedQuantity()`/`isLimitedByMaxPositionWeight()` se eliminaron con el codigo que probaban. En `tests/Web/PortfolioPageTest.php` se corrigieron dos sitios (`renderWithConcentration()`, `renderWithTransactions()`) que arrastraban un argumento posicional de mas (el hueco que dejo `$suggestedPositions` al quitarse de la firma) -- mismo patron de error que ya aparecio al retirar "Calor de cartera".
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **653 tests, 1.776 assertions, OK** (1 skip preexistente, baja desde 670 por las eliminaciones, no por ninguna regresion), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca; el stop-loss/objetivo por ATR14 (`RiskLevelsBadge`, ficha de detalle) no cambia.

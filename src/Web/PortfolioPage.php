@@ -6,7 +6,6 @@ namespace StockAnalyzer\Web;
 
 use StockAnalyzer\DTO\PortfolioConcentration;
 use StockAnalyzer\DTO\RiskLevels;
-use StockAnalyzer\DTO\SuggestedPosition;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
@@ -19,7 +18,6 @@ class PortfolioPage
      * @param array<string,string> $recommendations ticker => recomendacion actual (ver versions.md v2.15)
      * @param list<string> $watchedTickers tickers que el usuario ya sigue (ver versions.md v2.16)
      * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos, si hay datos suficientes
-     * @param array<string,?SuggestedPosition> $suggestedPositions ticker => cantidad de acciones sugerida segun el riesgo por operacion y el peso maximo por posicion (position sizing, ver versions.md v2.50/v2.65)
      * @param ?PortfolioConcentration $concentration pesos por posicion/sector/divisa (null si no se pudo calcular en euros, ver versions.md)
      */
     public static function render(
@@ -33,7 +31,6 @@ class PortfolioPage
         int $unreadAlerts = 0,
         array $watchedTickers = [],
         array $riskLevels = [],
-        array $suggestedPositions = [],
         ?PortfolioConcentration $concentration = null,
         int $transactionsPageNum = 1
     ): string {
@@ -45,7 +42,7 @@ class PortfolioPage
         $concentrationPanel = self::renderConcentration($concentration);
         $valueChart = self::renderValueHistoryChart($valueHistory);
         $watched = array_fill_keys($watchedTickers, true);
-        $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels, $suggestedPositions);
+        $holdings = self::renderHoldings($portfolio, $token, $recommendations, $user, $watched, $riskLevels);
         $transactions = self::renderTransactions($portfolio, $transactionsPageNum);
 
         // Orden de los paneles (v2.87): tarjetas -> posiciones abiertas ->
@@ -528,9 +525,8 @@ HTML;
      * @param array<string,string> $recommendations ticker => recomendacion actual
      * @param array<string,bool> $watched
      * @param array<string,?RiskLevels> $riskLevels ticker => stop-loss/objetivo sugeridos
-     * @param array<string,?SuggestedPosition> $suggestedPositions ticker => cantidad de acciones sugerida (position sizing)
      */
-    private static function renderHoldings(Portfolio $portfolio, string $csrfToken, array $recommendations, User $user, array $watched, array $riskLevels, array $suggestedPositions = []): string
+    private static function renderHoldings(Portfolio $portfolio, string $csrfToken, array $recommendations, User $user, array $watched, array $riskLevels): string
     {
         $holdings = $portfolio->getHoldings();
 
@@ -564,7 +560,7 @@ HTML;
                 self::nullableProfitMoney($holding->getUnrealizedProfit(), $holding->getUnrealizedProfitPercent(), $currency)
                     . self::eurProfitSuffix($holding, $currency),
                 self::recommendationBadge($recommendation),
-                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency, $suggestedPositions[$holding->getTicker()] ?? null)
+                RiskLevelsBadge::render($riskLevels[$holding->getTicker()] ?? null, $currency)
             );
         }
 

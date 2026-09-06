@@ -244,7 +244,7 @@ class Portfolio
      * obtener el cambio de esa divisa.
      *
      * Se expone por ticker y no por divisa porque quien lo necesita
-     * (Services\SuggestedPositionCalculator) razona siempre sobre un
+     * (Web\PortfolioPage::currentPriceEur()) razona siempre sobre un
      * ticker concreto; el mapa interno esta indexado por divisa para no
      * repetir el mismo cambio una vez por posicion.
      */

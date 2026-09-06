@@ -406,7 +406,6 @@ final class PortfolioPageTest extends TestCase
             0,
             [],
             [],
-            [],
             $concentration
         );
     }
@@ -445,7 +444,6 @@ final class PortfolioPageTest extends TestCase
             ['labels' => [], 'values' => []],
             [],
             0,
-            [],
             [],
             [],
             null,

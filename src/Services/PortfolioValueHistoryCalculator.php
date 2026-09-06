@@ -33,9 +33,9 @@ use Throwable;
  *    que dibujaba un desplome que nunca ocurrio.
  *
  * Vive fuera de PortfolioService, en la linea de
- * PortfolioConcentrationCalculator (v2.61) y SuggestedPositionCalculator
- * (v2.66): un servicio sin estado que se instancia en la raiz de
- * composicion y se puede probar sin base de datos.
+ * PortfolioConcentrationCalculator (v2.61): un servicio sin estado que se
+ * instancia en la raiz de composicion y se puede probar sin base de
+ * datos.
  */
 class PortfolioValueHistoryCalculator
 {

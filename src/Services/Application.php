@@ -979,8 +979,6 @@ class Application
                 $this->alertRepository->countUnread($user),
                 $this->watchedTickers($user),
                 $holdingsAnalysis['riskLevels'],
-                (new SuggestedPositionCalculator(new RiskLevelsConfig()))
-                    ->compute($portfolio, $holdingsAnalysis['riskLevels']),
                 (new PortfolioConcentrationCalculator())->compute($portfolio, $holdingsAnalysis['sectors']),
                 // Paginacion del historial de operaciones: mismo patron que
                 // el Ranking del Home (linea ~325) y BacktestPage (~1108).

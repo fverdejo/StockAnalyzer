@@ -23,7 +23,6 @@ require __DIR__ . '/../vendor/autoload.php';
 use StockAnalyzer\Config\RiskLevelsConfig;
 use StockAnalyzer\DTO\PortfolioConcentration;
 use StockAnalyzer\DTO\RiskLevels;
-use StockAnalyzer\DTO\SuggestedPosition;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
@@ -71,7 +70,6 @@ $holdings = [];
 $prices = [];
 $currencies = [];
 $riskLevels = [];
-$suggested = [];
 $recommendations = ['GOOGL' => 'BUY', 'ADBE' => 'HOLD', 'DIS' => 'HOLD', 'PYPL' => 'SELL', 'AMS.MC' => 'BUY', 'REP.MC' => 'STRONG SELL', 'VIPS' => 'HOLD', 'EDU' => 'SELL'];
 $sectorWeights = [];
 $positionWeights = [];
@@ -88,7 +86,6 @@ foreach ($spec as [$ticker, $qty, $avg, $price, $currency, $atr, $sector]) {
     $prices[$ticker] = $price;
     $currencies[$ticker] = $currency;
     $riskLevels[$ticker] = RiskLevels::compute($price, $atr, $risk->getAtrMultiplier(), $risk->getRewardRatio());
-    $suggested[$ticker] = new SuggestedPosition(round(400.0 / $price, 6), false, 20.0);
     $positionWeights[$ticker] = $valueEur;
     $sectorWeights[$sector] = ($sectorWeights[$sector] ?? 0.0) + $valueEur;
     $currencyWeights[$currency] = ($currencyWeights[$currency] ?? 0.0) + $valueEur;
@@ -141,6 +138,5 @@ echo PortfolioPage::render(
     2,
     ['ADBE'],
     $riskLevels,
-    $suggested,
     $concentration
 );

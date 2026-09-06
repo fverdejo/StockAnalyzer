@@ -287,8 +287,8 @@ class PortfolioService
             // por divisa, ya cacheada) viajan tambien a la cartera, en vez
             // de descartarse tras convertir cada posicion: quien necesite
             // llevar un importe en euros a la divisa de un ticker (ver
-            // Services\SuggestedPositionCalculator, versions.md v2.66) lo
-            // hace sin ninguna llamada nueva al proveedor.
+            // Portfolio::getRateToEurFor(), versions.md v2.66) lo hace sin
+            // ninguna llamada nueva al proveedor.
             $todayRates,
             // Los dos importes en euros que NO se pueden deducir de las
             // posiciones abiertas, porque hablan tambien de posiciones ya
