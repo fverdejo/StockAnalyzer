@@ -127,31 +127,60 @@ class AlertService
 
     /**
      * Avisa cuando el precio de una posicion abierta pierde el stop-loss
-     * sugerido por Services\RiskLevelsCalculator (el mismo nivel que ya se
-     * muestra en "Mi cartera"). No hace nada si no hay niveles calculables
-     * o no hay precio actual: "dato no disponible" nunca es "el stop se ha
-     * perdido".
+     * ADOPTADO para esa posicion. No hace nada si no hay niveles
+     * calculables, no hay precio actual, o no se puede determinar cuando
+     * empezo la posicion abierta: "dato no disponible" nunca es "el stop
+     * se ha perdido".
+     *
+     * **Correccion del 2026-09-06** (bug real senalado por Astra/Codex,
+     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, P0): antes se comparaba el
+     * precio actual contra `$levels->getStopLoss()`, pero `$levels` se
+     * recalcula en CADA visita con ESE MISMO precio actual
+     * (`RiskLevels::compute()` usa la cotizacion de hoy) -- asi que
+     * "precio > stop" era matematicamente cierto siempre y la alerta
+     * jamas podia dispararse. Ahora el stop se ADOPTA una sola vez por
+     * racha de posicion abierta (la primera vez que se observa, o tras
+     * cerrarse y reabrirse) y se queda FIJO mientras la misma racha siga
+     * abierta: las visitas siguientes comparan el precio contra ese valor
+     * guardado, no contra un stop recalculado con el precio de hoy.
+     * `$positionOpenedAt` (ver PortfolioService::currentPositionOpenedAt())
+     * es como se detecta si el stop guardado sigue perteneciendo a la
+     * misma posicion o a un ciclo ya cerrado.
      *
      * Semantica por transicion, identica a checkRecommendationChange():
      * solo alerta cuando el estado previo era "por encima" y el actual es
-     * "por debajo". La primera observacion solo fija la base de
-     * comparacion. Asi una posicion que lleva semanas por debajo del stop
-     * no genera una alerta nueva en cada visita a la cartera, pero si
-     * recupera el nivel y vuelve a perderlo se avisa otra vez, que es un
-     * evento nuevo y legitimo.
+     * "por debajo". La adopcion del stop (primera observacion de esta
+     * racha) solo fija la base de comparacion, nunca alerta. Asi una
+     * posicion que lleva semanas por debajo del stop no genera una alerta
+     * nueva en cada visita a la cartera, pero si recupera el nivel y
+     * vuelve a perderlo se avisa otra vez, que es un evento nuevo y
+     * legitimo.
      */
     public function checkStopLossBreach(
         User $user,
         string $ticker,
         ?RiskLevels $levels,
         ?float $currentPrice,
+        ?DateTimeImmutable $positionOpenedAt,
         string $currency = ''
     ): void {
-        if ($levels === null || $currentPrice === null) {
+        if ($levels === null || $currentPrice === null || $positionOpenedAt === null) {
             return;
         }
 
-        $stopLoss = $levels->getStopLoss();
+        $activeStop = $this->stopLossState->getActiveStop($user, $ticker);
+
+        // Sin stop adoptado todavia, o el guardado pertenece a una racha
+        // anterior ya cerrada (se vendio del todo y se volvio a comprar):
+        // se adopta el nivel recien calculado como base de comparacion.
+        // No es una transicion, no alerta.
+        if ($activeStop === null || $activeStop->positionOpenedAt != $positionOpenedAt) {
+            $this->stopLossState->setActiveStop($user, $ticker, $levels->getStopLoss(), $positionOpenedAt);
+
+            return;
+        }
+
+        $stopLoss = $activeStop->price;
         $currentState = $currentPrice > $stopLoss ? self::STOP_LOSS_STATE_ABOVE : self::STOP_LOSS_STATE_BELOW;
         $previousState = $this->stopLossState->getLastState($user, $ticker);
         $this->stopLossState->setLastState($user, $ticker, $currentState);

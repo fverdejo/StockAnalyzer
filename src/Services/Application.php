@@ -1069,11 +1069,17 @@ class Application
                 // ya calculado arriba, contrastado con el precio del mismo
                 // analisis, sin ninguna llamada nueva al proveedor. En la
                 // watchlist no aplica: no hay posicion que cerrar.
+                //
+                // currentPositionOpenedAt() (correccion del 2026-09-06,
+                // ver AlertService::checkStopLossBreach()) es una consulta
+                // de transacciones ya en memoria/BD local, no al proveedor
+                // de mercado -- coste equivalente al resto de este bucle.
                 $this->alertService->checkStopLossBreach(
                     $user,
                     $ticker,
                     $analysis->getRiskLevels(),
                     $analysis->getStock()->getQuote()->getPrice(),
+                    $this->portfolioService->currentPositionOpenedAt($user, $ticker),
                     $analysis->getStock()->getCompany()->getCurrency()
                 );
 

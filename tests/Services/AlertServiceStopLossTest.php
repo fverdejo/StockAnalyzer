@@ -11,20 +11,26 @@ use StockAnalyzer\Models\User;
 use StockAnalyzer\Services\AlertService;
 
 /**
- * Cubre la alerta de stop-loss perdido (ver versions.md v2.56). Lo
- * importante aqui no es el calculo del nivel (eso ya lo cubre
- * RiskLevelsCalculatorTest/RiskLevelsTest) sino la semantica por
- * transicion: una posicion que sigue por debajo del stop no puede generar
- * una alerta nueva en cada visita a "Mi cartera", pero recuperar el nivel
- * y volver a perderlo si es un evento nuevo.
+ * Cubre la alerta de stop-loss perdido (ver versions.md v2.56).
  *
- * Los niveles se construyen con RiskLevels::compute(100, 4, 2.5, 2), que
- * da stop-loss 90,00 y objetivo 120,00.
+ * **Correccion del 2026-09-06** (bug real senalado por Astra/Codex,
+ * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, P0): la version anterior de este
+ * fichero construia SIEMPRE los niveles con `RiskLevels::compute(100, ...)`
+ * mientras variaba el precio recibido -- un escenario que no puede darse
+ * en produccion, porque `Application::analyzeHoldingsForAlerts()` recalcula
+ * los niveles con el precio DE ESE MISMO INSTANTE en cada visita
+ * (`$levels->getStopLoss()` siempre queda por debajo de ESE precio, por
+ * construccion). Con niveles fijos artificiales, el bug (comparar el
+ * precio contra un stop que se acaba de calcular con ese mismo precio)
+ * quedaba invisible. Aqui `levels()` recalcula el stop con el MISMO precio
+ * que se observa en cada llamada, replicando el flujo real, y el propio
+ * `AlertService` es quien ahora adopta el nivel una vez y lo mantiene fijo
+ * mientras la posicion siga abierta (ver `checkStopLossBreach()`).
+ *
+ * ATR14 constante de 4, multiplicador 2,5: riesgo = 10 por accion.
  */
 final class AlertServiceStopLossTest extends TestCase
 {
-    private const STOP_LOSS = 90.0;
-
     private InMemoryAlertRepository $alerts;
     private InMemoryTickerStopLossAlertStateRepository $stopLossState;
     private AlertService $service;
@@ -47,36 +53,45 @@ final class AlertServiceStopLossTest extends TestCase
         return new User(1, 'test@example.com', new DateTimeImmutable('2026-01-01 00:00:00'));
     }
 
-    private function levels(): RiskLevels
+    /**
+     * Igual que StockAnalysisService/Application: el stop se calcula CON el
+     * mismo precio que se va a comparar, siempre 10 por debajo de el.
+     */
+    private function levels(float $price): RiskLevels
     {
-        return RiskLevels::compute(100.0, 4.0, 2.5, 2.0);
+        return RiskLevels::compute($price, 4.0, 2.5, 2.0);
     }
 
-    private function check(?float $price): void
+    private function check(?float $price, ?DateTimeImmutable $positionOpenedAt): void
     {
-        $this->service->checkStopLossBreach($this->user(), 'ADBE', $this->levels(), $price, 'USD');
+        $this->service->checkStopLossBreach(
+            $this->user(),
+            'ADBE',
+            $price === null ? null : $this->levels($price),
+            $price,
+            $positionOpenedAt,
+            'USD'
+        );
     }
 
-    public function testPrecioPorEncimaDelStopNoAlerta(): void
+    private function openedAt(string $date = '2026-01-01'): DateTimeImmutable
     {
-        $this->check(95.0);
+        return new DateTimeImmutable($date);
+    }
+
+    public function testLaPrimeraObservacionAdoptaElStopYNuncaAlerta(): void
+    {
+        $this->check(100.0, $this->openedAt());
 
         self::assertSame(0, $this->alerts->countCreated());
         self::assertSame('above', $this->stopLossState->getLastState($this->user(), 'ADBE'));
+        self::assertSame(90.0, $this->stopLossState->getActiveStop($this->user(), 'ADBE')?->price);
     }
 
-    public function testPrimeraObservacionPorDebajoSoloFijaElEstado(): void
+    public function testUnaCaidaPorDebajoDelStopAdoptadoGeneraUnaSolaAlerta(): void
     {
-        $this->check(85.0);
-
-        self::assertSame(0, $this->alerts->countCreated());
-        self::assertSame('below', $this->stopLossState->getLastState($this->user(), 'ADBE'));
-    }
-
-    public function testTransicionDeArribaAAbajoGeneraUnaSolaAlerta(): void
-    {
-        $this->check(95.0);
-        $this->check(85.0);
+        $this->check(100.0, $this->openedAt()); // adopta stop=90
+        $this->check(85.0, $this->openedAt());  // el stop recalculado hoy seria 75, pero compara contra 90
 
         self::assertSame(1, $this->alerts->countCreated());
         self::assertSame('ADBE', $this->alerts->created()[0]['ticker']);
@@ -88,35 +103,72 @@ final class AlertServiceStopLossTest extends TestCase
 
     public function testMientrasSigaPorDebajoNoRepiteLaAlerta(): void
     {
-        $this->check(95.0);
-        $this->check(85.0);
-        $this->check(84.0);
-        $this->check(80.0);
+        $this->check(100.0, $this->openedAt());
+        $this->check(85.0, $this->openedAt());
+        $this->check(84.0, $this->openedAt());
+        $this->check(80.0, $this->openedAt());
 
         self::assertSame(1, $this->alerts->countCreated());
     }
 
     public function testRecuperarElNivelYVolverAPerderloAlertaDeNuevo(): void
     {
-        $this->check(95.0);
-        $this->check(85.0);
-        $this->check(96.0);
-        $this->check(88.0);
+        $this->check(100.0, $this->openedAt());
+        $this->check(85.0, $this->openedAt());
+        $this->check(96.0, $this->openedAt());
+        $this->check(88.0, $this->openedAt());
 
         self::assertSame(2, $this->alerts->countCreated());
     }
 
-    public function testExactamenteEnElStopSeConsideraPerdido(): void
+    public function testExactamenteEnElStopAdoptadoSeConsideraPerdido(): void
     {
-        $this->check(95.0);
-        $this->check(self::STOP_LOSS);
+        $this->check(100.0, $this->openedAt()); // adopta stop=90
+        $this->check(90.0, $this->openedAt());  // exactamente en el limite
 
         self::assertSame(1, $this->alerts->countCreated());
     }
 
+    /**
+     * El caso central que motivo la correccion: si el stop se recalculara
+     * en cada visita con el precio de ese momento (el bug original), esta
+     * caida NUNCA generaria alerta porque 60 > (60-10)=50 siempre. Con el
+     * stop adoptado y fijo en 90, 60 esta claramente por debajo.
+     */
+    public function testUnaCaidaSostenidaQueElBugOriginalNuncaHabriaDetectado(): void
+    {
+        $this->check(100.0, $this->openedAt());
+        $this->check(60.0, $this->openedAt());
+
+        self::assertSame(1, $this->alerts->countCreated());
+        self::assertSame(
+            'ADBE ha perdido el stop-loss sugerido (precio 60,00 $, stop 90,00 $). Revisa si cierras la posicion.',
+            $this->alerts->lastMessage()
+        );
+    }
+
+    public function testCerrarLaPosicionYReabrirlaAdoptaUnStopNuevo(): void
+    {
+        $this->check(100.0, $this->openedAt('2026-01-01')); // adopta 90, racha 1
+        $this->check(85.0, $this->openedAt('2026-01-01'));  // pierde 90, 1 alerta
+
+        // Se vendio del todo y se volvio a comprar: nueva racha, precio de
+        // reapertura mas bajo (60 -> stop 50). No hereda el 90 de la racha
+        // anterior ya cerrada, y la adopcion nunca alerta.
+        $this->check(60.0, $this->openedAt('2026-03-01'));
+
+        self::assertSame(1, $this->alerts->countCreated(), 'La reapertura adopta, no alerta.');
+        self::assertSame(50.0, $this->stopLossState->getActiveStop($this->user(), 'ADBE')?->price);
+
+        // Con el stop de la nueva racha (50), una caida a 45 si alerta.
+        $this->check(45.0, $this->openedAt('2026-03-01'));
+
+        self::assertSame(2, $this->alerts->countCreated());
+    }
+
     public function testSinNivelesDeRiesgoNoHaceNada(): void
     {
-        $this->service->checkStopLossBreach($this->user(), 'ADBE', null, 85.0, 'USD');
+        $this->service->checkStopLossBreach($this->user(), 'ADBE', null, 85.0, $this->openedAt(), 'USD');
 
         self::assertSame(0, $this->alerts->countCreated());
         self::assertNull($this->stopLossState->getLastState($this->user(), 'ADBE'));
@@ -124,9 +176,22 @@ final class AlertServiceStopLossTest extends TestCase
 
     public function testSinPrecioActualNoHaceNada(): void
     {
-        $this->check(null);
+        $this->check(null, $this->openedAt());
 
         self::assertSame(0, $this->alerts->countCreated());
         self::assertNull($this->stopLossState->getLastState($this->user(), 'ADBE'));
+    }
+
+    /**
+     * Sin fecha de apertura de posicion no se puede saber si un stop ya
+     * adoptado sigue perteneciendo a la misma racha: "dato no disponible"
+     * tampoco aqui se convierte en "el stop se ha perdido".
+     */
+    public function testSinFechaDeAperturaDePosicionNoHaceNada(): void
+    {
+        $this->check(100.0, $this->openedAt());
+        $this->check(85.0, null);
+
+        self::assertSame(0, $this->alerts->countCreated());
     }
 }

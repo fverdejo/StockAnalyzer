@@ -18,6 +18,7 @@ use StockAnalyzer\Providers\YahooCorporateProfileProvider;
 use StockAnalyzer\Repository\CorporateProfileCacheRepository;
 use StockAnalyzer\Services\AlertService;
 use StockAnalyzer\Services\Application;
+use StockAnalyzer\Services\PortfolioService;
 use StockAnalyzer\Services\StockAnalysisService;
 use DateTimeImmutable;
 
@@ -56,10 +57,14 @@ final class ApplicationHoldingsAnalysisTest extends TestCase
         $profileProvider = $this->createMock(YahooCorporateProfileProvider::class);
         $profileProvider->method('fetchCached')->willReturn([null, null]);
 
+        $portfolioService = $this->createMock(PortfolioService::class);
+        $portfolioService->method('currentPositionOpenedAt')->willReturn(new DateTimeImmutable('2026-01-01'));
+
         $this->inject('analysisService', $this->analysisService);
         $this->inject('alertService', $this->alertService);
         $this->inject('corporateProfileProvider', $profileProvider);
         $this->inject('corporateProfileCache', $this->createMock(CorporateProfileCacheRepository::class));
+        $this->inject('portfolioService', $portfolioService);
     }
 
     private function inject(string $property, object $value): void

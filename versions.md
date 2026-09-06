@@ -6962,3 +6962,24 @@ Formula declarada ANTES de medir: `trend_consistency` = % de sesiones con retorn
 **Se cierra sin implementar.** `config/weights.php` no se toca. Parche temporal a `BacktestingService.php` (nuevo modo `trend_consistency` sin neutralizar) revertido con `git checkout`, confirmado sin CRLF (`grep -c $'\r'` a cero en los ficheros tocados y en los scripts de scratch). Artefactos reproducibles en `storage/scratch/` (`frog_in_pan_factor_isolated.php` + `_results.json`, mas un smoke test previo), no comprometidos. Variante alternativa de "gradualidad" (retorno total menos suma ponderada de valores absolutos) queda sin probar -- no se abre sin una hipotesis nueva que la justifique, mismo criterio que el resto de vias cerradas hoy.
 
 Con esto, el backlog historico "Ideas adicionales sugeridas" del `2026-08-27` queda vacio: bucket SMA20/50 (nulo), RSI(2) de Connors (nulo tras 25 pruebas), Frog in the Pan (nulo). Las unicas ideas que quedan abiertas en esa seccion del fichero son "Tendencia del score / re-rating" (bloqueada por cobertura, ver `roadmap.md`) y "Universo small/mid-cap EEUU" (bloqueada por cobertura de fundamentales point-in-time de FMP en `.MC`).
+
+---
+
+## 2026-09-06 (sexta entrada) - Bug real: la alerta de stop-loss perdido nunca se podia disparar
+
+Estado: implementado y verificado.
+
+Astra (Codex, con otro nombre) dejo `MEJORAS_MOTOR_ASTRA_2026-09-06.md` (raiz del repo) con dos bugs reales encontrados por revision estatica del codigo. Verificados ambos leyendo el codigo antes de tocar nada. Este cierra el primero (P0); el segundo (P1, datos ausentes convertidos en `SELL`) sigue pendiente.
+
+**El bug, confirmado:** `Application::analyzeHoldingsForAlerts()` llamaba a `AlertService::checkStopLossBreach()` pasando `$analysis->getRiskLevels()` (calculado con el precio ACTUAL) y ese MISMO precio actual. Como `RiskLevels::compute()` calcula `stop = precio - multiplicador*ATR14` con ese mismo precio, `precio > stop` era matematicamente cierto siempre que ATR y el multiplicador fueran positivos -- la transicion `ABOVE->BELOW` nunca podia ocurrir, la alerta jamas se enviaba. `tests/Services/AlertServiceStopLossTest.php` no lo detectaba porque construia los niveles SIEMPRE con precio 100 mientras variaba el precio recibido, un escenario que no puede darse en produccion (los niveles siempre se recalculan con el precio que se les pasa al lado).
+
+**Correccion (version minima, no el sistema completo de politicas de trailing-stop que proponia Astra):** el stop se ADOPTA una sola vez por racha de posicion abierta y se queda FIJO mientras la misma racha siga abierta, en vez de recalcularse en cada visita.
+
+- Nueva migracion `028`: `active_stop_price`/`position_opened_at` en `ticker_stop_loss_alert_state`.
+- `PortfolioService::currentPositionOpenedAt()` (nuevo): fecha de inicio de la racha CONTINUA de una posicion, calculada replayando las transacciones (BUY/SELL) en orden -- ampliar o vender parcialmente no la cambia, pero vender del todo y volver a comprar si, porque es lo que permite distinguir un stop que sigue perteneciendo a la posicion actual de uno de un ciclo ya cerrado.
+- `AlertService::checkStopLossBreach()`: si no hay stop adoptado para esta racha (primera vez, o la racha cambio desde la ultima adopcion), adopta el nivel recien calculado y fija el estado base sin alertar. Si ya hay uno adoptado para la MISMA racha, compara el precio contra ESE valor guardado, no contra uno recalculado -- asi es como deja de ser matematicamente imposible que se dispare.
+- `RiskLevelsCalculator` y el "Stop sugerido" informativo de la ficha/cartera NO se tocan: siguen siendo el calculo orientativo de siempre. Solo cambia la logica interna de cuando avisar.
+
+**Tests**, todos de integracion real (sin mocks que oculten la conexion entre calculo de niveles y alerta): `AlertServiceStopLossTest.php` reescrito para recalcular los niveles con el MISMO precio en cada llamada (como hace `Application.php` de verdad) -- incluye el caso que demuestra el bug (`testUnaCaidaSostenidaQueElBugOriginalNuncaHabriaDetectado()`: con el bug original, 100->60 nunca habria alertado porque 60 > (60-10)=50 siempre; con el stop adoptado en 90, si alerta) y el ciclo cerrar-y-reabrir con un stop nuevo. `PortfolioServiceCurrentPositionOpenedAtTest.php` (nuevo) cubre ampliar, vender parcial, cerrar del todo, y vender-y-recomprar.
+
+Verificado: `ddev exec php bin/migrate.php` (migracion 028 aplicada), `ddev exec vendor/bin/phpunit` -- **660 tests, 1.816 assertions, OK** (1 skip preexistente, sube desde 650), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.

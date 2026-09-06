@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Services;
 
+use DateTimeImmutable;
 use InvalidArgumentException;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
@@ -51,6 +52,48 @@ class PortfolioService
         }
 
         return $this->transactions->add($user, $ticker, TransactionType::SELL, $quantity, $price);
+    }
+
+    /**
+     * Fecha de inicio de la racha continua ABIERTA de $ticker: el BUY
+     * inmediatamente posterior a la ultima vez que la cantidad toco cero,
+     * o el primer BUY si la posicion nunca se cerro del todo. `null` si no
+     * hay posicion abierta ahora mismo.
+     *
+     * Anhadido el 2026-09-06 para corregir el bug de la alerta de
+     * stop-loss senalado por Astra/Codex (`MEJORAS_MOTOR_ASTRA_2026-09-06.md`,
+     * P0): el stop activo de `AlertService::checkStopLossBreach()` se
+     * adopta una vez por racha y debe reiniciarse si el usuario vende del
+     * todo y vuelve a comprar el mismo ticker -- comparar esta fecha
+     * contra la que se guardo al adoptar el stop es como se detecta ese
+     * cambio de ciclo. Comprar mas acciones de una posicion ya abierta, o
+     * vender solo una parte, NO reinicia la racha (la fecha no cambia).
+     */
+    public function currentPositionOpenedAt(User $user, string $ticker): ?DateTimeImmutable
+    {
+        $ticker = $this->normalizeTicker($ticker);
+        $quantity = 0.0;
+        $openedAt = null;
+
+        foreach ($this->transactions->findByUserAndTicker($user, $ticker) as $transaction) {
+            if ($transaction->getType() === TransactionType::BUY) {
+                if ($quantity <= 0.000001) {
+                    $openedAt = $transaction->getExecutedAt();
+                }
+
+                $quantity += $transaction->getQuantity();
+
+                continue;
+            }
+
+            $quantity -= $transaction->getQuantity();
+
+            if ($quantity <= 0.000001) {
+                $quantity = 0.0;
+            }
+        }
+
+        return $quantity > 0.000001 ? $openedAt : null;
     }
 
     /**
