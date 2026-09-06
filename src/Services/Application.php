@@ -489,6 +489,42 @@ class Application
             $fundamentalChange = null;
         }
 
+        // Posicion e historial del usuario en ESTE valor. No cuesta ninguna
+        // peticion al proveedor: el precio actual es el que la ficha ya
+        // tiene analizado.
+        $position = $currentUser !== null
+            ? $this->portfolioService->getPositionFor($currentUser, $ticker, $analysis->getStock()->getQuote()->getPrice())
+            : null;
+
+        // P2 de MEJORAS_MOTOR_ASTRA_2026-09-06.md (2026-09-06): "que hacer
+        // con esto", combinando el score con el contexto de cartera. Solo
+        // tiene sentido con posicion abierta y usuario identificado (sin
+        // eso, PositionDecisionAdvisor::decide() ya distingue CANDIDATA de
+        // ESPERAR sin necesitar mas datos). checkStopLossBreach() se llama
+        // aqui TAMBIEN (no solo en el bucle de "Mi cartera") para que
+        // isBelowActiveStop() refleje el precio de HOY si esta es la
+        // primera pagina que visita el usuario hoy.
+        if ($currentUser !== null && $position !== null) {
+            $this->alertService->checkStopLossBreach(
+                $currentUser,
+                $ticker,
+                $analysis->getRiskLevels(),
+                $analysis->getStock()->getQuote()->getPrice(),
+                $this->portfolioService->currentPositionOpenedAt($currentUser, $ticker),
+                $analysis->getStock()->getCompany()->getCurrency()
+            );
+            $stopLossBreached = $this->alertService->isBelowActiveStop($currentUser, $ticker);
+        } else {
+            $stopLossBreached = false;
+        }
+
+        $positionDecision = (new PositionDecisionAdvisor())->decide(
+            $analysis->getRecommendation(),
+            $position,
+            $stopLossBreached,
+            $fundamentalChange
+        );
+
         return StockDetailPage::render(
             $analysis,
             $explanation,
@@ -500,16 +536,12 @@ class Application
             $corporateEvents,
             $this->queryString('message'),
             $this->queryString('error'),
-            // Posicion e historial del usuario en ESTE valor. No cuesta
-            // ninguna peticion al proveedor: el precio actual es el que la
-            // ficha ya tiene analizado.
-            $currentUser !== null
-                ? $this->portfolioService->getPositionFor($currentUser, $ticker, $analysis->getStock()->getQuote()->getPrice())
-                : null,
+            $position,
             $currentUser !== null
                 ? $this->portfolioService->getTransactionsFor($currentUser, $ticker)
                 : [],
-            $fundamentalChange
+            $fundamentalChange,
+            $positionDecision
         );
     }
 

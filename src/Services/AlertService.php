@@ -220,6 +220,23 @@ class AlertService
     }
 
     /**
+     * `true` si el ULTIMO estado guardado por `checkStopLossBreach()` para
+     * este usuario/ticker es "por debajo" del stop-loss activo -- para
+     * `Services\PositionDecisionAdvisor` (P2 de
+     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, 2026-09-06), que necesita saber
+     * si la condicion de salida esta activada AHORA, no solo si se envio
+     * una alerta alguna vez (una posicion puede llevar dias por debajo del
+     * stop sin generar una alerta nueva, ver docblock de
+     * `checkStopLossBreach()`). Llamar DESPUES de `checkStopLossBreach()`
+     * en la misma peticion para que el estado leido sea el de HOY, no el
+     * de la ultima vez que se visito "Mi cartera".
+     */
+    public function isBelowActiveStop(User $user, string $ticker): bool
+    {
+        return $this->stopLossState->getLastState($user, $ticker) === self::STOP_LOSS_STATE_BELOW;
+    }
+
+    /**
      * Avisa cuando un ticker de la cartera o de la watchlist publica
      * resultados dentro de $leadDays dias: es riesgo de evento puro (un
      * hueco de precio que el ATR14, retrospectivo, no anticipa), asi que

@@ -7005,3 +7005,31 @@ Todos los consumidores del ranking/ficha/cartera/watchlist/API que decidian la r
 **Tests**: `tests/DTO/StockAnalysisRecommendationTest.php` (nuevo) cubre el caso exacto del bug (10/10 ausentes confirma que `Score` en bruto SI cae en SELL, pero `StockAnalysis::getRecommendation()` no), el umbral (4 vs 5 de 10), que el cruce/Bollinger necesitan el par completo, datos parciales pero suficientes, y recuperacion de cobertura. `tests/Services/AlertServiceRecommendationChangeTest.php` (nuevo, `checkRecommendationChange()` no tenia test dedicado) cubre la transicion normal y la guarda nueva. `RecommendationExplainerTest.php`/`StockDetailPageTest.php` ajustados: sus fixtures usaban un `TechnicalSnapshot` totalmente vacio a proposito para aislar el texto/aviso que prueban, una combinacion que ya no puede darse en produccion (un `Score` con porcentaje significativo nunca viene de un snapshot sin ningun dato real) -- se les da cobertura suficiente (6 de 10 indicadores) sin cambiar lo que cada test comprueba.
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **674 tests, 1.846 assertions, OK** (1 skip preexistente, sube desde 660), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-06 (octava entrada) - P2 de Astra: "qué hacer con esta posición", una capa de decisión con contexto de cartera
+
+Estado: implementado y verificado. Decision explicita del usuario de seguir con esta propuesta (a diferencia de P1 del OTRO documento de Codex del mismo dia -- la reformulacion de BUY/SELL -- que se rechazo) y de P3 (aplazado, se solapa con la captura prospectiva ya documentada como pendiente).
+
+`MEJORAS_MOTOR_ASTRA_2026-09-06.md`, seccion P2, pedia una capa pequena y separada del score que combine el analisis con posicion, plan de salida y cambios de tesis, distinguiendo una regla de gestion ya elegida de una prediccion de rentabilidad sin validar.
+
+**Nuevo `Services\PositionDecisionAdvisor`** (formula pura, sin llamadas a repositorio/proveedor): recibe `analysis->getRecommendation()`, la posicion abierta (o `null`), si el precio esta por debajo del stop-loss ACTIVO (ver P0, entrada del mismo dia) y el diagnostico D2 (`FundamentalChangeAssessment`), y decide una `Enums\PositionDecisionAction`:
+
+- Sin posicion + `BUY` -> `CANDIDATA` (motivo deja explicito que no hay ventaja de retorno validada).
+- Sin posicion + cualquier otra cosa -> `ESPERAR`.
+- Con posicion + stop-loss activo perdido -> `SALIR` (prioridad sobre el diagnostico fundamental).
+- Con posicion + D2 `DETERIORANDO` (sin stop perdido) -> `REVISAR_TESIS`.
+- Con posicion + sin alarmas -> `MANTENER`, sin afirmar que el precio vaya a subir.
+
+Cada decision trae motivo, condicion de revision, y `$isManagementRule` (regla de gestion ya adoptada -- stop-loss, seguir el plan -- frente a evidencia del score/diagnostico, que nunca se presenta con la misma confianza que una regla ya asumida).
+
+**`Services\AlertService::isBelowActiveStop()`** (nuevo): lee el ULTIMO estado guardado por `checkStopLossBreach()`, no si se envio una alerta -- una posicion puede llevar dias por debajo del stop sin generar alerta nueva, pero el advisor necesita saber que la condicion SIGUE activa. `Application::renderDetail()` llama tambien a `checkStopLossBreach()` (antes solo se llamaba desde el bucle de "Mi cartera") para que el estado leido sea el de HOY si la ficha de detalle es la primera pagina que visita el usuario esa sesion.
+
+Nueva seccion "Qué hacer con esta posición" en la ficha de detalle, entre el diagnostico fundamental y el panel de posicion/formulario de compra-venta.
+
+**Alcance deliberadamente reducido frente a la propuesta original**: no incluye la reduccion cuantificada por limite de exposicion de cartera ("posicion por encima de un limite adoptado por el usuario") porque ese calculo necesita el peso de la posicion sobre la cartera COMPLETA (`Services\PortfolioConcentrationCalculator`), que hoy solo se calcula al renderizar "Mi cartera", no en la ficha de un unico ticker. Documentado como pendiente, no una tarea de hoy.
+
+**Tests**: `PositionDecisionAdvisorTest.php` (nuevo) cubre los cinco comportamientos de ejemplo del encargo (menos el de exposicion, fuera de alcance), incluida la prioridad stop-perdido sobre deterioro fundamental y que solo `DETERIORANDO` dispara revision de tesis. `AlertServiceStopLossTest.php` gana un caso para `isBelowActiveStop()` (sigue reflejando "por debajo" aunque no se repita la alerta, y vuelve a `false` al recuperar el nivel). Verificado tambien por HTTP contra `ddev` real: la ficha de AAPL (sin posicion, `HOLD`) muestra correctamente "Esperar" con su motivo y condicion de revision.
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **683 tests, 1.884 assertions, OK** (1 skip preexistente, sube desde 674), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca; `Score`/`TechnicalScoreAnalyzer` no se tocan.

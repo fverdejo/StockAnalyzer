@@ -194,4 +194,30 @@ final class AlertServiceStopLossTest extends TestCase
 
         self::assertSame(0, $this->alerts->countCreated());
     }
+
+    /**
+     * `isBelowActiveStop()` (2026-09-06, P2 de
+     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`): lee el ULTIMO estado guardado,
+     * no si se envio una alerta -- una posicion puede llevar dias por
+     * debajo del stop sin generar una alerta nueva (ver
+     * `testMientrasSigaPorDebajoNoRepiteLaAlerta`), pero
+     * `PositionDecisionAdvisor` necesita saber que la condicion de salida
+     * SIGUE activa, no solo que se disparo una vez.
+     */
+    public function testIsBelowActiveStopReflejaElUltimoEstado(): void
+    {
+        self::assertFalse($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Sin ninguna observacion todavia.');
+
+        $this->check(100.0, $this->openedAt());
+        self::assertFalse($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Adopcion: por encima por construccion.');
+
+        $this->check(85.0, $this->openedAt());
+        self::assertTrue($this->service->isBelowActiveStop($this->user(), 'ADBE'));
+
+        $this->check(84.0, $this->openedAt());
+        self::assertTrue($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Sigue por debajo, aunque no genere una alerta nueva.');
+
+        $this->check(96.0, $this->openedAt());
+        self::assertFalse($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Recupero el nivel.');
+    }
 }

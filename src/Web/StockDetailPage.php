@@ -10,9 +10,11 @@ use StockAnalyzer\DTO\Explanation;
 use StockAnalyzer\DTO\FundamentalChangeAssessment;
 use StockAnalyzer\DTO\FundamentalChangeFactor;
 use StockAnalyzer\DTO\FundamentalHealthAssessment;
+use StockAnalyzer\DTO\PositionDecision;
 use StockAnalyzer\DTO\Signal;
 use StockAnalyzer\DTO\StockAnalysis;
 use StockAnalyzer\Enums\FundamentalChangeVerdict;
+use StockAnalyzer\Enums\PositionDecisionAction;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Company;
 use StockAnalyzer\Models\Holding;
@@ -67,7 +69,8 @@ class StockDetailPage
         ?string $error = null,
         ?Holding $position = null,
         array $positionTransactions = [],
-        ?FundamentalChangeAssessment $fundamentalChange = null
+        ?FundamentalChangeAssessment $fundamentalChange = null,
+        ?PositionDecision $positionDecision = null
     ): string
     {
         $stock = $analysis->getStock();
@@ -220,6 +223,14 @@ class StockDetailPage
         $fundamentalHealth = (new FundamentalHealthAssessor())->assess($fundamentals, $fundamentalCompany);
         $fundamentalDiagnostics = self::renderFundamentalDiagnostics($fundamentalHealth, $fundamentalChange);
 
+        // "Que hacer con esto" (P2 de MEJORAS_MOTOR_ASTRA_2026-09-06.md,
+        // 2026-09-05/06): combina el score con posicion/stop-loss/D2, ya
+        // calculado en Application::renderDetail(). Panel aparte del
+        // resumen de arriba a proposito: aquel explica el PORQUE del score
+        // de hoy, este dice que hacer con la posicion (o la ausencia de
+        // ella) teniendo en cuenta el contexto de cartera.
+        $positionDecisionPanel = self::renderPositionDecision($positionDecision);
+
         // Desde v2.71 comprar y vender solo se puede hacer aqui, asi que el
         // resultado de la operacion tiene que verse aqui tambien: antes el
         // exito y el error viajaban siempre a "Mi cartera", que era donde
@@ -239,12 +250,13 @@ class StockDetailPage
         $positionPanel = self::renderPositionPanel($position, $positionTransactions, $company->getCurrency());
 
         $body = sprintf(
-            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s%s<section class="panel"><h2>Puntuación por categoría (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
+            '<header class="topbar detail-topbar">%s</header>%s%s%s%s%s%s%s%s%s<section class="panel"><h2>Puntuación por categoría (total %s%% de %s%%)</h2>%s</section>%s%s%s%s',
             $header,
             $messageHtml,
             $errorHtml,
             $companyOverview,
             $fundamentalDiagnostics,
+            $positionDecisionPanel,
             $positionPanel,
             $tradePanel,
             $charts,
@@ -378,6 +390,36 @@ class StockDetailPage
      * el usuario no debe poder confundir "no se pudo calcular" con "no hay
      * cambios".
      */
+    /**
+     * "Que hacer con esto" (P2 de `MEJORAS_MOTOR_ASTRA_2026-09-06.md`,
+     * `Services\PositionDecisionAdvisor`): combina el score con posicion
+     * abierta, stop-loss activo y diagnostico fundamental interanual.
+     * `null` (sin panel) solo si `Application::renderDetail()` no llego a
+     * calcularlo -- no deberia pasar en el flujo real, pero un dato
+     * ausente aqui nunca debe tumbar la ficha ni inventarse una decision.
+     */
+    private static function renderPositionDecision(?PositionDecision $decision): string
+    {
+        if ($decision === null) {
+            return '';
+        }
+
+        $originNote = $decision->isManagementRule
+            ? 'Regla de gestión de riesgo ya adoptada, no una predicción de rentabilidad.'
+            : 'Basado en el score actual, que no tiene ventaja de retorno demostrada en este proyecto (ver nota más abajo).';
+
+        return sprintf(
+            '<section class="panel"><h2>Qué hacer con esta posición</h2>'
+            . '<div class="summary-box"><strong>%s.</strong> %s</div>'
+            . '<p class="muted panel-note">%s</p>'
+            . '<p class="muted panel-note">Próxima revisión: %s</p></section>',
+            Layout::escape($decision->action->label()),
+            Layout::escape($decision->reason),
+            Layout::escape($originNote),
+            Layout::escape($decision->reviewTrigger)
+        );
+    }
+
     private static function renderFundamentalDiagnostics(
         FundamentalHealthAssessment $health,
         ?FundamentalChangeAssessment $change
