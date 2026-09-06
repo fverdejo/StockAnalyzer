@@ -138,4 +138,77 @@ final class ApplicationTickerRequestTest extends TestCase
 
         self::assertSame('magnificent7', $universe, 'Un campo con solo espacios no es una entrada manual.');
     }
+
+    /**
+     * Mismo bug que `Utils\UniverseTickerResolverTest`, pero en el camino
+     * web (2026-09-06, corregido de cara a `msci_world`, ~1.253 tickers):
+     * antes de la correccion, `resolveTickerRequest()` pasaba los tickers
+     * de CUALQUIER universo por `TickerNormalizer::normalize()`, que trunca
+     * a 60 -- invisible mientras ningun universo individual de
+     * `config/universes.php` superara ese limite.
+     */
+    public function testUnUniversoDeMasDe60TickersNoSeTruncaEnElCaminoWeb(): void
+    {
+        $tickers = array_map(static fn (int $i): string => "TICK$i", range(1, 75));
+        (new ReflectionProperty(Application::class, 'universeConfig'))->setValue(
+            $this->application,
+            new class ($tickers) extends UniverseConfig {
+                /** @param list<string> $tickers */
+                public function __construct(private readonly array $tickers)
+                {
+                }
+
+                public function all(): array
+                {
+                    return ['oversized' => ['label' => 'Oversized', 'tickers' => $this->tickers, 'selectable' => true]];
+                }
+
+                public function tickers(string $key): array
+                {
+                    return $this->all()[$key]['tickers'] ?? [];
+                }
+            }
+        );
+
+        [, $result, $universe] = $this->resolve(['universe' => 'oversized']);
+
+        self::assertSame('oversized', $universe);
+        self::assertCount(75, $result);
+        self::assertSame('TICK75', $result[74]);
+    }
+
+    /**
+     * Un universo de "solo cron" (`selectable=false`, ver
+     * Config\UniverseConfig::all(), 2026-09-06): pedirlo por `?universe=`
+     * en el Home se trata como una clave desconocida, cae en el universo
+     * curado por defecto. Existe para universos como `msci_world`
+     * (~1.253 tickers): analizarlo en vivo desde el Home arriesgaria
+     * timeout/rate-limit del proveedor; `bin/analyze.php` si puede
+     * analizarlo porque no pasa por `isValidUniverseKey()`.
+     */
+    public function testUnUniversoNoSeleccionableCaeEnElPorDefecto(): void
+    {
+        (new ReflectionProperty(Application::class, 'universeConfig'))->setValue(
+            $this->application,
+            new class extends UniverseConfig {
+                public function all(): array
+                {
+                    return [
+                        'solo_cron' => ['label' => 'Solo cron', 'tickers' => ['XYZ1', 'XYZ2'], 'selectable' => false],
+                        'largecap60' => (new UniverseConfig())->all()['largecap60'],
+                    ];
+                }
+
+                public function tickers(string $key): array
+                {
+                    return $this->all()[$key]['tickers'] ?? [];
+                }
+            }
+        );
+
+        [, $tickers, $universe] = $this->resolve(['universe' => 'solo_cron']);
+
+        self::assertSame('largecap60', $universe);
+        self::assertNotContains('XYZ1', $tickers);
+    }
 }

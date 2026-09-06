@@ -40,8 +40,8 @@ final class UniverseTickerResolverTest extends TestCase
             public function all(): array
             {
                 return [
-                    'oversized' => ['label' => 'Oversized', 'tickers' => $this->tickers],
-                    'small' => ['label' => 'Small', 'tickers' => ['AAPL', 'MSFT']],
+                    'oversized' => ['label' => 'Oversized', 'tickers' => $this->tickers, 'selectable' => true],
+                    'small' => ['label' => 'Small', 'tickers' => ['AAPL', 'MSFT'], 'selectable' => true],
                 ];
             }
 
@@ -95,8 +95,8 @@ final class UniverseTickerResolverTest extends TestCase
             public function all(): array
             {
                 return [
-                    'a' => ['label' => 'A', 'tickers' => ['AAPL', 'MSFT']],
-                    'b' => ['label' => 'B', 'tickers' => ['MSFT', 'NVDA']],
+                    'a' => ['label' => 'A', 'tickers' => ['AAPL', 'MSFT'], 'selectable' => true],
+                    'b' => ['label' => 'B', 'tickers' => ['MSFT', 'NVDA'], 'selectable' => true],
                 ];
             }
         };
@@ -111,11 +111,14 @@ final class UniverseTickerResolverTest extends TestCase
     }
 
     /**
-     * Con la config real, el conjunto unico es 628 tickers (medido el
-     * 2026-09-01 tras añadir `sp500`/`nasdaq100`, sube desde los 305 de
-     * los 20 universos anteriores) — el numero exacto que hace real el
-     * bug: ningun universo individual (salvo los dos nuevos, ya resueltos
-     * sin pasar por `TickerNormalizer`) llega a 60, pero la union si.
+     * Con la config real, el conjunto unico es 1.407 tickers (medido el
+     * 2026-09-06 tras anhadir `msci_world`, ~1.251 tickers propios, sube
+     * desde los 628 del 2026-09-01) — el numero exacto que hace real el
+     * bug: ademas de la union completa, `msci_world` es ahora el PRIMER
+     * universo individual que por si solo supera el limite de 60 de
+     * `TickerNormalizer` (ver tambien
+     * `Services\ApplicationTickerRequestTest`, que fija que el camino web
+     * tampoco trunca este universo).
      */
     public function testConLaConfigRealElConjuntoUnicoSuperaElLimiteDe60(): void
     {
@@ -124,6 +127,6 @@ final class UniverseTickerResolverTest extends TestCase
         $unique = $resolver->allUniverseTickers();
 
         self::assertGreaterThan(60, count($unique));
-        self::assertSame(628, count($unique));
+        self::assertSame(1407, count($unique));
     }
 }

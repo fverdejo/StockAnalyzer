@@ -37,7 +37,7 @@ class DashboardPage
     /**
      * @param list<StockAnalysis> $results
      * @param array<string,string> $errors
-     * @param array<string,array{label: string, tickers: list<string>}> $universes
+     * @param array<string,array{label: string, tickers: list<string>, selectable: bool}> $universes
      * @param list<string> $watchedTickers tickers que el usuario ya sigue (ver versions.md v2.16)
      */
     public static function render(
@@ -337,13 +337,21 @@ HTML;
     }
 
     /**
-     * @param array<string,array{label: string, tickers: list<string>}> $universes
+     * @param array<string,array{label: string, tickers: list<string>, selectable: bool}> $universes
      */
     private static function renderUniverseOptions(array $universes, string $selected): string
     {
         $items = ['<option value="">Manual</option>'];
 
         foreach ($universes as $key => $universe) {
+            // Universo de "solo cron" (`selectable=false`, ver
+            // Config\UniverseConfig::all()): demasiado grande para
+            // analizarse en vivo desde el Home. Ni se ofrece aqui ni
+            // `Application::isValidUniverseKey()` lo acepta por URL.
+            if (!$universe['selectable']) {
+                continue;
+            }
+
             $items[] = sprintf(
                 '<option value="%s"%s>%s</option>',
                 Layout::escape($key),

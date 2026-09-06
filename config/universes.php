@@ -398,4 +398,180 @@ return [
             'TSM', 'ASML', 'STM', 'NXPI', 'ASX', 'UMC',
         ],
     ],
+    // Universo de "solo cron" (2026-09-06, `selectable => false`, ver
+    // Config\UniverseConfig::all()): ~1.251 tickers, demasiados para
+    // analizarse en vivo desde el Home en una sola peticion sin arriesgar
+    // timeout o rate-limit de Yahoo. No aparece en el desplegable ni es
+    // aceptado por `?universe=` (Application::isValidUniverseKey()), pero
+    // `bin/analyze.php --universe=msci_world` (o `--all-universes`) si lo
+    // procesa, sembrando `score_history`/`fundamentals_history` con
+    // regimenes geograficos genuinamente distintos a los del resto de
+    // `config/universes.php` (todo EEUU + IBEX35 hasta hoy).
+    //
+    // Composicion: holdings reales del ETF `URTH` (iShares MSCI World,
+    // replica fisica, ID de producto 239696), descargados el 2026-09-06
+    // del CSV oficial publicado por BlackRock
+    // (https://www.ishares.com/us/products/239696/ishares-msci-world-etf/latest-holdings.csv),
+    // NO de una lista fabricada de memoria: MSCI no publica gratis la
+    // composicion completa del indice real. Filtrado a `Asset
+    // Class=Equity` (1253 de 1276 filas) y mapeado a ticker Yahoo por
+    // columna `Exchange` (no `Location`: varias filas cotizan en una
+    // bolsa distinta a su pais, ej. ArcelorMittal domiciliada en Francia
+    // cotiza en Euronext Amsterdam como MT.AS, y Teva domiciliada en
+    // Israel cotiza como ADR en NYSE sin sufijo). Las 23 bolsas
+    // resultantes se verificaron una a una contra Yahoo real (cotizacion,
+    // historico 5 años, identidad de la empresa) antes de comprometer
+    // esta lista -- ver versions.md, misma fecha, para la tabla completa
+    // bolsa-a-sufijo y los hallazgos concretos (puntos finales de Londres,
+    // guiones de clases de accion, codigos alfanumericos nuevos de Tokio).
+    // 1251 de 1253 equities mapeadas; 2 quedaron fuera por falta de un
+    // ticker real utilizable (`HOLX`/Hologic con `Exchange="NO MARKET"` y
+    // un residuo de `Constellation Software` con un codigo interno, no su
+    // ticker real `CSU.TO`, ya incluido aqui por su propia fila).
+    // `BRKB` (asi, sin separador, tal cual lo escribe iShares en su CSV
+    // para Berkshire Hathaway Clase B) se corrigio a `BRK-B`, el unico
+    // ticker de EEUU de todo el CSV donde el proveedor omite el separador
+    // de clase que Yahoo si exige.
+    //
+    // Cautelas conocidas, no bloqueantes: Reino Unido cotiza en GBp
+    // (peniques) e Israel en agorot -- inocuo para indicadores tecnicos
+    // relativos, pero un riesgo real de bug de 100x si algo llegara a
+    // recalcular ratios por-accion mezclando precio de Yahoo con
+    // fundamentales de otra fuente para estos tickers (ver
+    // PointInTimeFundamentalsBuilder.php:171, sin uso activo hoy fuera de
+    // EEUU/.MC). Algunas cotizaciones muy recientes (Verisure en Suecia,
+    // Kioxia en Japon) tienen historico corto todavia: dato real, no un
+    // fallo de mapeo.
+    'msci_world' => [
+        'label' => 'MSCI World',
+        'selectable' => false,
+        'tickers' => [
+            '0001.HK', '0002.HK', '0003.HK', '0006.HK', '0012.HK', '0016.HK', '0019.HK', '0027.HK', '0066.HK', '0083.HK',
+            '0288.HK', '0388.HK', '0669.HK', '0823.HK', '1038.HK', '1113.HK', '1299.HK', '1308.HK', '1605.T', '1801.T',
+            '1802.T', '1803.T', '1812.T', '1878.T', '1925.T', '1928.HK', '1928.T', '1997.HK', '2388.HK', '2502.T',
+            '2503.T', '2587.T', '2801.T', '2802.T', '285A.T', '2914.T', '3003.T', '3382.T', '3402.T', '3407.T',
+            '3659.T', '4004.T', '4062.T', '4063.T', '4091.T', '4151.T', '4188.T', '4307.T', '4452.T', '4502.T',
+            '4503.T', '4507.T', '4519.T', '4523.T', '4543.T', '4568.T', '4578.T', '4612.T', '4661.T', '4684.T',
+            '4689.T', '4755.T', '4768.T', '4901.T', '4911.T', '5016.T', '5019.T', '5020.T', '5108.T', '5201.T',
+            '5401.T', '5706.T', '5713.T', '5801.T', '5802.T', '5803.T', '6098.T', '6146.T', '6178.T', '6273.T',
+            '6301.T', '6326.T', '6361.T', '6367.T', '6383.T', '6479.T', '6501.T', '6503.T', '6504.T', '6525.T',
+            '6586.T', '6594.T', '6701.T', '6702.T', '6723.T', '6752.T', '6758.T', '6762.T', '6823.HK', '6841.T',
+            '6857.T', '6861.T', '6902.T', '6920.T', '6954.T', '6971.T', '6981.T', '6988.T', '7011.T', '7012.T',
+            '7013.T', '7181.T', '7182.T', '7186.T', '7201.T', '7202.T', '7203.T', '7259.T', '7267.T', '7269.T',
+            '7270.T', '7272.T', '7309.T', '7453.T', '7532.T', '7550.T', '7733.T', '7735.T', '7741.T', '7751.T',
+            '7832.T', '7911.T', '7912.T', '7936.T', '7974.T', '8001.T', '8002.T', '8015.T', '8031.T', '8035.T',
+            '8053.T', '8058.T', '8113.T', '8136.T', '8267.T', '8306.T', '8308.T', '8309.T', '8316.T', '8331.T',
+            '8411.T', '8473.T', '8591.T', '8593.T', '8601.T', '8604.T', '8630.T', '8697.T', '8725.T', '8750.T',
+            '8766.T', '8795.T', '8801.T', '8802.T', '8830.T', '8951.T', '9020.T', '9021.T', '9022.T', '9042.T',
+            '9101.T', '9104.T', '9107.T', '9202.T', '9432.T', '9433.T', '9434.T', '9435.T', '9502.T', '9503.T',
+            '9531.T', '9532.T', '9602.T', '9697.T', '9735.T', '9766.T', '9843.T', '9983.T', '9984.T', '9CI.SI',
+            'A', 'A5G.IR', 'AAF.L', 'AAL.L', 'AAPL', 'ABBN.SW', 'ABBV', 'ABF.L', 'ABI.BR', 'ABN.AS',
+            'ABNB', 'ABT', 'ABVX.PA', 'ABX.TO', 'AC.PA', 'ACA.PA', 'ACGL', 'ACN', 'ACS.MC', 'AD.AS',
+            'ADBE', 'ADDT-B.ST', 'ADI', 'ADM', 'ADM.L', 'ADP', 'ADP.PA', 'ADS.DE', 'ADSK', 'ADYEN.AS',
+            'AEE', 'AEM.TO', 'AENA.MC', 'AEP', 'AER', 'AFL', 'AFRM', 'AGI.TO', 'AGN.AS', 'AGS.BR',
+            'AI.PA', 'AIA.NZ', 'AIG', 'AIR.PA', 'AJG', 'AKRBP.OL', 'AKZA.AS', 'ALA.TO', 'ALAB', 'ALC.SW',
+            'ALFA.ST', 'ALL', 'ALL.AX', 'ALNY', 'ALO.PA', 'ALV.DE', 'AM.PA', 'AMAT', 'AMCR', 'AMD',
+            'AME', 'AMGN', 'AMP', 'AMRZ', 'AMS.MC', 'AMT', 'AMUN.PA', 'AMZN', 'ANA.MC', 'ANET',
+            'ANTO.L', 'ANZ.AX', 'AON', 'APA.AX', 'APD', 'APH', 'APO', 'APP', 'ARES', 'ARGX.BR',
+            'ARX.TO', 'ASM.AS', 'ASML.AS', 'ASRNL.AS', 'ASSA-B.ST', 'ASTS', 'ASX.AX', 'ATCO-A.ST', 'ATCO-B.ST', 'ATD.TO',
+            'ATI', 'ATO', 'ATRL.TO', 'AV.L', 'AVGO', 'AVOL.SW', 'AWK', 'AXON', 'AXP', 'AYV.PA',
+            'AZN.L', 'AZO', 'AZRG.TA', 'BA', 'BA.L', 'BAC', 'BAER.SW', 'BALL', 'BAM.TO', 'BAMI.MI',
+            'BARC.L', 'BARN.SW', 'BAS.DE', 'BATS.L', 'BAYN.DE', 'BBD-B.TO', 'BBVA.MC', 'BBY', 'BCE.TO', 'BCP.LS',
+            'BCVN.SW', 'BDX', 'BE', 'BEAN.SW', 'BEI.DE', 'BEIJ-B.ST', 'BEPC.TO', 'BESI.AS', 'BG', 'BG.VI',
+            'BHP.AX', 'BIIB', 'BIM.PA', 'BIRG.IR', 'BKNG', 'BKR', 'BKT.MC', 'BKW.SW', 'BLK', 'BMED.MI',
+            'BMO.TO', 'BMPS.MI', 'BMW.DE', 'BMY', 'BN.PA', 'BN.TO', 'BN4.SI', 'BNP.PA', 'BNR.DE', 'BNS.TO',
+            'BNY', 'BNZL.L', 'BOL.ST', 'BP.L', 'BPE.MI', 'BR', 'BRK-B', 'BRO', 'BS6.SI', 'BSX',
+            'BT-A.L', 'BURL', 'BVI.PA', 'BX', 'BXB.AX', 'BZU.MI', 'C', 'C6L.SI', 'CA.PA', 'CABK.MC',
+            'CAE.TO', 'CAH', 'CAP.PA', 'CARL-B.CO', 'CARR', 'CASY', 'CAT', 'CB', 'CBA.AX', 'CBK.DE',
+            'CBOE', 'CBRE', 'CCEP', 'CCH.L', 'CCI', 'CCL', 'CCL-B.TO', 'CCO.TO', 'CDE', 'CDNS',
+            'CDW', 'CEG', 'CEN.NZ', 'CF', 'CFG', 'CFR.SW', 'CG', 'CHD', 'CHKP', 'CHRW',
+            'CHTR', 'CI', 'CICT.SI', 'CIEN', 'CINF', 'CL', 'CLAR.SI', 'CLNX.MC', 'CLS.TO', 'CM.TO',
+            'CMCSA', 'CME', 'CMG', 'CMI', 'CMS', 'CNA.L', 'CNC', 'CNP', 'CNQ.TO', 'CNR.TO',
+            'COF', 'COHR', 'COIN', 'COL.AX', 'COLO-B.CO', 'CON.DE', 'COO', 'COP', 'COR', 'COST',
+            'COV.PA', 'CP.TO', 'CPAY', 'CPG.L', 'CPR.MI', 'CPRT', 'CPU.AX', 'CRBG', 'CRCL', 'CRDO',
+            'CRH', 'CRM', 'CRS', 'CRWD', 'CRWV', 'CS.PA', 'CSCO', 'CSL.AX', 'CSU.TO', 'CSX',
+            'CTAS', 'CTC-A.TO', 'CTSH', 'CTVA', 'CU.TO', 'CVC.AS', 'CVE.TO', 'CVNA', 'CVS', 'CVX',
+            'CW', 'D', 'D05.SI', 'DAL', 'DANSKE.CO', 'DASH', 'DB1.DE', 'DBK.DE', 'DD', 'DDOG',
+            'DE', 'DECK', 'DELL', 'DEMANT.CO', 'DG', 'DG.PA', 'DGE.L', 'DGX', 'DHER.DE', 'DHI',
+            'DHL.DE', 'DHR', 'DIE.BR', 'DIM.PA', 'DIS', 'DKS', 'DLR', 'DLTR', 'DNB.OL', 'DOL.TO',
+            'DOV', 'DOW', 'DPLM.L', 'DRI', 'DSCT.TA', 'DSFIR.AS', 'DSV.CO', 'DSY.PA', 'DTE', 'DTE.DE',
+            'DTG.DE', 'DUK', 'DVN', 'DXCM', 'EBAY', 'EBS.VI', 'ECHO', 'ECL', 'ED', 'EDP.LS',
+            'EDPR.LS', 'EDV.L', 'EFN.TO', 'EFX', 'EG', 'EIX', 'EL', 'EL.PA', 'ELE.MC', 'ELI.BR',
+            'ELISA.HE', 'ELV', 'EMA.TO', 'EME', 'EMP-A.TO', 'EMR', 'EMSN.SW', 'EN.PA', 'ENB.TO', 'ENEL.MI',
+            'ENGI.PA', 'ENI.MI', 'ENLT.TA', 'ENR.DE', 'ENTG', 'ENX.PA', 'EOAN.DE', 'EOG', 'EPI-A.ST', 'EPI-B.ST',
+            'EQIX', 'EQNR.OL', 'EQT', 'EQT.ST', 'EQX.TO', 'ERF.PA', 'ERIC-B.ST', 'ES', 'ESLT.TA', 'ESS',
+            'ESSITY-B.ST', 'ETN', 'ETR', 'EVK.DE', 'EVN.AX', 'EVO.ST', 'EVRG', 'EW', 'EXC', 'EXE',
+            'EXO.AS', 'EXPD', 'EXPE', 'EXPN.L', 'EXR', 'F', 'F34.SI', 'FANG', 'FAST', 'FBK.MI',
+            'FCNCA', 'FCX', 'FDX', 'FDXF', 'FE', 'FER.MC', 'FERG', 'FFH.TO', 'FFIV', 'FGR.PA',
+            'FICO', 'FIS', 'FISV', 'FITB', 'FIX', 'FLEX', 'FLUT', 'FM.TO', 'FME.DE', 'FMG.AX',
+            'FN', 'FNF', 'FNV.TO', 'FORTUM.HE', 'FOX', 'FOXA', 'FPH.NZ', 'FRE.DE', 'FRES.L', 'FSLR',
+            'FTAI', 'FTI', 'FTNT', 'FTS.TO', 'FTV', 'FUTU', 'FWONK', 'G.MI', 'G1A.DE', 'GALD.SW',
+            'GALP.LS', 'GBLB.BR', 'GD', 'GE', 'GEBN.SW', 'GEHC', 'GEN', 'GET.PA', 'GEV', 'GFC.PA',
+            'GFL.TO', 'GIB-A.TO', 'GIL.TO', 'GILD', 'GIS', 'GIVN.SW', 'GJF.OL', 'GLE.PA', 'GLEN.L', 'GLW',
+            'GM', 'GMAB.CO', 'GMG.AX', 'GOOG', 'GOOGL', 'GPC', 'GPN', 'GRAB', 'GRMN', 'GS',
+            'GSK.L', 'GWO.TO', 'GWW', 'H', 'H.TO', 'H78.SI', 'HAG.DE', 'HAL', 'HARL.TA', 'HBAN',
+            'HBAN.SW', 'HCA', 'HD', 'HEI', 'HEI.DE', 'HEIA', 'HEIA.AS', 'HEIO.AS', 'HEN.DE', 'HEN3.DE',
+            'HEXA-B.ST', 'HIG', 'HLMA.L', 'HLN.L', 'HLT', 'HM-B.ST', 'HNR1.DE', 'HO.PA', 'HOLN.SW', 'HON',
+            'HONA', 'HOOD', 'HOT.DE', 'HPE', 'HPQ', 'HSBA.L', 'HSY', 'HUBB', 'HUM', 'HWM',
+            'IAG.AX', 'IAG.MC', 'IAG.TO', 'IBE.MC', 'IBKR', 'IBM', 'ICE', 'ICL.TA', 'IDR.MC', 'IDXX',
+            'IEX', 'IFC.TO', 'IFF', 'IFT.NZ', 'IFX.DE', 'IG.MI', 'IGM.TO', 'IHG.L', 'III.L', 'ILMN',
+            'IMB.L', 'IMO.TO', 'INCY', 'INDT.ST', 'INDU-A.ST', 'INDU-C.ST', 'INF.L', 'INGA.AS', 'INPST.AS', 'INSM',
+            'INTC', 'INTU', 'INVE-B.ST', 'INVH', 'IOT', 'IP', 'IPN.PA', 'IQV', 'IR', 'IREN',
+            'IRM', 'ISP.MI', 'ISRG', 'ITRK.L', 'ITW', 'ITX.MC', 'IVN.TO', 'J', 'J36.SI', 'JBHT',
+            'JBL', 'JCI', 'JMT.LS', 'JNJ', 'JPM', 'K.TO', 'KBC.BR', 'KBX.DE', 'KDP', 'KER.PA',
+            'KESKOB.HE', 'KEY', 'KEY.TO', 'KEYS', 'KGF.L', 'KHC', 'KIM', 'KKR', 'KLAC', 'KMB',
+            'KMI', 'KNEBV.HE', 'KNIN.SW', 'KO', 'KOG.OL', 'KPN.AS', 'KR', 'KRX.IR', 'KRZ.IR', 'KVUE',
+            'L', 'L.TO', 'LAND.L', 'LDO.MI', 'LDOS', 'LEN', 'LGEN.L', 'LH', 'LHA.DE', 'LHX',
+            'LI.PA', 'LIFCO-B.ST', 'LII', 'LIN', 'LISN.SW', 'LISP.SW', 'LITE', 'LLOY.L', 'LLY', 'LMT',
+            'LNG', 'LNT', 'LOGN.SW', 'LONN.SW', 'LOTB.BR', 'LOW', 'LPLA', 'LR.PA', 'LRCX', 'LSEG.L',
+            'LUG.TO', 'LUMI.TA', 'LUN.TO', 'LUND-B.ST', 'LVS', 'LYB', 'LYC.AX', 'LYV', 'MA', 'MAA',
+            'MAERSK-A.CO', 'MAERSK-B.CO', 'MAP.MC', 'MAR', 'MAS', 'MBG.DE', 'MC.PA', 'MCD', 'MCHP', 'MCK',
+            'MCO', 'MDB', 'MDLN', 'MDLZ', 'MDT', 'MEL.NZ', 'MELI', 'MET', 'META', 'METSO.HE',
+            'MFC.TO', 'MG.TO', 'MICC.AS', 'MKC', 'MKL', 'MKS.L', 'ML.PA', 'MLM', 'MMM', 'MNG.L',
+            'MNST', 'MO', 'MONC.MI', 'MOWI.OL', 'MPC', 'MPL.AX', 'MPWR', 'MQG.AX', 'MRK', 'MRK.DE',
+            'MRO.L', 'MRSH', 'MRU.TO', 'MRVL', 'MS', 'MSCI', 'MSFT', 'MSI', 'MSTR', 'MT.AS',
+            'MTB', 'MTD', 'MTX.DE', 'MTZ', 'MU', 'MUV2.DE', 'MZTF.TA', 'NA.TO', 'NAB.AX', 'NBIS',
+            'NBIX', 'NDA-FI.HE', 'NDAQ', 'NDSN', 'NEE', 'NEM', 'NEM.DE', 'NESN.SW', 'NESTE.HE', 'NET',
+            'NFLX', 'NG.L', 'NHY.OL', 'NI', 'NIBE-B.ST', 'NKE', 'NLY', 'NN.AS', 'NOC', 'NOKIA.HE',
+            'NOVN.SW', 'NOVO-B.CO', 'NOW', 'NRG', 'NSC', 'NSIS-B.CO', 'NST.AX', 'NTAP', 'NTGY.MC', 'NTR.TO',
+            'NTRA', 'NTRS', 'NUE', 'NVDA', 'NVMI.TA', 'NVR', 'NVT', 'NWG.L', 'NWSA', 'NXPI',
+            'NXT.L', 'O', 'O39.SI', 'ODFL', 'OKE', 'OKTA', 'OMC', 'OMV.VI', 'ON', 'OPCE.TA',
+            'OR.PA', 'ORA.PA', 'ORCL', 'ORG.AX', 'ORK.OL', 'ORLY', 'ORNBV.HE', 'ORSTED.CO', 'OTIS', 'OXY',
+            'P', 'P911.DE', 'PAAS.TO', 'PAH3.DE', 'PANW', 'PAYX', 'PCAR', 'PCG', 'PEG', 'PEP',
+            'PFE', 'PFG', 'PG', 'PGHN.SW', 'PGR', 'PH', 'PHIA.AS', 'PHM', 'PHOE.TA', 'PKG',
+            'PLD', 'PLS.AX', 'PLTR', 'PM', 'PME.AX', 'PNC', 'PNDORA.CO', 'PNFP', 'POLI.TA', 'POW.TO',
+            'PPG', 'PPL', 'PPL.TO', 'PRU', 'PRU.L', 'PRX.AS', 'PRY.MI', 'PSA', 'PSON.L', 'PST.MI',
+            'PSX', 'PTC', 'PUB.PA', 'PWR', 'PYPL', 'Q', 'QAN.AX', 'QBE.AX', 'QCOM', 'QIA.DE',
+            'QSR.TO', 'RAA.DE', 'RACE.MI', 'RBA.TO', 'RBI.VI', 'RBLX', 'RCI-B.TO', 'RCL', 'RDDT', 'REA.AX',
+            'REC.MI', 'RED.MC', 'REG', 'REGN', 'REL.L', 'REP.MC', 'RF', 'RHM.DE', 'RI.PA', 'RIO.AX',
+            'RIO.L', 'RIVN', 'RJF', 'RKLB', 'RKT', 'RKT.L', 'RMD', 'RMS.PA', 'RNO.PA', 'RO.SW',
+            'ROIV', 'ROK', 'ROL', 'ROP', 'ROP.SW', 'ROST', 'RPRX', 'RR.L', 'RS', 'RSG',
+            'RTO.L', 'RTX', 'RVMD', 'RWE.DE', 'RXL.PA', 'RY.TO', 'RYA.IR', 'S32.AX', 'S63.SI', 'S68.SI',
+            'SAAB-B.ST', 'SAB.MC', 'SAF.PA', 'SALM.OL', 'SAMPO.HE', 'SAN.MC', 'SAN.PA', 'SAND.ST', 'SAP.DE', 'SAP.TO',
+            'SBAC', 'SBRY.L', 'SBUX', 'SCA-B.ST', 'SCG.AX', 'SCHN.SW', 'SCHP.SW', 'SCHW', 'SCMN.SW', 'SDLF.L',
+            'SDR.L', 'SDZ.SW', 'SE', 'SEB-A.ST', 'SECU-B.ST', 'SGE.L', 'SGH.AX', 'SGO.PA', 'SGRO.L', 'SGSN.SW',
+            'SHB-A.ST', 'SHEL.L', 'SHL.DE', 'SHOP.TO', 'SHW', 'SIE.DE', 'SIG.AX', 'SIKA.SW', 'SKA-B.ST', 'SKF-B.ST',
+            'SLB', 'SLF.TO', 'SLHN.SW', 'SMCI', 'SMIN.L', 'SN', 'SN.L', 'SNA', 'SNDK', 'SNOW',
+            'SNPS', 'SO', 'SOBI.ST', 'SOF.BR', 'SOFI', 'SOL.AX', 'SOON.SW', 'SPCX', 'SPG', 'SPGI',
+            'SPOT', 'SPSN.SW', 'SPX.L', 'SRE', 'SREN.SW', 'SRG.MI', 'SRT3.DE', 'SSE.L', 'SSNC', 'STAN.L',
+            'STE', 'STERV.HE', 'STLAM.MI', 'STLD', 'STMN.SW', 'STMPA.PA', 'STN.TO', 'STO.AX', 'STT', 'STX',
+            'STZ', 'SU.PA', 'SU.TO', 'SUI', 'SUN.AX', 'SUNB', 'SVT.L', 'SW', 'SW.PA', 'SWED-A.ST',
+            'SY1.DE', 'SYENS.BR', 'SYF', 'SYK', 'SYY', 'T', 'T.TO', 'TCL.AX', 'TD.TO', 'TDG',
+            'TDY', 'TEAM', 'TECK-B.TO', 'TEF.MC', 'TEL', 'TEL.OL', 'TEL2-B.ST', 'TELIA.ST', 'TEN.MI', 'TER',
+            'TEVA', 'TFC', 'TFII.TO', 'TGT', 'TIGO', 'TIH.TO', 'TIT.MI', 'TJX', 'TLC.AX', 'TLS.AX',
+            'TLX.DE', 'TMO', 'TMUS', 'TOST', 'TOU.TO', 'TPL', 'TPR', 'TREL-B.ST', 'TRGP', 'TRI.TO',
+            'TRN.MI', 'TROW', 'TRP.TO', 'TRU', 'TRV', 'TRYG.CO', 'TSCO', 'TSCO.L', 'TSEM.TA', 'TSLA',
+            'TSN', 'TT', 'TTE.PA', 'TTWO', 'TUB.BR', 'TW', 'TWLO', 'TXN', 'TXT', 'U11.SI',
+            'UAL', 'UBER', 'UBSG.SW', 'UCB.BR', 'UCG.MI', 'UHR.SW', 'ULTA', 'ULVR.L', 'UMG.AS', 'UNH',
+            'UNI.MI', 'UNP', 'UPM.HE', 'UPS', 'URI', 'URW.PA', 'USB', 'UTHR', 'UU.L', 'V',
+            'VACN.SW', 'VAR.OL', 'VCX.AX', 'VEEV', 'VER.VI', 'VICI', 'VIE.PA', 'VLO', 'VLTO', 'VMC',
+            'VMRK', 'VNA.DE', 'VOD.L', 'VOLV-B.ST', 'VOW3.DE', 'VRSK', 'VRSN', 'VRT', 'VRTX', 'VST',
+            'VSURE.ST', 'VTR', 'VWS.CO', 'VZ', 'WAB', 'WAT', 'WBC.AX', 'WBD', 'WCN', 'WCP.TO',
+            'WDAY', 'WDC', 'WDS.AX', 'WEC', 'WELL', 'WES.AX', 'WFC', 'WISE.L', 'WKL.AS', 'WM',
+            'WMB', 'WMT', 'WN.TO', 'WOW.AX', 'WPC', 'WPM.TO', 'WRB', 'WRT1V.HE', 'WSM', 'WSO',
+            'WSP.TO', 'WST', 'WTC.AX', 'WTW', 'WY', 'X.TO', 'XEL', 'XOM', 'XPO', 'XRO.AX',
+            'XYL', 'XYZ', 'YAR.OL', 'YUM', 'Z74.SI', 'ZAL.DE', 'ZBH', 'ZM', 'ZS', 'ZTS',
+            'ZURN.SW',
+        ],
+    ],
 ];

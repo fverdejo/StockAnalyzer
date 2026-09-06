@@ -545,9 +545,12 @@ class Application
         if ($hasManualTickers) {
             if ($this->isKnownUniverseRaw($tickers) && $this->isValidUniverseKey($requestedUniverse)) {
                 $fromUniverse = $this->universeConfig->tickers($requestedUniverse);
-                $raw = $fromUniverse !== [] ? implode(' ', $fromUniverse) : $tickers;
 
-                return [$raw, $this->tickerNormalizer->normalize($raw), $requestedUniverse];
+                if ($fromUniverse !== []) {
+                    return [implode(' ', $fromUniverse), $fromUniverse, $requestedUniverse];
+                }
+
+                return [$tickers, $this->tickerNormalizer->normalize($tickers), $requestedUniverse];
             }
 
             return [$tickers, $this->tickerNormalizer->normalize($tickers), ''];
@@ -556,14 +559,36 @@ class Application
         $universe = $this->isValidUniverseKey($requestedUniverse) ? $requestedUniverse : self::DEFAULT_UNIVERSE;
 
         $fromUniverse = $this->universeConfig->tickers($universe);
-        $raw = $fromUniverse !== [] ? implode(' ', $fromUniverse) : self::DEFAULT_TICKERS;
 
-        return [$raw, $this->tickerNormalizer->normalize($raw), $universe];
+        // Los tickers de un universo de config/universes.php ya vienen
+        // limpios, en mayusculas y sin duplicados (UniverseConfig::all()),
+        // asi que NO pasan por TickerNormalizer::normalize(): ese metodo
+        // trunca a MAX_TICKERS (60), un limite pensado para el buscador de
+        // texto libre del Home, no para listas de config ya validadas.
+        // Corrige aqui, para el camino web, el mismo bug que
+        // Utils\UniverseTickerResolver ya corrigio el 2026-08-18 para el
+        // camino CLI (`bin/analyze.php`) -- invisible hasta hoy porque
+        // ningun universo individual superaba 60, real en cuanto
+        // `msci_world` (2026-09-06, ~1.253 tickers) lo supera.
+        if ($fromUniverse !== []) {
+            return [implode(' ', $fromUniverse), $fromUniverse, $universe];
+        }
+
+        return [self::DEFAULT_TICKERS, $this->tickerNormalizer->normalize(self::DEFAULT_TICKERS), $universe];
     }
 
+    /**
+     * `false` tambien para un universo de "solo cron" (`selectable=false`,
+     * ver Config\UniverseConfig::all()): ni el desplegable del Home lo
+     * ofrece ni una `?universe=` manual a esa clave lo activa aqui -- cae
+     * en `DEFAULT_UNIVERSE`, el mismo comportamiento que una clave
+     * inexistente. `Utils\UniverseTickerResolver` (usado por
+     * `bin/analyze.php`) no pasa por este metodo, asi que el cron si
+     * puede analizarlo.
+     */
     private function isValidUniverseKey(string $key): bool
     {
-        return $key !== '' && array_key_exists($key, $this->universeConfig->all());
+        return $key !== '' && ($this->universeConfig->all()[$key]['selectable'] ?? false);
     }
 
     private function isKnownUniverseRaw(string $rawTickers): bool

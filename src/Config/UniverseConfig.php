@@ -32,7 +32,7 @@ class UniverseConfig
     ];
 
     /**
-     * @return array<string,array{label: string, tickers: list<string>}>
+     * @return array<string,array{label: string, tickers: list<string>, selectable: bool}>
      */
     public function all(): array
     {
@@ -61,6 +61,14 @@ class UniverseConfig
                     array_map(static fn (mixed $ticker): string => strtoupper(trim((string) $ticker)), $tickers),
                     static fn (string $ticker): bool => $ticker !== ''
                 )),
+                // `false` marca un universo de "solo cron" (ver
+                // versions.md 2026-09-06, `msci_world`): demasiado grande
+                // para analizarse en vivo en una sola peticion web sin
+                // arriesgar timeout/rate-limit del proveedor, pero valido
+                // para `bin/analyze.php --universe=...`, que no pasa por
+                // aqui via `Utils\UniverseTickerResolver`. Ausente (la
+                // inmensa mayoria de universos) se trata como `true`.
+                'selectable' => ($value['selectable'] ?? true) !== false,
             ];
         }
 
