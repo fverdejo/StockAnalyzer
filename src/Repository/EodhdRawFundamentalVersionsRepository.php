@@ -7,7 +7,10 @@ namespace StockAnalyzer\Repository;
 use DateTimeImmutable;
 use PDO;
 use RuntimeException;
+use StockAnalyzer\DTO\EodhdFundamentalVersionStoreResult;
+use StockAnalyzer\Enums\EodhdFundamentalVersionStoreOutcome;
 use StockAnalyzer\Infrastructure\Database\Connection;
+use Throwable;
 
 /**
  * Historial VERSIONADO del archivo crudo de EODHD
@@ -29,6 +32,21 @@ use StockAnalyzer\Infrastructure\Database\Connection;
  * determinista byte a byte entre ejecuciones aunque el contenido sea
  * identico, asi que el hash tiene que calcularse ANTES de comprimir para
  * servir de clave de deduplicacion real.
+ *
+ * **Correccion del 2026-09-06** (bug real senalado por Codex en la revision
+ * independiente de `d608747`, ver `versions.md`): hasta entonces `store()`
+ * usaba `INSERT IGNORE` contra la clave unica `(ticker, api_version,
+ * section, payload_hash)`, asi que dos capturas con contenido IDENTICO
+ * dejaban una unica fila -- indistinguible de "nunca se recaptura" -- y una
+ * secuencia A->B->A (el valor cambia y luego VUELVE al original) perdia la
+ * tercera captura por colision de hash con la primera fila, dejando que
+ * `latestFor()` devolviera B como "mas reciente" aunque el ultimo estado
+ * real observado fuera A. Ahora los BLOBS siguen deduplicados por hash en
+ * esta tabla (migracion 025, sin cambios de forma), pero CADA llamada a
+ * `store()` anhade tambien una fila nueva, sin deduplicar, en
+ * `eodhd_raw_fundamental_version_observations` (migracion 027) con su
+ * propio `observed_at_utc`. `latestFor()`/`allPayloadsFor()` resuelven por
+ * esa tabla de observaciones, no por la fila de blob mas reciente.
  */
 class EodhdRawFundamentalVersionsRepository
 {
@@ -38,15 +56,26 @@ class EodhdRawFundamentalVersionsRepository
     }
 
     /**
-     * Archiva una version. Si ya existe una fila con el mismo
-     * `(ticker, api_version, section, payload_hash)` no se duplica (INSERT
-     * IGNORE contra la clave UNIQUE de la migracion): un contenido
-     * identico al de una captura anterior no gasta espacio de nuevo.
+     * Archiva una captura. El BLOB (JSON comprimido) se deduplica por
+     * `(ticker, api_version, section, payload_hash)`: un contenido
+     * identico al de una version ya archivada reutiliza esa fila en vez de
+     * duplicar el espacio. La OBSERVACION, en cambio, nunca se deduplica --
+     * esta llamada representa una peticion real que acaba de completarse
+     * con exito, y por tanto deja siempre una fila nueva en
+     * `eodhd_raw_fundamental_version_observations`, apunte o no a un blob
+     * ya existente. El resultado devuelto distingue ambos casos (ver
+     * `EodhdFundamentalVersionStoreResult`).
      *
      * Antes de escribir nada se verifica que comprimir y descomprimir el
      * payload reproduce EXACTAMENTE el JSON original -- no basta con confiar
      * en que `gzencode()`/`gzdecode()` son deterministas, ya que el objetivo
      * entero de esta tabla es no perder nunca una captura ya pagada.
+     *
+     * `$requestFrom`/`$requestTo` son la ventana `from`/`to` pedida a EODHD
+     * cuando el endpoint la admite (hoy solo `calendar/earnings`): forman
+     * parte de lo que se observo en esa captura concreta, no del contenido
+     * (dos capturas con la misma ventana pueden dar contenido identico o
+     * distinto igualmente).
      */
     public function store(
         string $ticker,
@@ -55,40 +84,95 @@ class EodhdRawFundamentalVersionsRepository
         string $section,
         ?DateTimeImmutable $fetchedAt = null,
         ?int $httpStatus = null,
-        ?string $sourceSymbol = null
-    ): void {
+        ?string $sourceSymbol = null,
+        ?DateTimeImmutable $requestFrom = null,
+        ?DateTimeImmutable $requestTo = null
+    ): EodhdFundamentalVersionStoreResult {
         $fetchedAt ??= new DateTimeImmutable();
+        $ticker = strtoupper($ticker);
         $hash = hash('sha256', $payloadJson);
         $compressed = $this->compressAndVerify($payloadJson);
 
-        $statement = $this->connection->getPdo()->prepare(
-            'INSERT IGNORE INTO eodhd_raw_fundamental_versions
-                (ticker, api_version, section, fetched_at, payload_hash, payload_compressed, http_status, source_symbol)
-             VALUES
-                (:ticker, :api_version, :section, :fetched_at, :payload_hash, :payload_compressed, :http_status, :source_symbol)'
-        );
-        $statement->bindValue('ticker', strtoupper($ticker));
-        $statement->bindValue('api_version', $apiVersion);
-        $statement->bindValue('section', $section);
-        $statement->bindValue('fetched_at', $fetchedAt->format('Y-m-d H:i:s'));
-        $statement->bindValue('payload_hash', $hash);
-        $statement->bindValue('payload_compressed', $compressed, PDO::PARAM_LOB);
-        $statement->bindValue('http_status', $httpStatus, $httpStatus === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
-        $statement->bindValue('source_symbol', $sourceSymbol);
-        $statement->execute();
+        $pdo = $this->connection->getPdo();
+        $pdo->beginTransaction();
+
+        try {
+            // `ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)` es la forma
+            // explicita y no silenciosa de "insertar o reutilizar" que pidio
+            // Codex en sustitucion de `INSERT IGNORE`: en una sola sentencia
+            // atomica, o inserta el blob nuevo, o dirige `LAST_INSERT_ID()`
+            // al id del blob ya existente -- en ningun caso se pierde el id
+            // resultante, y `rowCount()` distingue de forma fiable cual de
+            // los dos paso (MySQL documenta 1 fila afectada si se inserto, 0
+            // si la fila ya tenia esos mismos valores).
+            $upsert = $pdo->prepare(
+                'INSERT INTO eodhd_raw_fundamental_versions
+                    (ticker, api_version, section, fetched_at, payload_hash, payload_compressed, http_status, source_symbol)
+                 VALUES
+                    (:ticker, :api_version, :section, :fetched_at, :payload_hash, :payload_compressed, :http_status, :source_symbol)
+                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)'
+            );
+            $upsert->bindValue('ticker', $ticker);
+            $upsert->bindValue('api_version', $apiVersion);
+            $upsert->bindValue('section', $section);
+            $upsert->bindValue('fetched_at', $fetchedAt->format('Y-m-d H:i:s'));
+            $upsert->bindValue('payload_hash', $hash);
+            $upsert->bindValue('payload_compressed', $compressed, PDO::PARAM_LOB);
+            $upsert->bindValue('http_status', $httpStatus, $httpStatus === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+            $upsert->bindValue('source_symbol', $sourceSymbol);
+            $upsert->execute();
+
+            $outcome = $upsert->rowCount() === 1
+                ? EodhdFundamentalVersionStoreOutcome::NEW_VERSION
+                : EodhdFundamentalVersionStoreOutcome::DUPLICATE_CONTENT;
+            $versionId = (int) $pdo->lastInsertId();
+
+            $observation = $pdo->prepare(
+                'INSERT INTO eodhd_raw_fundamental_version_observations
+                    (version_id, ticker, api_version, section, observed_at_utc, http_status, source_symbol, request_from, request_to)
+                 VALUES
+                    (:version_id, :ticker, :api_version, :section, :observed_at_utc, :http_status, :source_symbol, :request_from, :request_to)'
+            );
+            $observation->bindValue('version_id', $versionId, PDO::PARAM_INT);
+            $observation->bindValue('ticker', $ticker);
+            $observation->bindValue('api_version', $apiVersion);
+            $observation->bindValue('section', $section);
+            $observation->bindValue('observed_at_utc', $fetchedAt->format('Y-m-d H:i:s'));
+            $observation->bindValue('http_status', $httpStatus, $httpStatus === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+            $observation->bindValue('source_symbol', $sourceSymbol);
+            $observation->bindValue('request_from', $requestFrom?->format('Y-m-d'));
+            $observation->bindValue('request_to', $requestTo?->format('Y-m-d'));
+            $observation->execute();
+
+            $observationId = (int) $pdo->lastInsertId();
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+
+            throw $exception;
+        }
+
+        return new EodhdFundamentalVersionStoreResult($versionId, $observationId, $outcome);
     }
 
     /**
-     * El JSON original de la version mas reciente de un
-     * `(ticker, api_version, section)`, o `null` si no hay ninguna
-     * archivada.
+     * El JSON original de la OBSERVACION mas reciente de un
+     * `(ticker, api_version, section)` (maximo `observed_at_utc` en
+     * `eodhd_raw_fundamental_version_observations`), o `null` si no hay
+     * ninguna archivada. Resuelve por observacion, no por la fila de blob
+     * mas reciente: en una secuencia A->B->A la ultima OBSERVACION apunta
+     * de vuelta al blob de A, aunque ese blob se haya insertado antes que
+     * el de B (ver correccion del 2026-09-06 en el docblock de la clase).
      */
     public function latestFor(string $ticker, string $apiVersion, string $section): ?string
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT payload_compressed FROM eodhd_raw_fundamental_versions
-             WHERE ticker = :ticker AND api_version = :api_version AND section = :section
-             ORDER BY fetched_at DESC, id DESC
+            'SELECT v.payload_compressed
+             FROM eodhd_raw_fundamental_version_observations o
+             INNER JOIN eodhd_raw_fundamental_versions v ON v.id = o.version_id
+             WHERE o.ticker = :ticker AND o.api_version = :api_version AND o.section = :section
+             ORDER BY o.observed_at_utc DESC, o.id DESC
              LIMIT 1'
         );
         $statement->execute([
@@ -106,23 +190,34 @@ class EodhdRawFundamentalVersionsRepository
     }
 
     /**
-     * TODAS las versiones archivadas de un `(ticker, api_version, section)`,
-     * de mas antigua a mas reciente, con su JSON original ya descomprimido.
-     * A diferencia de `latestFor()` (solo la ultima), este metodo existe
-     * para poder COMPARAR dos capturas separadas en el tiempo -- el proposito
-     * entero de esta tabla versionada (Bloque A, `2026-09-04`/`05`): saber si
-     * un dato que hoy parece "historico" (p.ej. `calendar/earnings`,
-     * `calendar/trends`) cambia entre una captura y otra mas adelante, o si
-     * de verdad quedo congelado. Ver `bin/compare-eodhd-calendar-versions.php`.
+     * TODAS las OBSERVACIONES archivadas de un `(ticker, api_version,
+     * section)`, de mas antigua a mas reciente, con el JSON de su blob ya
+     * descomprimido. A diferencia de `latestFor()` (solo la ultima), este
+     * metodo existe para poder COMPARAR capturas separadas en el tiempo --
+     * el proposito entero de esta tabla versionada (Bloque A,
+     * `2026-09-04`/`05`): saber si un dato que hoy parece "historico"
+     * (p.ej. `calendar/earnings`, `calendar/trends`) cambia entre una
+     * captura y otra mas adelante, o si de verdad quedo congelado. Ver
+     * `bin/compare-eodhd-calendar-versions.php`.
      *
-     * @return list<array{fetched_at: string, payload_hash: string, payload: string}>
+     * Devuelve una fila POR OBSERVACION, no por blob distinto: una
+     * recaptura con contenido identico (A->A) aparece dos veces con el
+     * mismo `payload_hash` y `observed_at_utc` distintos -- necesario para
+     * que el llamador pueda distinguir "se recapturo y no cambio" de
+     * "nunca se ha vuelto a capturar" (`count() < 2`), y para poder
+     * reconstruir una secuencia completa A->B->A mirando cada transicion
+     * consecutiva en vez de solo la primera y la ultima.
+     *
+     * @return list<array{observed_at_utc: string, payload_hash: string, payload: string}>
      */
     public function allPayloadsFor(string $ticker, string $apiVersion, string $section): array
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT fetched_at, payload_hash, payload_compressed FROM eodhd_raw_fundamental_versions
-             WHERE ticker = :ticker AND api_version = :api_version AND section = :section
-             ORDER BY fetched_at ASC, id ASC'
+            'SELECT o.observed_at_utc, v.payload_hash, v.payload_compressed
+             FROM eodhd_raw_fundamental_version_observations o
+             INNER JOIN eodhd_raw_fundamental_versions v ON v.id = o.version_id
+             WHERE o.ticker = :ticker AND o.api_version = :api_version AND o.section = :section
+             ORDER BY o.observed_at_utc ASC, o.id ASC'
         );
         $statement->execute([
             'ticker' => strtoupper($ticker),
@@ -140,7 +235,7 @@ class EodhdRawFundamentalVersionsRepository
             }
 
             $rows[] = [
-                'fetched_at' => (string) $row['fetched_at'],
+                'observed_at_utc' => (string) $row['observed_at_utc'],
                 'payload_hash' => (string) $row['payload_hash'],
                 'payload' => $this->decompress($compressed),
             ];

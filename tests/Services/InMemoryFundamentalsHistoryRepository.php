@@ -13,12 +13,15 @@ use StockAnalyzer\Repository\FundamentalsHistoryRepository;
  * constructor vacio, sin llamar a `parent::__construct()`, para no tocar
  * `Connection`/PDO en un test que no habla con MySQL).
  *
- * Solo hace falta `findAsOf()`: `BacktestingService::fundamentalsAt()` es
- * el unico consumidor real de este repositorio dentro del motor de
- * backtesting. Un ticker sin snapshot registrado devuelve `null` (mismo
- * significado que en produccion: "sin snapshot point-in-time, cae al
- * fallback de hoy"), lo que permite fijar por test cuales tickers deben
- * contar como `marketCapIsPointInTime` y cuales no (P3.4).
+ * `findAsOf()`: `BacktestingService::fundamentalsAt()` es el unico
+ * consumidor real de este repositorio dentro del motor de backtesting. Un
+ * ticker sin snapshot registrado devuelve `null` (mismo significado que en
+ * produccion: "sin snapshot point-in-time, cae al fallback de hoy"), lo
+ * que permite fijar por test cuales tickers deben contar como
+ * `marketCapIsPointInTime` y cuales no (P3.4). `findAsOfWithDate()`
+ * (2026-09-06) se añadio para `FundamentalChangeAssessorTest`, que
+ * necesita ademas la fecha real del snapshot usado (D2 del diagnostico
+ * fundamental).
  */
 final class InMemoryFundamentalsHistoryRepository extends FundamentalsHistoryRepository
 {
@@ -89,6 +92,22 @@ final class InMemoryFundamentalsHistoryRepository extends FundamentalsHistoryRep
      */
     public function findAsOf(string $ticker, DateTimeImmutable $date): ?array
     {
+        return $this->findAsOfWithDate($ticker, $date)['payload'] ?? null;
+    }
+
+    /**
+     * Version fechada de `findAsOf()` (ver el docblock del metodo real en
+     * `FundamentalsHistoryRepository`, necesaria para
+     * `FundamentalChangeAssessorTest`). Para un snapshot registrado con
+     * `withFundamentalsSnapshot()` (sin fecha propia) se reporta la propia
+     * fecha PEDIDA como `snapshotDate`: suficiente para los tests que no
+     * comprueban la fecha real mostrada, que usan
+     * `withFundamentalsSnapshotAt()` quien si necesita esa fecha exacta.
+     *
+     * @return array{payload: array<string,float|null>, snapshotDate: DateTimeImmutable}|null
+     */
+    public function findAsOfWithDate(string $ticker, DateTimeImmutable $date): ?array
+    {
         $ticker = strtoupper($ticker);
 
         if (isset($this->datedSnapshotsByTicker[$ticker])) {
@@ -101,9 +120,15 @@ final class InMemoryFundamentalsHistoryRepository extends FundamentalsHistoryRep
                 }
             }
 
-            return $bestDate !== null ? $this->datedSnapshotsByTicker[$ticker][$bestDate] : null;
+            return $bestDate !== null
+                ? ['payload' => $this->datedSnapshotsByTicker[$ticker][$bestDate], 'snapshotDate' => new DateTimeImmutable($bestDate)]
+                : null;
         }
 
-        return $this->snapshotsByTicker[$ticker] ?? null;
+        if (!isset($this->snapshotsByTicker[$ticker])) {
+            return null;
+        }
+
+        return ['payload' => $this->snapshotsByTicker[$ticker], 'snapshotDate' => $date];
     }
 }

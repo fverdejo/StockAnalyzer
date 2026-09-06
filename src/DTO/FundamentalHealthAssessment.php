@@ -29,12 +29,18 @@ namespace StockAnalyzer\DTO;
  * `sectorExcludedResult()`) y la vista NUNCA debe intentar aplicarles los
  * mismos umbrales.
  *
- * `datosInsuficientes` es `true` solo cuando NINGUNO de los cuatro
- * factores (`roic`, `operatingMargin`, `debtToEquity`, `cashConversion`)
- * tiene dato: distingue "no hay informacion" de "no hay alertas", para
- * que la ausencia de dato nunca se lea como ausencia de alerta (la
+ * `datosInsuficientes` es `true` solo cuando NINGUNO de los cinco
+ * factores (`roic`, `operatingMargin`, `debtToEquity`, `cashConversion`,
+ * FCF) tiene dato: distingue "no hay informacion" de "no hay alertas",
+ * para que la ausencia de dato nunca se lea como ausencia de alerta (la
  * leccion de P3.3, ver versions.md `2026-09-03`/`2026-09-04`: un dato
- * ausente no es lo mismo que un dato bueno).
+ * ausente no es lo mismo que un dato bueno). El FCF se incluyo en este
+ * conteo tras una revision de Codex del 2026-09-06: antes solo miraba los
+ * otros cuatro, asi que un FCF negativo como UNICO dato conocido marcaba
+ * `datosInsuficientes=true` Y `fcfNegativo=true` a la vez, y la vista
+ * ocultaba la alerta real detras del mensaje generico -- justo el caso
+ * mas informativo escondido detras del menos informativo. Ver
+ * `Services\FundamentalHealthAssessor::assess()` para el criterio exacto.
  */
 final class FundamentalHealthAssessment
 {

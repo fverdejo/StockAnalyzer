@@ -203,7 +203,21 @@ class StockDetailPage
         // informativo, nunca afecta a $score/$recommendation. D1 es puro
         // (se calcula aqui mismo); D2 llega ya calculado porque necesita
         // FundamentalsHistoryRepository.
-        $fundamentalHealth = (new FundamentalHealthAssessor())->assess($fundamentals, $company);
+        //
+        // `$companyProfile ?? $company` (correccion de Codex, 2026-09-06):
+        // D1/D2 deben usar el sector ENRIQUECIDO (Yahoo assetProfile via
+        // YahooCorporateProfileProvider, con fallback al sector base si
+        // Yahoo no lo tenia -- ver ese proveedor) para decidir la exclusion
+        // de sector, no `$company` a secas. `$company` es el que devuelve
+        // el proveedor de mercado activo y puede llegar con sector VACIO
+        // (FmpParser nunca lo rellena; YahooParser solo si assetProfile
+        // respondio) -- un sector vacio nunca coincide con
+        // FundamentalSectorExclusion::EXCLUDED_SECTORS, asi que una
+        // entidad financiera o inmobiliaria dejaria de excluirse por un
+        // simple fallo o ausencia de ese modulo, no por ser realmente
+        // comparable.
+        $fundamentalCompany = $companyProfile ?? $company;
+        $fundamentalHealth = (new FundamentalHealthAssessor())->assess($fundamentals, $fundamentalCompany);
         $fundamentalDiagnostics = self::renderFundamentalDiagnostics($fundamentalHealth, $fundamentalChange);
 
         // Desde v2.71 comprar y vender solo se puede hacer aqui, asi que el
@@ -346,15 +360,23 @@ class StockDetailPage
     /**
      * Diagnostico fundamental D1 ("Salud fundamental") + D2 ("Cambio
      * interanual"), ver versions.md 2026-09-05. Puramente informativo:
-     * describe hechos ("el margen operativo cae X puntos frente a hace un
-     * año"), nunca sugiere una accion ("vigilar", "revisar salida") ni
-     * implica una ventaja de decision -- esa fue precisamente la critica de
-     * `analista-mercado` al Bloque F del plan de Codex del 2026-09-04.
+     * describe hechos ("el margen operativo cae X puntos frente al
+     * snapshot anterior"), nunca sugiere una accion ("vigilar", "revisar
+     * salida") ni implica una ventaja de decision -- esa fue precisamente
+     * la critica de `analista-mercado` al Bloque F del plan de Codex del
+     * 2026-09-04.
      *
      * Bancos/aseguradoras/inmobiliarias (`Services\FundamentalSectorExclusion`)
      * muestran solo la nota de exclusion, una unica vez para D1+D2 juntos
      * (las dos comparten el mismo criterio de sector, no tiene sentido
      * repetir el aviso dos veces).
+     *
+     * `$change === null` significa que D2 fallo o lanzo una excepcion en
+     * `Application::renderDetail()` (best effort, ver el docblock de
+     * `render()`): se muestra "Cambio interanual no disponible" en vez de
+     * omitir la seccion en silencio (correccion de Codex, 2026-09-06) --
+     * el usuario no debe poder confundir "no se pudo calcular" con "no hay
+     * cambios".
      */
     private static function renderFundamentalDiagnostics(
         FundamentalHealthAssessment $health,
@@ -366,11 +388,9 @@ class StockDetailPage
         }
 
         $healthHtml = self::renderFundamentalHealthSection($health);
-        $changeHtml = $change !== null ? self::renderFundamentalChangeSection($change) : '';
-
-        if ($healthHtml === '' && $changeHtml === '') {
-            return '';
-        }
+        $changeHtml = $change !== null
+            ? self::renderFundamentalChangeSection($change)
+            : '<h3 class="panel-subtitle">Cambio interanual</h3><p class="muted">Cambio interanual no disponible.</p>';
 
         return sprintf(
             '<section class="panel"><h2>Diagnóstico fundamental</h2><p class="muted panel-note">Informativo: describe la situación y el cambio interanual de la empresa, no afecta a la puntuación ni implica una ventaja de inversión demostrada.</p>%s%s</section>',
@@ -420,15 +440,46 @@ class StockDetailPage
         );
     }
 
+    /**
+     * `$change->previousSnapshotDate` es la fecha REAL del snapshot
+     * comparado (correccion de Codex, 2026-09-06): nunca se asume
+     * literalmente "hace un año", porque
+     * `FundamentalsHistoryRepository::findAsOfWithDate()` puede devolver
+     * cualquier snapshot anterior disponible, no exactamente el de hace
+     * 365 dias.
+     *
+     * El aviso de comparabilidad de proveedor se muestra siempre que hay
+     * un veredicto real que interpretar -- ver el docblock de
+     * `Services\FundamentalChangeAssessor` para el motivo completo: los
+     * fundamentales "actuales" vienen del proveedor de mercado activo y el
+     * snapshot anterior siempre de `fundamentals_history` (reconstruido
+     * desde EODHD), asi que el veredicto puede reflejar una diferencia de
+     * proveedor/formula, no solo un cambio real de la empresa.
+     */
     private static function renderFundamentalChangeSection(FundamentalChangeAssessment $change): string
     {
         if ($change->verdict === FundamentalChangeVerdict::NO_EVALUABLE && $change->factors === []) {
+            if ($change->previousSnapshotDate !== null) {
+                // Hay un snapshot, pero FundamentalChangeAssessor lo
+                // descarto por demasiado antiguo (MAX_SNAPSHOT_AGE_DAYS):
+                // se explica la fecha real en vez de fingir que no existe
+                // ningun historico.
+                return sprintf(
+                    '<h3 class="panel-subtitle">Cambio interanual</h3><p class="muted">No evaluable: el histórico más reciente disponible es del %s, demasiado antiguo para una comparación interanual.</p>',
+                    Layout::escape($change->previousSnapshotDate->format('Y-m-d'))
+                );
+            }
+
             return '<h3 class="panel-subtitle">Cambio interanual</h3><p class="muted">No evaluable: sin histórico suficiente para comparar con hace un año.</p>';
         }
 
+        $previousDateLabel = $change->previousSnapshotDate !== null
+            ? $change->previousSnapshotDate->format('Y-m-d')
+            : 'fecha desconocida';
+
         $rows = implode('', array_map(
             static fn (FundamentalChangeFactor $factor): string => sprintf(
-                '<li>%s: %s ahora, %s hace un año.</li>',
+                '<li>%s: %s ahora, %s antes.</li>',
                 Layout::escape($factor->label),
                 Layout::escape($factor->isPercentage ? self::percentOrDash($factor->currentValue) : Layout::formatNullable($factor->currentValue)),
                 Layout::escape($factor->isPercentage ? self::percentOrDash($factor->previousValue) : Layout::formatNullable($factor->previousValue))
@@ -441,7 +492,10 @@ class StockDetailPage
             : '';
 
         return sprintf(
-            '<h3 class="panel-subtitle">Cambio interanual: %s%s</h3><ul class="panel-list">%s</ul>',
+            '<h3 class="panel-subtitle">Cambio interanual desde %s: %s%s</h3>'
+            . '<p class="muted panel-note">Compara datos del proveedor de mercado activo con un histórico reconstruido desde otro proveedor (EODHD); el veredicto puede reflejar diferencias de fórmula o fuente, no solo un cambio real de la empresa.</p>'
+            . '<ul class="panel-list">%s</ul>',
+            Layout::escape($previousDateLabel),
             Layout::escape($change->verdict->label()),
             $note,
             $rows

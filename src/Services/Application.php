@@ -470,12 +470,20 @@ class Application
         // criterio que el resto de esta funcion -- un fallo aqui (o
         // simplemente no haber snapshot de hace un año todavia) nunca debe
         // tumbar la ficha, StockDetailPage::render() ya sabe tratar `null`
-        // como "sin D2 que mostrar".
+        // como "cambio interanual no disponible".
+        //
+        // Se pasa `$companyProfile` (sector ENRIQUECIDO, ya obtenido justo
+        // arriba) en vez de `$analysis->getStock()->getCompany()`
+        // (correccion de Codex, 2026-09-06): ese `Company` base viene del
+        // proveedor de mercado activo y puede llegar con sector vacio
+        // (FmpParser nunca lo rellena), lo que dejaria sin excluir a una
+        // entidad financiera o inmobiliaria por simple ausencia de dato,
+        // no porque sus ratios sean realmente comparables.
         try {
             $fundamentalChange = (new FundamentalChangeAssessor($this->fundamentalsHistoryRepository))->assess(
                 $ticker,
                 $analysis->getStock()->getFundamentals(),
-                $analysis->getStock()->getCompany()
+                $companyProfile
             );
         } catch (Throwable) {
             $fundamentalChange = null;

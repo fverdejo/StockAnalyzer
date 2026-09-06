@@ -129,8 +129,28 @@ class FundamentalsHistoryRepository
      */
     public function findAsOf(string $ticker, DateTimeImmutable $date): ?array
     {
+        return $this->findAsOfWithDate($ticker, $date)['payload'] ?? null;
+    }
+
+    /**
+     * Igual que `findAsOf()`, pero ademas devuelve la fecha REAL del
+     * snapshot usado (`snapshot_date`), no la fecha solicitada. Necesario
+     * para `Services\FundamentalChangeAssessor` (D2 del diagnostico
+     * fundamental, ver versions.md): pedir "hace 365 dias" no garantiza que
+     * el snapshot encontrado sea de esa fecha exacta -- puede ser
+     * cualquier snapshot anterior disponible -- y la ficha de detalle debe
+     * mostrar la fecha real comparada, nunca asumir literalmente "hace un
+     * año" (revision de Codex, 2026-09-06). `findAsOf()` es un metodo fino
+     * sobre este para no duplicar la consulta ni cambiar su contrato
+     * existente, del que dependen `BacktestingService` y
+     * `FundamentalDeteriorationFlagger`.
+     *
+     * @return array{payload: array<string,float|null>, snapshotDate: DateTimeImmutable}|null
+     */
+    public function findAsOfWithDate(string $ticker, DateTimeImmutable $date): ?array
+    {
         $statement = $this->connection->getPdo()->prepare(
-            "SELECT fundamentals_payload
+            "SELECT snapshot_date, fundamentals_payload
                FROM {$this->table}
               WHERE ticker = :ticker AND snapshot_date <= :snapshot_date
            ORDER BY snapshot_date DESC
@@ -140,15 +160,22 @@ class FundamentalsHistoryRepository
             'ticker' => strtoupper($ticker),
             'snapshot_date' => $date->format('Y-m-d'),
         ]);
-        $payload = $statement->fetchColumn();
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
 
-        if (!is_string($payload)) {
+        if (!is_array($row) || !is_string($row['fundamentals_payload'] ?? null) || !is_string($row['snapshot_date'] ?? null)) {
             return null;
         }
 
-        $decoded = json_decode($payload, true);
+        $decoded = json_decode($row['fundamentals_payload'], true);
 
-        return is_array($decoded) ? $decoded : null;
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        return [
+            'payload' => $decoded,
+            'snapshotDate' => new DateTimeImmutable($row['snapshot_date']),
+        ];
     }
 
     /**

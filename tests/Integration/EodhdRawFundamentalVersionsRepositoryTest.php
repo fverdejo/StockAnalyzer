@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace StockAnalyzer\Tests\Integration;
 
 use DateTimeImmutable;
+use StockAnalyzer\Enums\EodhdFundamentalVersionStoreOutcome;
 use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
 
 /**
@@ -13,6 +14,14 @@ use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
  * `(ticker, api_version, section, payload_hash)` que hace posible la
  * deduplicacion no se puede probar sin MySQL de verdad (mismo motivo que
  * `EodhdRawFundamentalsRepositoryTest`).
+ *
+ * Los tres tests `testSecuenciaA*` (final del fichero) son el criterio de
+ * aceptacion LITERAL que pidio Codex el 2026-09-05/06 tras encontrar el bug
+ * de `INSERT IGNORE` en `d608747` (ver `versions.md`): A->A conserva un
+ * unico blob pero deja dos observaciones, A->B conserva dos blobs y dos
+ * observaciones, y A->B->A deja tres observaciones (solo dos blobs
+ * distintos) con `latestFor()` devolviendo A -- el ultimo ESTADO
+ * observado, no el ultimo BLOB insertado.
  */
 final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCase
 {
@@ -212,8 +221,8 @@ final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCas
         self::assertCount(2, $payloads);
         self::assertSame('{"v":1}', $payloads[0]['payload']);
         self::assertSame('{"v":2}', $payloads[1]['payload']);
-        self::assertSame('2026-09-01 10:00:00', $payloads[0]['fetched_at']);
-        self::assertSame('2026-09-20 10:00:00', $payloads[1]['fetched_at']);
+        self::assertSame('2026-09-01 10:00:00', $payloads[0]['observed_at_utc']);
+        self::assertSame('2026-09-20 10:00:00', $payloads[1]['observed_at_utc']);
     }
 
     public function testAllPayloadsForNoMezclaOtroTickerNiOtraSeccion(): void
@@ -226,5 +235,169 @@ final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCas
 
         self::assertCount(1, $payloads);
         self::assertSame('{"earnings":1}', $payloads[0]['payload']);
+    }
+
+    /**
+     * `store()` devuelve un resultado explicito (correccion del 2026-09-06
+     * al bug de `INSERT IGNORE` senalado por Codex) en vez de `void`: un
+     * llamador puede ahora saber si la captura recien completada aporto un
+     * blob nuevo o repitio contenido ya archivado, sin adivinarlo con un
+     * `count()` antes/despues.
+     */
+    public function testStoreDevuelveSiElBlobEsNuevoOYaExistia(): void
+    {
+        $primerResultado = $this->repository->store('AAPL', '{"v":1}', 'legacy', 'full', new DateTimeImmutable('2026-09-01'));
+
+        self::assertTrue($primerResultado->isNewVersion());
+        self::assertSame(EodhdFundamentalVersionStoreOutcome::NEW_VERSION, $primerResultado->outcome);
+
+        $segundoResultado = $this->repository->store('AAPL', '{"v":1}', 'legacy', 'full', new DateTimeImmutable('2026-09-02'));
+
+        self::assertFalse($segundoResultado->isNewVersion());
+        self::assertSame(EodhdFundamentalVersionStoreOutcome::DUPLICATE_CONTENT, $segundoResultado->outcome);
+        self::assertSame($primerResultado->versionId, $segundoResultado->versionId, 'mismo contenido, mismo blob');
+        self::assertNotSame(
+            $primerResultado->observationId,
+            $segundoResultado->observationId,
+            'cada captura real deja su propia observacion, aunque comparta blob'
+        );
+    }
+
+    /**
+     * Criterio de aceptacion A->A pedido por Codex (`versions.md`,
+     * 2026-09-06): la MISMA captura repetida dos veces conserva UN unico
+     * blob (deduplicado por hash), pero deja DOS observaciones -- antes del
+     * fix, `INSERT IGNORE` hacia que la segunda captura desapareciera sin
+     * dejar rastro, indistinguible de "nunca se ha vuelto a capturar".
+     */
+    public function testSecuenciaAaConservaUnBlobPeroDejaDosObservaciones(): void
+    {
+        $primeraCaptura = $this->repository->store(
+            'AAPL',
+            '{"v":"A"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-01 10:00:00')
+        );
+        $segundaCaptura = $this->repository->store(
+            'AAPL',
+            '{"v":"A"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-20 10:00:00')
+        );
+
+        self::assertTrue($primeraCaptura->isNewVersion());
+        self::assertFalse($segundaCaptura->isNewVersion());
+        self::assertSame($primeraCaptura->versionId, $segundaCaptura->versionId);
+        self::assertNotSame($primeraCaptura->observationId, $segundaCaptura->observationId);
+
+        self::assertSame(1, $this->repository->count(), 'un unico blob, deduplicado por hash');
+
+        $observaciones = $this->repository->allPayloadsFor('AAPL', 'calendar', 'earnings');
+        self::assertCount(2, $observaciones, 'DOS observaciones reales, aunque compartan el mismo blob');
+        self::assertSame('{"v":"A"}', $observaciones[0]['payload']);
+        self::assertSame('{"v":"A"}', $observaciones[1]['payload']);
+        self::assertSame($observaciones[0]['payload_hash'], $observaciones[1]['payload_hash']);
+        self::assertSame('2026-09-01 10:00:00', $observaciones[0]['observed_at_utc']);
+        self::assertSame('2026-09-20 10:00:00', $observaciones[1]['observed_at_utc']);
+
+        self::assertSame('{"v":"A"}', $this->repository->latestFor('AAPL', 'calendar', 'earnings'));
+    }
+
+    /**
+     * Criterio de aceptacion A->B pedido por Codex: un contenido distinto
+     * deja dos blobs y dos observaciones, y `latestFor()` devuelve el mas
+     * reciente (B). Ya cubierto en espiritu por
+     * `testUnContenidoDistintoSeConservaComoVersionNueva`, pero aqui se
+     * verifica ademas usando el vocabulario de observaciones que introduce
+     * esta correccion.
+     */
+    public function testSecuenciaAbConservaDosBlobsYDosObservaciones(): void
+    {
+        $capturaA = $this->repository->store(
+            'AAPL',
+            '{"v":"A"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-01 10:00:00')
+        );
+        $capturaB = $this->repository->store(
+            'AAPL',
+            '{"v":"B"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-20 10:00:00')
+        );
+
+        self::assertTrue($capturaA->isNewVersion());
+        self::assertTrue($capturaB->isNewVersion());
+        self::assertNotSame($capturaA->versionId, $capturaB->versionId);
+
+        self::assertSame(2, $this->repository->count());
+        self::assertCount(2, $this->repository->allPayloadsFor('AAPL', 'calendar', 'earnings'));
+        self::assertSame('{"v":"B"}', $this->repository->latestFor('AAPL', 'calendar', 'earnings'));
+    }
+
+    /**
+     * Criterio de aceptacion A->B->A pedido por Codex, el caso que de
+     * verdad exponia el bug: el valor cambia de A a B y luego VUELVE a A.
+     * Solo hay dos blobs distintos (A y B), pero tres observaciones deben
+     * quedar registradas -- y `latestFor()` debe devolver A, el ULTIMO
+     * ESTADO observado, no B solo porque su blob se inserto despues. Antes
+     * del fix, la tercera captura (A) colisionaba por hash con la primera
+     * fila ya existente, `INSERT IGNORE` la descartaba, y `latestFor()`
+     * (que resolvia por la fila de blob mas reciente) devolvia B.
+     */
+    public function testSecuenciaAbaDejaTresObservacionesYLatestForDevuelveElUltimoEstadoReal(): void
+    {
+        $primeraA = $this->repository->store(
+            'AAPL',
+            '{"v":"A"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-01 10:00:00')
+        );
+        $capturaB = $this->repository->store(
+            'AAPL',
+            '{"v":"B"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-10 10:00:00')
+        );
+        $segundaA = $this->repository->store(
+            'AAPL',
+            '{"v":"A"}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-20 10:00:00')
+        );
+
+        // Solo DOS blobs distintos (A y B), pese a TRES capturas: la
+        // tercera reutiliza el blob de la primera.
+        self::assertTrue($primeraA->isNewVersion());
+        self::assertTrue($capturaB->isNewVersion());
+        self::assertFalse($segundaA->isNewVersion());
+        self::assertSame($primeraA->versionId, $segundaA->versionId);
+        self::assertNotSame($primeraA->versionId, $capturaB->versionId);
+        self::assertSame(2, $this->repository->count(), 'solo dos blobs distintos: A y B');
+
+        // El ultimo ESTADO observado es A, no B.
+        self::assertSame(
+            '{"v":"A"}',
+            $this->repository->latestFor('AAPL', 'calendar', 'earnings'),
+            'latestFor() debe devolver el ultimo estado observado (A), no el ultimo blob nuevo insertado (B)'
+        );
+
+        // Las TRES observaciones deben poder reconstruirse en orden -- es
+        // lo que necesita E3 para estudiar como cambia una estimacion en el
+        // tiempo, incluidos los cambios que se revierten despues.
+        $observaciones = $this->repository->allPayloadsFor('AAPL', 'calendar', 'earnings');
+        self::assertCount(3, $observaciones);
+        self::assertSame('{"v":"A"}', $observaciones[0]['payload']);
+        self::assertSame('{"v":"B"}', $observaciones[1]['payload']);
+        self::assertSame('{"v":"A"}', $observaciones[2]['payload']);
+        self::assertSame($observaciones[0]['payload_hash'], $observaciones[2]['payload_hash']);
+        self::assertNotSame($observaciones[0]['payload_hash'], $observaciones[1]['payload_hash']);
     }
 }

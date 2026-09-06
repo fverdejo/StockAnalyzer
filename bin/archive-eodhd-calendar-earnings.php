@@ -161,7 +161,9 @@ foreach ($tickers as $index => $ticker) {
                 'earnings',
                 null,
                 200,
-                $symbolOverride ?? (str_contains($ticker, '.') ? $ticker : $ticker . '.US')
+                $symbolOverride ?? (str_contains($ticker, '.') ? $ticker : $ticker . '.US'),
+                new DateTimeImmutable($from),
+                new DateTimeImmutable($to)
             );
             printf('%s%s bytes archivados%s', $prefix, number_format(strlen($raw), 0, ',', '.'), PHP_EOL);
             ++$ok;

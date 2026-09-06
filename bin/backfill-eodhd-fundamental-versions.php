@@ -29,9 +29,14 @@ use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
  * informe/backfill de un solo uso de este directorio (ver
  * `bin/compare-fundamentals-history-v2110.php`).
  *
- * Idempotente: la clave UNIQUE `(ticker, api_version, section, payload_hash)`
- * de la migracion 025 hace que ejecutar este script dos veces no duplique
- * nada -- la segunda vez, todas las filas caen en "ya existia".
+ * Idempotente: antes de llamar a `store()` por cada ticker se comprueba
+ * `hasVersion('legacy', 'full')` -- ejecutar este script dos veces no
+ * vuelve a insertar nada, la segunda vez todas las filas caen en "ya
+ * existia" sin tocar la tabla. Esta comprobacion importa mas desde la
+ * correccion del 2026-09-06 (ver `versions.md`): `store()` ya NO deduplica
+ * en silencio la OBSERVACION (solo el blob por `payload_hash`), asi que sin
+ * este guardia repetir el backfill anhadiria una observacion nueva e
+ * identica por cada fila en cada repeticion.
  *
  * Uso:
  *   php bin/backfill-eodhd-fundamental-versions.php
@@ -74,6 +79,13 @@ foreach ($tickers as $ticker) {
     ++$index;
     $ticker = (string) $ticker;
 
+    if ($versions->hasVersion($ticker, 'legacy', 'full')) {
+        printf('[%3d/%3d] %-10s ya existia (idempotencia)%s', $index, $sourceCount, $ticker, PHP_EOL);
+        ++$alreadyExisted;
+
+        continue;
+    }
+
     $rowStatement->execute(['ticker' => $ticker]);
     $row = $rowStatement->fetch();
     $rowStatement->closeCursor();
@@ -107,17 +119,9 @@ foreach ($tickers as $ticker) {
         continue;
     }
 
-    $before = $versions->count();
     $versions->store($ticker, $payloadJson, 'legacy', 'full', $fetchedAt);
-    $after = $versions->count();
-
-    if ($after > $before) {
-        printf('[%3d/%3d] %-10s copiado%s', $index, $sourceCount, $ticker, PHP_EOL);
-        ++$copied;
-    } else {
-        printf('[%3d/%3d] %-10s ya existia (idempotencia)%s', $index, $sourceCount, $ticker, PHP_EOL);
-        ++$alreadyExisted;
-    }
+    printf('[%3d/%3d] %-10s copiado%s', $index, $sourceCount, $ticker, PHP_EOL);
+    ++$copied;
 }
 
 echo str_repeat('-', 62) . PHP_EOL;

@@ -16,7 +16,9 @@ use StockAnalyzer\Services\FundamentalChangeAssessor;
  * `FundamentalChangeAssessor`): clasificacion por mayoria de signo entre
  * los factores disponibles (margen operativo, ROIC, deuda/patrimonio,
  * conversion de caja), nunca por magnitud con un umbral inventado
- * (`auditor-estadistico`, 2026-09-05).
+ * (`auditor-estadistico`, 2026-09-05). `ESTABLE` (sin cambio real) y
+ * `MIXTO` (empate real entre mejora y deterioro) son veredictos distintos
+ * desde la correccion de Codex del 2026-09-06.
  */
 final class FundamentalChangeAssessorTest extends TestCase
 {
@@ -142,7 +144,13 @@ final class FundamentalChangeAssessorTest extends TestCase
         self::assertSame(FundamentalChangeVerdict::DETERIORANDO, $result->verdict);
     }
 
-    public function testEmpateDaVeredictoEstable(): void
+    /**
+     * Correccion de Codex (2026-09-06): un empate REAL entre factores que
+     * mejoran y factores que empeoran es `MIXTO`, no `ESTABLE`. `ESTABLE`
+     * se reserva para cuando ningun factor cambio de verdad (ver el
+     * siguiente test).
+     */
+    public function testEmpateEntreMejoraYDeterioroDaVeredictoMixto(): void
     {
         $repository = new InMemoryFundamentalsHistoryRepository();
         $repository->withFundamentalsSnapshot('ACME', [
@@ -150,10 +158,34 @@ final class FundamentalChangeAssessorTest extends TestCase
             'operatingMargin' => 20.0,
         ]);
 
-        // ROIC sube (mejora), margen baja (empeora): 1 contra 1, empate.
+        // ROIC sube (mejora), margen baja (empeora): 1 contra 1, empate
+        // real de direccion -- MIXTO, no "sin cambio".
         $result = (new FundamentalChangeAssessor($repository))->assess(
             'ACME',
             $this->fundamentals(roic: 14.0, operatingMargin: 16.0),
+            $this->company()
+        );
+
+        self::assertSame(FundamentalChangeVerdict::MIXTO, $result->verdict);
+    }
+
+    /**
+     * `ESTABLE` real: ningun factor cambio (los dos quedan dentro del
+     * ruido de `FundamentalChangeFactor::NOISE_EPSILON`), a diferencia del
+     * test anterior donde SI hay cambios reales mal etiquetados antes como
+     * "Estable".
+     */
+    public function testSinCambioRealEnNingunFactorDaVeredictoEstable(): void
+    {
+        $repository = new InMemoryFundamentalsHistoryRepository();
+        $repository->withFundamentalsSnapshot('ACME', [
+            'roic' => 10.0,
+            'operatingMargin' => 20.0,
+        ]);
+
+        $result = (new FundamentalChangeAssessor($repository))->assess(
+            'ACME',
+            $this->fundamentals(roic: 10.0, operatingMargin: 20.0),
             $this->company()
         );
 
@@ -220,5 +252,59 @@ final class FundamentalChangeAssessorTest extends TestCase
         );
 
         self::assertSame(FundamentalChangeVerdict::MEJORANDO, $result->verdict);
+    }
+
+    /**
+     * Correccion de Codex (2026-09-06): `findAsOf()` puede devolver
+     * cualquier snapshot anterior disponible, no exactamente el de hace
+     * 365 dias. El DTO debe exponer la fecha REAL (aqui, 2025-08-15, no
+     * "hace un año" calculado a partir de la fecha de evaluacion) para que
+     * la vista nunca finja una precision que no tiene.
+     */
+    public function testExponeLaFechaRealDelSnapshotAnteriorUsado(): void
+    {
+        $repository = new InMemoryFundamentalsHistoryRepository();
+        $repository->withFundamentalsSnapshotAt('ACME', '2025-08-15', [
+            'roic' => 10.0,
+            'operatingMargin' => 15.0,
+        ]);
+
+        $result = (new FundamentalChangeAssessor($repository))->assess(
+            'ACME',
+            $this->fundamentals(roic: 12.0, operatingMargin: 16.0),
+            $this->company(),
+            new DateTimeImmutable('2026-09-06')
+        );
+
+        self::assertNotNull($result->previousSnapshotDate);
+        self::assertSame('2025-08-15', $result->previousSnapshotDate->format('Y-m-d'));
+    }
+
+    /**
+     * Correccion de Codex (2026-09-06): si el snapshot mas cercano
+     * disponible es de hace mas de `MAX_SNAPSHOT_AGE_DAYS` (2 años), ya no
+     * es razonable llamarlo "cambio interanual" -- se trata como no
+     * evaluable, pero conservando la fecha real descartada para que la
+     * vista pueda explicar por que, no solo decir "sin historico".
+     */
+    public function testSnapshotDemasiadoAntiguoEsNoEvaluablePeroExponeLaFechaDescartada(): void
+    {
+        $repository = new InMemoryFundamentalsHistoryRepository();
+        $repository->withFundamentalsSnapshotAt('ACME', '2023-01-01', [
+            'roic' => 10.0,
+            'operatingMargin' => 15.0,
+        ]);
+
+        $result = (new FundamentalChangeAssessor($repository))->assess(
+            'ACME',
+            $this->fundamentals(roic: 12.0, operatingMargin: 16.0),
+            $this->company(),
+            new DateTimeImmutable('2026-09-06')
+        );
+
+        self::assertSame(FundamentalChangeVerdict::NO_EVALUABLE, $result->verdict);
+        self::assertSame([], $result->factors);
+        self::assertNotNull($result->previousSnapshotDate);
+        self::assertSame('2023-01-01', $result->previousSnapshotDate->format('Y-m-d'));
     }
 }

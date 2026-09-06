@@ -100,6 +100,31 @@ final class FundamentalHealthAssessorTest extends TestCase
         self::assertTrue($result->fcfNegativo);
     }
 
+    /**
+     * Bug real encontrado por Codex (revision de solo lectura de `7f91aef`,
+     * 2026-09-06): el test anterior anade tambien ROIC, asi que nunca
+     * ejercita el camino donde el FCF es el UNICO dato conocido. Con los
+     * otros cuatro factores nulos, `datosInsuficientes` se marcaba `true`
+     * a la vez que `fcfNegativo`, y `StockDetailPage` cortaba al ver
+     * `datosInsuficientes` sin llegar a mostrar la alerta real de FCF: el
+     * caso mas informativo (sabemos que el FCF es negativo) quedaba oculto
+     * detras del menos informativo (no hay datos suficientes).
+     */
+    public function testFcfNegativoComoUnicoDatoConocidoNoMarcaDatosInsuficientes(): void
+    {
+        $result = (new FundamentalHealthAssessor())->assess(
+            $this->fundamentals(freeCashFlow: -5_000_000.0),
+            $this->company()
+        );
+
+        self::assertFalse($result->sectorExcluded);
+        self::assertFalse($result->datosInsuficientes);
+        self::assertTrue($result->fcfNegativo);
+        self::assertNull($result->roic);
+        self::assertNull($result->operatingMargin);
+        self::assertNull($result->cashConversion);
+    }
+
     public function testFcfPositivoNoSeSeñala(): void
     {
         $result = (new FundamentalHealthAssessor())->assess(
@@ -122,11 +147,11 @@ final class FundamentalHealthAssessorTest extends TestCase
 
     /**
      * La leccion de P3.3 (versions.md, 2026-09-03/2026-09-04): ausencia de
-     * dato nunca debe leerse como ausencia de alerta. Los cuatro factores
-     * nulos deben marcar `datosInsuficientes`, no una salud aparentemente
-     * limpia.
+     * dato nunca debe leerse como ausencia de alerta. Los cinco factores
+     * nulos (incluido FCF desde la correccion de Codex del 2026-09-06)
+     * deben marcar `datosInsuficientes`, no una salud aparentemente limpia.
      */
-    public function testCuatroFactoresNulosMarcaDatosInsuficientes(): void
+    public function testCincoFactoresNulosMarcaDatosInsuficientes(): void
     {
         $result = (new FundamentalHealthAssessor())->assess(
             $this->fundamentals(),
