@@ -6,12 +6,11 @@ declare(strict_types=1);
 // desplegable del Home; el que se analiza por defecto lo fija
 // Application::DEFAULT_UNIVERSE ('largecap60' desde v2.86).
 //
-// 'general' ("Movimientos de hoy") es el unico universo dinamico: desde
-// v2.12, Application::resolveMoversUniverseTickers() lo construye en vivo
-// con las 20 acciones que mas suben y las 20 que mas bajan hoy segun el
-// screener de Yahoo Finance (ver Providers\YahooMarketMoversProvider).
-// La lista fija que lleva asociada solo se usa como respaldo si ese
-// screener falla (endpoint no oficial, puede cambiar sin aviso).
+// El universo dinamico 'general' ("Movimientos de hoy", las acciones que
+// mas suben/bajan segun el screener de Yahoo) se retiro por completo el
+// 2026-09-06 a peticion del usuario (ver versions.md, misma fecha): ya no
+// es seleccionable, y con el se retiraron YahooMarketMoversProvider,
+// CachedMarketMoversProvider y MarketMoversCacheRepository.
 return [
     'largecap60' => [
         'label' => 'EEUU liquidas 60',
@@ -22,18 +21,6 @@ return [
             'LIN', 'TMO', 'ACN', 'MCD', 'CSCO', 'ADBE', 'IBM', 'GE', 'QCOM', 'WFC',
             'CAT', 'TXN', 'PM', 'INTU', 'AMGN', 'DIS', 'GS', 'ISRG', 'VZ', 'NOW',
             'RTX', 'BKNG', 'SPGI', 'PFE', 'NKE', 'HON', 'LOW', 'UPS', 'BA', 'SBUX',
-        ],
-    ],
-    // Universo dinamico: la lista de abajo es solo el respaldo del screener.
-    'general' => [
-        'label' => 'Movimientos de hoy',
-        'tickers' => [
-            'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AVGO', 'BRK-B', 'JPM',
-            'LLY', 'V', 'XOM', 'UNH', 'MA', 'COST', 'NFLX', 'WMT', 'PG', 'JNJ',
-            'HD', 'ABBV', 'BAC', 'KO', 'CRM', 'ORCL', 'CVX', 'MRK', 'AMD', 'PEP',
-            'LIN', 'TMO', 'ACN', 'MCD', 'CSCO', 'ADBE', 'IBM', 'QCOM', 'WFC', 'CAT',
-            'TXN', 'INTU', 'AMGN', 'DIS', 'GS', 'ISRG', 'VZ', 'NOW', 'PFE', 'NKE',
-            'SAN.MC', 'BBVA.MC', 'IBE.MC', 'ITX.MC', 'REP.MC', 'TEF.MC', 'FER.MC', 'AMS.MC', 'CABK.MC', 'ELE.MC',
         ],
     ],
     'magnificent7' => [

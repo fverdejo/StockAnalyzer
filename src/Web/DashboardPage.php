@@ -48,7 +48,6 @@ class DashboardPage
         string $selectedUniverse = 'largecap60',
         array $universes = [],
         string $selectedRecommendation = '',
-        bool $moversUniverseIsLive = false,
         string $csrfToken = '',
         array $watchedTickers = [],
         ?array $sectorWeights = null,
@@ -63,7 +62,6 @@ class DashboardPage
         $recommendationOptions = self::renderRecommendationOptions($selectedRecommendation);
         $apiHref = '?page=api&universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
         $redirectTo = '?universe=' . urlencode($selectedUniverse) . '&tickers=' . urlencode($rawTickers) . '&recommendation=' . urlencode($selectedRecommendation);
-        $moversUniverseNote = self::renderMoversUniverseNote($selectedUniverse, $moversUniverseIsLive);
         $errorsHtml = self::renderErrors($errors);
         $cards = self::renderCards($results, $rawTickers);
         $topBuys = self::renderRecommendationList($results, ['BUY'], $rawTickers);
@@ -112,7 +110,6 @@ class DashboardPage
             <p class="muted panel-note"><a href="{$apiHref}">API JSON de este ranking</a></p>
         </section>
 
-        {$moversUniverseNote}
         {$errorsHtml}
         {$cards}
 
@@ -406,25 +403,5 @@ HTML;
         }
 
         return sprintf('<section class="panel errors"><strong>No se pudieron analizar algunos tickers.</strong><ul>%s</ul></section>', implode('', $items));
-    }
-
-    /**
-     * Nota de atribucion para el universo dinamico "Movimientos de hoy"
-     * (ver versions.md v2.12): de donde salen sus 20+20 tickers. Solo se
-     * muestra cuando ese universo esta activo, y desde `v2.86` advierte de
-     * lo que se midio sobre esa poblacion: no es la que el motor sabe
-     * puntuar, y cambia casi entera cada dia.
-     */
-    private static function renderMoversUniverseNote(string $selectedUniverse, bool $isLive): string
-    {
-        if ($selectedUniverse !== 'general') {
-            return '';
-        }
-
-        if ($isLive) {
-            return '<p class="muted panel-note">Universo "Movimientos de hoy": las 20 acciones que más suben y las 20 que más bajan hoy en el mercado de EEUU, según el listado "Day Gainers" / "Day Losers" de <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank" rel="noopener">Yahoo Finance</a>. <strong>No es una lista de candidatos a compra:</strong> son valores que ya se han movido mucho hoy, con menos datos fundamentales disponibles que un universo curado, y la lista cambia casi entera de un día para otro, así que una recomendación de ayer no se puede seguir aquí.</p>';
-        }
-
-        return '<p class="muted panel-note">No se ha podido consultar en vivo el listado de subidas/bajadas de Yahoo Finance; se muestra una lista de respaldo diversificada en su lugar.</p>';
     }
 }

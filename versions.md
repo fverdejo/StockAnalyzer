@@ -7033,3 +7033,24 @@ Nueva seccion "Qué hacer con esta posición" en la ficha de detalle, entre el d
 **Tests**: `PositionDecisionAdvisorTest.php` (nuevo) cubre los cinco comportamientos de ejemplo del encargo (menos el de exposicion, fuera de alcance), incluida la prioridad stop-perdido sobre deterioro fundamental y que solo `DETERIORANDO` dispara revision de tesis. `AlertServiceStopLossTest.php` gana un caso para `isBelowActiveStop()` (sigue reflejando "por debajo" aunque no se repita la alerta, y vuelve a `false` al recuperar el nivel). Verificado tambien por HTTP contra `ddev` real: la ficha de AAPL (sin posicion, `HOLD`) muestra correctamente "Esperar" con su motivo y condicion de revision.
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **683 tests, 1.884 assertions, OK** (1 skip preexistente, sube desde 674), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca; `Score`/`TechnicalScoreAnalyzer` no se tocan.
+
+---
+
+## 2026-09-06 (novena entrada) - Dos retiradas a peticion explicita del usuario: "Calor de cartera" y el universo "Movimientos de hoy"
+
+Estado: implementado y verificado.
+
+**"Calor de cartera" (v2.103) retirado por completo.** El usuario no le daba uso. Se elimino `DTO\PortfolioHeat`, `Services\PortfolioHeatCalculator` y su test dedicado, la seccion "Calor de cartera" de `Web\PortfolioPage` (metodo `renderHeat()` y su hueco en el `$body`), el parametro `?PortfolioHeat $heat` de `PortfolioPage::render()` (quedaba en medio de la firma, no al final: se ajusto la unica llamada real, en `Application::renderPortfolio()`), y los tres tests de `PortfolioPageTest.php` que fabricaban un `PortfolioHeat` para probarlo, sustituidos por un unico test que confirma que la cadena "Calor de cartera" ya no aparece nunca.
+
+**Universo "Movimientos de hoy" (`general`, dinamico desde `v2.12`) retirado por completo.** Ya no es la pantalla de entrada desde `v2.86` (medido entonces: puntua mucho peor y rota casi entera cada dia), y el usuario decide ahora quitarlo del todo, no solo dejar de usarlo por defecto. Se elimino:
+
+- La entrada `'general'` de `config/universes.php`.
+- `Application::MOVERS_UNIVERSE`/`GENERAL_MOVERS_COUNT`, el campo `$marketMoversProvider` y su construccion, `$moversUniverseIsLive`, y el metodo `resolveMoversUniverseTickers()` (con su rama en `resolveTickerRequest()`).
+- El parametro `$moversUniverseIsLive` de `DashboardPage::render()` y el metodo `renderMoversUniverseNote()` (la nota de atribucion al screener de Yahoo que solo se pintaba con ese universo activo).
+- `Interfaces\MarketMoversProviderInterface`, `Providers\YahooMarketMoversProvider`, `Providers\CachedMarketMoversProvider`, `Repository\MarketMoversCacheRepository` -- sin ningun otro consumidor, confirmado antes de borrar. La tabla `market_movers_cache` (migracion `010`) se deja tal cual, como el resto de migraciones ya aplicadas: nunca se reescribe el historial de migraciones, la tabla simplemente deja de usarse.
+- En `tests/Services/ApplicationTickerRequestTest.php`: la inyeccion por reflexion de un `MarketMoversProviderInterface` de prueba, y los tres tests dedicados al universo dinamico (resolucion en vivo, respaldo si el screener falla, respaldo si el screener devuelve vacio). Los tests que quedan (universo valido, universo desconocido cae en el curado por defecto, tickers manuales mandan, tickers que coinciden con un universo conocido lo conservan) siguen intactos.
+- `tests/Providers/CachedMarketMoversProviderCacheFailureTest.php` borrado entero (probaba una clase que ya no existe).
+
+Verificado por HTTP contra `ddev` real ademas de los tests: el Home ya no menciona "Movimientos de hoy" en ningun sitio.
+
+`ddev exec vendor/bin/phpunit` -- **668 tests, 1.845 assertions, OK** (1 skip preexistente, baja desde 683 por las eliminaciones, no por ninguna regresion). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**.

@@ -9,7 +9,6 @@ use ReflectionClass;
 use ReflectionMethod;
 use ReflectionProperty;
 use StockAnalyzer\Config\UniverseConfig;
-use StockAnalyzer\Interfaces\MarketMoversProviderInterface;
 use StockAnalyzer\Services\Application;
 use StockAnalyzer\Utils\TickerNormalizer;
 
@@ -45,18 +44,6 @@ final class ApplicationTickerRequestTest extends TestCase
             ->setValue($this->application, new UniverseConfig());
         (new ReflectionProperty(Application::class, 'tickerNormalizer'))
             ->setValue($this->application, new TickerNormalizer());
-        (new ReflectionProperty(Application::class, 'marketMoversProvider'))
-            ->setValue($this->application, new class implements MarketMoversProviderInterface {
-                public function getTopGainers(int $limit): array
-                {
-                    return ['GAIN1', 'GAIN2'];
-                }
-
-                public function getTopLosers(int $limit): array
-                {
-                    return ['LOSE1', 'LOSE2'];
-                }
-            });
     }
 
     protected function tearDown(): void
@@ -96,7 +83,6 @@ final class ApplicationTickerRequestTest extends TestCase
 
         self::assertSame('ibex35', $universe);
         self::assertContains('SAN.MC', $tickers);
-        self::assertNotContains('GAIN1', $tickers, 'No debe mezclarse con el universo dinamico.');
     }
 
     public function testUnUniversoDesconocidoCaeEnElCuradoPorDefecto(): void
@@ -107,30 +93,12 @@ final class ApplicationTickerRequestTest extends TestCase
         self::assertSame((new UniverseConfig())->tickers('largecap60'), $tickers);
     }
 
-    /**
-     * `v2.86`: la pantalla de entrada arranca en la lista curada, no en los
-     * movimientos del dia. El motivo esta medido (ver `Application::DEFAULT_UNIVERSE`):
-     * la poblacion de movers puntua mucho peor y rota casi entera cada dia.
-     */
-    public function testSinParametrosUsaElUniversoCuradoNoLosMovimientosDelDia(): void
+    public function testSinParametrosUsaElUniversoCuradoPorDefecto(): void
     {
         [, $tickers, $universe] = $this->resolve([]);
 
         self::assertSame('largecap60', $universe);
         self::assertSame((new UniverseConfig())->tickers('largecap60'), $tickers);
-        self::assertNotContains('GAIN1', $tickers, 'El Home ya no arranca con el screener en vivo.');
-    }
-
-    /**
-     * El universo dinamico sigue existiendo y funcionando: solo deja de ser
-     * la pantalla de entrada.
-     */
-    public function testElUniversoDeMovimientosSigueResolviendoseEnVivoSiSePide(): void
-    {
-        [, $tickers, $universe] = $this->resolve(['universe' => 'general']);
-
-        self::assertSame('general', $universe);
-        self::assertSame(['GAIN1', 'GAIN2', 'LOSE1', 'LOSE2'], $tickers);
     }
 
     /**
@@ -169,55 +137,5 @@ final class ApplicationTickerRequestTest extends TestCase
         [, , $universe] = $this->resolve(['universe' => 'magnificent7', 'tickers' => '   ']);
 
         self::assertSame('magnificent7', $universe, 'Un campo con solo espacios no es una entrada manual.');
-    }
-
-    /**
-     * Si el screener en vivo falla, la peticion no puede romperse: cae en
-     * la lista estatica de respaldo de `config/universes.php` (`v2.12`).
-     */
-    public function testSiElScreenerFallaSeUsaLaListaDeRespaldo(): void
-    {
-        (new ReflectionProperty(Application::class, 'marketMoversProvider'))
-            ->setValue($this->application, new class implements MarketMoversProviderInterface {
-                public function getTopGainers(int $limit): array
-                {
-                    throw new \RuntimeException('El screener no responde.');
-                }
-
-                public function getTopLosers(int $limit): array
-                {
-                    return [];
-                }
-            });
-
-        [, $tickers, $universe] = $this->resolve(['universe' => 'general']);
-
-        self::assertSame('general', $universe);
-        self::assertNotSame([], $tickers);
-        self::assertSame((new UniverseConfig())->tickers('general'), $tickers);
-    }
-
-    /**
-     * Un screener que responde pero sin ningun ticker es tan inservible
-     * como uno que falla, y debe tratarse igual.
-     */
-    public function testUnScreenerVacioTambienCaeEnElRespaldo(): void
-    {
-        (new ReflectionProperty(Application::class, 'marketMoversProvider'))
-            ->setValue($this->application, new class implements MarketMoversProviderInterface {
-                public function getTopGainers(int $limit): array
-                {
-                    return [];
-                }
-
-                public function getTopLosers(int $limit): array
-                {
-                    return [];
-                }
-            });
-
-        [, $tickers] = $this->resolve(['universe' => 'general']);
-
-        self::assertSame((new UniverseConfig())->tickers('general'), $tickers);
     }
 }

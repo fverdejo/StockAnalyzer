@@ -7,7 +7,6 @@ namespace StockAnalyzer\Tests\Web;
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 use StockAnalyzer\DTO\PortfolioConcentration;
-use StockAnalyzer\DTO\PortfolioHeat;
 use StockAnalyzer\Enums\TransactionType;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\Portfolio;
@@ -121,6 +120,16 @@ final class PortfolioPageTest extends TestCase
     }
 
     /**
+     * "Calor de cartera" (v2.103) se retiro el 2026-09-06 a peticion
+     * explicita del usuario: no le daba uso. Confirma que no queda ningun
+     * rastro visible en la pagina.
+     */
+    public function testElCalorDeCarteraNoSePinta(): void
+    {
+        self::assertStringNotContainsString('Calor de cartera', $this->render());
+    }
+
+    /**
      * `v2.87`, bloque 1 del rediseño: las posiciones abiertas son el motivo
      * de entrar en esta pagina y tienen que ir antes del grafico y del panel
      * de concentracion. Medido en navegador, ese orden las sube de y=1.271 a
@@ -145,84 +154,6 @@ final class PortfolioPageTest extends TestCase
         self::assertLessThan($evolucion, $posiciones, 'Las posiciones van antes del grafico de evolucion.');
         self::assertLessThan($concentracion, $evolucion, 'El grafico va antes de la concentracion.');
         self::assertLessThan($historial, $concentracion, 'El historial cierra la pagina.');
-    }
-
-    /**
-     * `v2.87`, bloque 3: los repartos de concentracion son barras y no
-     * listas de etiqueta + porcentaje, y las que superan el umbral se
-     * pintan ademas en `--warn`. Sigue siendo asi cuando no se conoce el
-     * sector de ninguna posicion (este fixture no lo pasa): sin color de
-     * sector con el que sustituirlo, `--warn` es el unico que queda. Ver
-     * `testLasBarrasPorPosicionLlevanElColorDeSuSector()` para el caso con
-     * sector conocido, desde `v2.95`.
-     */
-    public function testSinCalorNoSePintaElPanel(): void
-    {
-        self::assertStringNotContainsString('Calor de cartera', $this->render());
-    }
-
-    public function testConCalorPorDebajoDelUmbralNoAparecePanelNotice(): void
-    {
-        $heat = new PortfolioHeat(1000.0, ['AAA' => 5.0]);
-
-        $html = $this->renderWithHeat($heat);
-
-        self::assertStringContainsString('Calor de cartera', $html);
-        self::assertStringContainsString('5,00%', $html);
-        self::assertStringNotContainsString('perderías un', $html);
-    }
-
-    public function testConCalorPorEncimaDelUmbralAvisaConPanelNotice(): void
-    {
-        $heat = new PortfolioHeat(1000.0, ['AAA' => 20.0]);
-
-        $html = $this->renderWithHeat($heat);
-
-        self::assertStringContainsString('perderías un', $html);
-        self::assertStringContainsString('20,00%', $html);
-    }
-
-    public function testLasPosicionesExcluidasSeIndicanComoCotaInferior(): void
-    {
-        $heat = new PortfolioHeat(1000.0, ['AAA' => 5.0], ['BBB']);
-
-        $html = $this->renderWithHeat($heat);
-
-        self::assertStringContainsString('cota inferior', $html);
-        self::assertStringContainsString('BBB', $html);
-    }
-
-    private function renderWithHeat(PortfolioHeat $heat): string
-    {
-        $holding = new Holding('ADBE', 5.0, 250.41, 265.21, null, 1082.0, 1146.0);
-
-        $portfolio = new Portfolio(
-            [$holding],
-            [],
-            0.0,
-            ['ADBE' => 265.21],
-            ['ADBE' => 'USD'],
-            0.8649,
-            ['USD' => 0.8649],
-            0.0,
-            null
-        );
-
-        return PortfolioPage::render(
-            $this->user(),
-            $portfolio,
-            'token',
-            null,
-            null,
-            ['labels' => [], 'values' => []],
-            [],
-            0,
-            [],
-            [],
-            [],
-            null,
-            $heat
-        );
     }
 
     public function testLaConcentracionSePintaConBarrasYMarcaLasQueSuperanElUmbral(): void
@@ -517,7 +448,6 @@ final class PortfolioPageTest extends TestCase
             [],
             [],
             [],
-            null,
             null,
             $pageNum
         );
