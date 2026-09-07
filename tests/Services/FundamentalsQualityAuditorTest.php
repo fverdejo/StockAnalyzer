@@ -114,6 +114,63 @@ final class FundamentalsQualityAuditorTest extends TestCase
         self::assertSame([], array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_before_period_end')));
     }
 
+    /**
+     * Caso real (`versions.md`, hallazgo del 2026-09-07): SAN.MC y el resto
+     * del universo Ibex tienen filing_date IDENTICO a la fecha de cierre en
+     * la inmensa mayoria de sus trimestres desde 2020 -- EODHD no reporta
+     * la fecha real de publicacion para estos emisores, solo repite el
+     * cierre del periodo.
+     */
+    public function testDetectaFilingDateIdenticoAFechaDeCierre(): void
+    {
+        $payload = $this->payload(
+            [$this->income('2025-03-31', '2025-03-31')], // filing_date = date, sospechoso
+            [$this->balance('2025-03-31', '2025-05-02')],
+            [$this->cashFlow('2025-03-31', '2025-05-02')]
+        );
+
+        $issues = $this->auditor()->auditRawPayload($payload, 'SAN.MC');
+
+        $types = array_map(static fn ($i) => $i->type, $issues);
+        self::assertContains('filing_date_placeholder', $types);
+
+        $issue = array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_date_placeholder'))[0];
+        self::assertSame('warning', $issue->severity);
+    }
+
+    public function testNoMarcaFilingDatePosteriorComoPlaceholder(): void
+    {
+        $payload = $this->payload(
+            [$this->income('2025-03-31', '2025-05-02')],
+            [$this->balance('2025-03-31', '2025-05-02')],
+            [$this->cashFlow('2025-03-31', '2025-05-02')]
+        );
+
+        $issues = $this->auditor()->auditRawPayload($payload, 'ACME');
+
+        self::assertSame([], array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_date_placeholder')));
+    }
+
+    /**
+     * El chequeo solo lee Income_Statement (la unica seccion cuyo
+     * filing_date usa EodhdFiscalPeriodProvider::parse()): un
+     * filing_date==date en Balance_Sheet/Cash_Flow, sin que Income_Statement
+     * tenga el mismo problema, no debe marcarse -- repetirlo ahi
+     * triplicaria el mismo hallazgo sin aportar nada nuevo.
+     */
+    public function testNoRepiteElHallazgoParaBalanceOCashFlow(): void
+    {
+        $payload = $this->payload(
+            [$this->income('2025-03-31', '2025-05-02')],
+            [$this->balance('2025-03-31', '2025-03-31')], // filing_date = date, pero en Balance_Sheet
+            [$this->cashFlow('2025-03-31', '2025-03-31')] // idem en Cash_Flow
+        );
+
+        $issues = $this->auditor()->auditRawPayload($payload, 'ACME');
+
+        self::assertSame([], array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_date_placeholder')));
+    }
+
     public function testDetectaPeriodoDuplicadoConValoresDistintos(): void
     {
         $payload = $this->payload(

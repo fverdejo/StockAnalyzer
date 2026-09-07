@@ -114,6 +114,12 @@ final class FundamentalsQualityAuditor
 
         $issues = [...$issues, ...$this->checkNegativeShares($ticker, $payload['outstandingShares'] ?? null)];
         $issues = [...$issues, ...$this->checkNegativeDebt($ticker, $this->rawQuarterlyRows($financials['Balance_Sheet'] ?? null))];
+        // Solo Income_Statement: es la unica seccion cuyo filing_date lee
+        // EodhdFiscalPeriodProvider::parse() para construir FiscalPeriod
+        // (Balance_Sheet/Cash_Flow tienen su propio filing_date en el JSON,
+        // pero el codigo no lo usa; repetir el chequeo ahi triplicaria el
+        // mismo hallazgo sin aportar nada nuevo).
+        $issues = [...$issues, ...$this->checkFilingDatePlaceholder($ticker, $this->rawQuarterlyRows($financials['Income_Statement'] ?? null))];
 
         return $issues;
     }
@@ -280,6 +286,55 @@ final class FundamentalsQualityAuditor
                         $statement,
                         $periodEnd->format('Y-m-d'),
                         $filingDate->format('Y-m-d')
+                    )
+                );
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * `filing_date` identico a `date` (cierre del periodo): sospechoso de
+     * ser un valor de relleno de EODHD en vez de la fecha real de
+     * publicacion, que en la practica llega semanas o meses despues del
+     * cierre. No es imposible en si mismo (una publicacion excepcionalmente
+     * rapida el mismo dia del cierre puede darse alguna vez), por eso es `warning` y no
+     * `error` como `checkFilingBeforePeriodEnd` -- pero investigado el
+     * `2026-09-07` (ver versions.md) resulto ser sistemico, no anecdotico:
+     * los 35/35 tickers `.MC` (Ibex) tienen esto en el 96-100% de sus
+     * trimestres desde 2020, igual que un grupo de ADR latinoamericanos y
+     * asiaticos (ITUB, BABA, WIT...), mientras que EEUU (AAPL, MSFT) esta
+     * limpio en el mismo periodo. `PointInTimeFundamentalsBuilder` filtra
+     * estrictamente por `filingDate <= D`: si `filing_date` es un
+     * placeholder igual al cierre, el builder cree que el trimestre era
+     * publico antes de lo real (look-ahead bias), aunque las CIFRAS en si
+     * (TTM, ratios) sean correctas -- distinto del bug de `v2.110`, que
+     * alteraba la magnitud, no la ventana de visibilidad.
+     *
+     * @param list<array<string,mixed>> $incomeRows
+     * @return list<FundamentalsQualityIssue>
+     */
+    private function checkFilingDatePlaceholder(string $ticker, array $incomeRows): array
+    {
+        $issues = [];
+
+        foreach ($incomeRows as $row) {
+            $periodEnd = is_string($row['date'] ?? null) ? $row['date'] : null;
+            $filingDate = is_string($row['filing_date'] ?? null) ? $row['filing_date'] : null;
+
+            if ($periodEnd === null || $filingDate === null || $filingDate === '') {
+                continue;
+            }
+
+            if ($filingDate === $periodEnd) {
+                $issues[] = new FundamentalsQualityIssue(
+                    $ticker,
+                    'filing_date_placeholder',
+                    'warning',
+                    sprintf(
+                        'Income_Statement: trimestre %s con filing_date identico a la fecha de cierre (candidato a valor de relleno de EODHD en vez de la fecha real de publicacion -- ver versions.md, hallazgo del 2026-09-07).',
+                        $periodEnd
                     )
                 );
             }
