@@ -7160,3 +7160,28 @@ Estado: implementado y verificado, siguiendo el plan anotado en la entrada anter
 Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **656 tests, 1.780 assertions, OK** (sin cambios, no se toco codigo de `src/`), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
 
 **Siguiente paso real (en curso):** auditar calidad con `FundamentalsQualityAuditor` sobre los 400 tickers (incluido el chequeo `filing_date_placeholder` de la entrada de hoy, para confirmar que EEUU mid-cap esta limpio) y, si la calidad es buena, predeclarar y ejecutar `mode=fundamental` de `runCrossSectional()` sobre este universo.
+
+---
+
+## 2026-09-07 (cuarta entrada) - Score fundamental repetido en `sp400`: veredicto NULO en un universo genuinamente independiente, cierra la condicion del 2026-08-21
+
+Estado: medido y cerrado. Con esto se completa la cadena de trabajo de hoy (universo curado -> backfill -> auditoria de calidad -> diseño predeclarado -> medicion), y se cumple por fin la condicion que el usuario puso el `2026-08-21`: repetir la investigacion del score fundamental en un universo que no sea otro recorte de large-cap EEUU.
+
+**Auditoria de calidad sobre los 400 tickers**: `filing_date_placeholder` aparece en 368/400 tickers en el TOTAL de su historia (6.843 hallazgos), una cifra que en aislado alarma, pero que resulta estar concentrada en historico antiguo -- filtrado a trimestres desde 2020 (la ventana que realmente pesa en el backtest de 10 años), el agregado baja a **2,9% (298/10.298)**, con **383/400 tickers (95,8%) por debajo del 25%**. Confirma que EEUU mid-cap es un regimen limpio, mismo patron que `AAPL`/`MSFT` (0% desde 2020, ~20% historico concentrado antes de 2010) y radicalmente distinto de Ibex35/ADR (35/35 y 47% respectivamente, entrada de esta misma mañana).
+
+**Diseño predeclarado por `auditor-estadistico`, ANTES de ejecutar nada** (ver tambien la nota metodologica): (1) excluir tickers con >=25% de trimestres `filing_date_placeholder` desde 2020 -- mismo umbral ya calculado, no elegido tras ver alphas; el sesgo que introduce es look-ahead, que INFLARIA una señal real si la hubiera, asi que dejarlos dentro habria sesgado a favor de encontrar algo, no en contra. (2) Bonferroni N=2 (horizontes 20/60), umbral |t|>=2,24, SIN acumular contra las dos mediciones previas en large-cap (poblacion genuinamente distinta, mismo criterio que P3.3 vs P3.4 el 2026-09-03). (3) Split-half obligatorio solo si algun horizonte cruza 1,96. (4) **Limitacion real documentada de antemano**: `index_membership` solo tiene membresia point-in-time real para `GSPC` (S&P 500); `sp400` no la tiene, asi que la medicion usa la lista de HOY (holdings de `IJH`) aplicada a los 10 años completos, sin filtro de membresia por fecha (`indexCode=null`) -- sesgo de supervivencia real, distinto del problema de comparaciones multiples, que hace esta medicion menos limpia que P3.3/`v2.114` en ese aspecto concreto.
+
+**Filtro de calidad aplicado** (mismo patron P3.1 que las mediciones anteriores, mas el gate nuevo): 17 tickers excluidos por `filing_before_period_end` (el gate ya usado siempre) + 17 tickers excluidos por `filing_date_placeholder>=25%` (el gate nuevo de hoy), sin solape entre ambos conjuntos -- **34 de 400, universo final 366 tickers**, comparable a los ~610 de P3.3/`v2.114` aunque algo menor.
+
+**Resultado, `BacktestingService::runCrossSectional(mode='fundamental', indexCode=null)`, 10 años (2016-2026):**
+
+| Horizonte | Fechas | Alpha medio | t pareado | Umbral 1,96 | Umbral Bonferroni 2,24 |
+|---|---|---|---|---|---|
+| 20 sesiones | 121 | -0,40 pp | **-1,52** | no cruza | no cruza |
+| 60 sesiones | 40 | -1,63 pp | **-1,80** | no cruza | no cruza |
+
+**Veredicto NULO en ambos horizontes**, ninguno cerca del umbral Bonferroni. Split-half NO necesario (ningun horizonte cruzo siquiera 1,96, condicion 3 del diseño predeclarado). Un matiz que se documenta sin sobre-interpretarlo: el SIGNO es negativo en los dos horizontes (top-10 por score fundamental RINDE PEOR que la media del universo mid-cap), al contrario que el signo positivo-pero-nulo de las dos mediciones en large-cap (t=0,90/0,31 en P3.3, t=1,17/0,61 en `v2.114`). Con `|t|` maximo de 1,80, muy lejos incluso del umbral sin corregir, esta diferencia de signo no es una señal, es ruido -- no autoriza ninguna conclusion sobre si el fundamental "funciona al reves" en mid-cap; simplemente confirma que **tres mediciones independientes del mismo diseño (large-cap x2, mid-cap x1) no encuentran ninguna ventaja demostrable**, en ninguna direccion.
+
+**Con esto, la condicion del usuario del `2026-08-21` queda satisfecha y la via del "score fundamental" como predictor cross-sectional a 20/60 dias queda cerrada tambien para mid-cap EEUU**, con la misma honestidad que P3.3/`v2.114`: nulo en la muestra medida, sin descartar que otro regimen de mercado (small-cap puro via `IJR`, ya descargado en `storage/scratch/ijr_holdings.csv` si se quisiera una cuarta replica) de una respuesta distinta. `config/weights.php` no se toca.
+
+Script de medicion (`storage/scratch/run_sp400_fundamental_backtest.php`, no versionado, mismo patron que el resto de scripts de investigacion de esta carpeta) y resultado completo (`sp400_fundamental_backtest_results.json`, con las 161 fechas individuales) conservados para reproducibilidad. No se toca ningun archivo de `src/`.
