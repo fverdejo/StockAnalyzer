@@ -7143,6 +7143,20 @@ Estado: implementado y verificado. El usuario elige explicitamente esta via (fre
 
 Total de tickers unicos en `config/universes.php` tras esta entrada: **1.771** (sube desde 1.407 del `2026-09-06`). `tests/Utils/UniverseTickerResolverTest.php` actualizado con la cifra real.
 
-**Pendiente, siguiente paso real (no hecho hoy):** hacer backfill de fundamentales de EODHD para los 364 tickers genuinamente nuevos (gasto real de cuota, ~3.640 unidades de las 100.000/dia disponibles -- lejos del limite), auditar su calidad con `FundamentalsQualityAuditor` (incluido el chequeo `filing_date_placeholder` nuevo de la entrada anterior, para confirmar que EEUU mid-cap esta limpio como se espera del mismo regimen regulatorio que `sp500`/`largecap60`) y solo entonces predeclarar y ejecutar `mode=fundamental` sobre este universo.
-
 Verificado: `ddev exec vendor/bin/phpunit` -- **656 tests, 1.780 assertions, OK** (1 skip preexistente), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-07 (tercera entrada) - Backfill de fundamentales EODHD completo para `sp400`: 400/400 archivados, 396/400 con historico point-in-time (929.785 filas)
+
+Estado: implementado y verificado, siguiendo el plan anotado en la entrada anterior.
+
+**Archivado crudo**: `bin/archive-eodhd-fundamentals.php` (sin `--tickers`, recorre TODOS los universos de `config/universes.php`) archivo los 400/400 tickers de `sp400` con exito. De paso proceso tambien los ~1251 tickers de `msci_world` nunca archivados hasta hoy: **384 fallaron con 404**, exclusivamente tickers con sufijo de bolsa internacional (`.T` Japon, `.L` Londres, `.DE` Alemania, `.AX` Australia, `.SI` Singapur, `.MI` Italia, `.NZ` Nueva Zelanda, `.TA` Israel) -- confirma empiricamente, para un universo mucho mas amplio que antes, que el plan "Fundamentals Data Feed" de EODHD no cubre estas bolsas (ya se sospechaba por el aviso existente de `PointInTimeFundamentalsBuilder.php:171` sobre GBp/agorot "sin uso activo hoy fuera de EEUU/.MC"). Ningun ticker de `sp400` aparece en la lista de errores (verificado por patron de sufijo, 0 coincidencias). Gasto real de cuota: 705 archivados + 384 con error = 1.089 llamadas, muy por debajo del limite de 100.000/dia. Total en `eodhd_raw_fundamentals` tras esto: 1.647 tickers (sube desde 890).
+
+**Serie diaria point-in-time**: la reconstruccion existente (`bin/regenerate-fundamentals-history-v2110.php`) solo escribe en la tabla paralela `fundamentals_history_v2110` (usada para la comparacion antes/despues de `v2.110`, ya cerrada e intercambiada en produccion). Como hace falta la misma logica -- leer el JSON ya archivado, sin red, cruzar con precios de Yahoo -- pero escribiendo en la tabla REAL, se crea **`bin/backfill-fundamentals-history-from-archive.php`** (nuevo, generico y reutilizable para el mismo caso en el futuro: "universo nuevo ya archivado, hace falta su serie diaria"). Reanudable por defecto (`countSnapshots() > 5` salta un ticker ya cubierto, `--force` lo repite), acepta `--universe=` o `--tickers=`. Ejecutado sobre `sp400`: **396/400 rellenados** (4 saltados por ya tener historico previo via solape con otro universo, p.ej. `AAL`), **0 errores**, **929.785 filas nuevas** en `fundamentals_history`.
+
+**Tests**: ninguno nuevo -- el script reutiliza integramente clases ya testeadas (`EodhdFiscalPeriodProvider::parse()`, `PointInTimeFundamentalsBuilder`, `FundamentalsHistoryRepository`), mismo patron de "script sin tests propios que orquesta piezas ya probadas" que `bin/regenerate-fundamentals-history-v2110.php` y `bin/backfill-fundamentals.php`.
+
+Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **656 tests, 1.780 assertions, OK** (sin cambios, no se toco codigo de `src/`), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+**Siguiente paso real (en curso):** auditar calidad con `FundamentalsQualityAuditor` sobre los 400 tickers (incluido el chequeo `filing_date_placeholder` de la entrada de hoy, para confirmar que EEUU mid-cap esta limpio) y, si la calidad es buena, predeclarar y ejecutar `mode=fundamental` de `runCrossSectional()` sobre este universo.
