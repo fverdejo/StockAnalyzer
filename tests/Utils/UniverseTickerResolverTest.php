@@ -127,6 +127,6 @@ final class UniverseTickerResolverTest extends TestCase
         $unique = $resolver->allUniverseTickers();
 
         self::assertGreaterThan(60, count($unique));
-        self::assertSame(1407, count($unique));
+        self::assertSame(1771, count($unique));
     }
 }

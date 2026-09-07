@@ -159,6 +159,76 @@ return [
             'WDAY', 'XEL',
         ],
     ],
+    // Curado el 2026-09-07 desde el CSV publico de holdings de iShares Core
+    // S&P Mid-Cap ETF (IJH, fondo de replica fisica/muestreo representativo,
+    // no sintetico -- mismo criterio de fuente que 'msci_world'), filtrado a
+    // Asset Class=Equity (407 filas) y deduplicado (7 filas Type=SWAP que
+    // repiten el ticker de una tenencia EQUITY ya contada) = 400 tickers
+    // unicos. Ningun ticker fabricado de memoria: todos vienen literalmente
+    // del CSV descargado. Verificados 400/400 contra el endpoint de Yahoo
+    // Finance el mismo dia (cotizan hoy, EQUITY, bolsa EEUU). Un caso de
+    // formato, mismo patron que BRKB->BRK-B en 'msci_world': el CSV escribe
+    // "MOGA" (Moog Inc. Clase A) sin separador, corregido a mano a "MOG-A"
+    // tras confirmar en Yahoo. 17 tickers son OPV/spin-offs de 2021-2025
+    // (BROS, TOST, KD, ESAB, CRBG, NXT, CR, TLN, KNF, CAVA, SN, CART, BTSG,
+    // AHR, ULS, SARO, SOLS) con menos de ~5 años de historico, no un fallo de
+    // datos. 36/400 ya aparecian en otro universo de este fichero (sobre
+    // todo 'financials'/'healthcare'/'industrials'/'msci_world'); los 364
+    // restantes no se habian usado nunca en un backtest de este proyecto.
+    // A DIFERENCIA de 'sp500'/'nasdaq100' (mismo aviso "no apto como
+    // universo independiente" de sus comentarios): este SI se añade
+    // especificamente para eso -- repetir la investigacion del "score
+    // fundamental" (P3.3/v2.114, veredicto nulo) en un regimen de mercado
+    // genuinamente distinto (mid-cap, no large-cap EEUU), condicion que
+    // el usuario puso el 2026-08-21 antes de volver a medir. Ver
+    // versions.md, entrada del 2026-09-07, para el intento previo con los
+    // universos ADR que resulto invalido por datos de EODHD (filing_date
+    // de relleno) y el porque de elegir IJH sobre IJR/una mezcla de ambos.
+    'sp400' => [
+        'label' => 'S&P MidCap 400',
+        'tickers' => [
+            'AA', 'AAL', 'AAON', 'ACI', 'ACM', 'ADC', 'AEIS', 'AFG', 'AGCO', 'AHR',
+            'AIT', 'ALGM', 'ALK', 'ALLY', 'ALSN', 'ALV', 'AM', 'AMG', 'AMH', 'AMKR',
+            'AN', 'ANF', 'APG', 'APPF', 'AR', 'ARMK', 'ARW', 'ARWR', 'ASB', 'ASH',
+            'ATI', 'ATR', 'AVAV', 'AVNT', 'AVT', 'AVTR', 'AXTA', 'AYI', 'BAH', 'BBWI',
+            'BC', 'BCO', 'BDC', 'BHF', 'BILL', 'BIO', 'BJ', 'BKH', 'BMRN', 'BRKR',
+            'BROS', 'BRX', 'BSY', 'BTSG', 'BURL', 'BWA', 'BWXT', 'BYD', 'CACI', 'CAR',
+            'CART', 'CAVA', 'CBSH', 'CBT', 'CCK', 'CDE', 'CDP', 'CELH', 'CFR', 'CG',
+            'CGNX', 'CHDN', 'CHE', 'CHH', 'CHRD', 'CHWY', 'CLF', 'CLH', 'CMC', 'CNH',
+            'CNM', 'CNO', 'CNX', 'COKE', 'COLB', 'COLM', 'CPRI', 'CR', 'CRBG', 'CROX',
+            'CRS', 'CRUS', 'CSL', 'CTRE', 'CUBE', 'CUZ', 'CVLT', 'CW', 'CXT', 'CYTK',
+            'DAR', 'DBX', 'DCI', 'DINO', 'DKS', 'DLB', 'DOCN', 'DOCS', 'DOCU', 'DT',
+            'DTM', 'DUOL', 'DY', 'EEFT', 'EGP', 'EHC', 'ELAN', 'ELF', 'ELS', 'ENS',
+            'ENSG', 'ENTG', 'EPR', 'EQH', 'ESAB', 'ESNT', 'EVR', 'EWBC', 'EXEL', 'EXLS',
+            'EXP', 'EXPO', 'FAF', 'FBIN', 'FCFS', 'FCN', 'FFIN', 'FHI', 'FHN', 'FIVE',
+            'FLG', 'FLR', 'FLS', 'FN', 'FNB', 'FND', 'FNF', 'FOUR', 'FR', 'FTI',
+            'G', 'GAP', 'GATX', 'GBCI', 'GEF', 'GGG', 'GHC', 'GLPI', 'GME', 'GMED',
+            'GNTX', 'GPK', 'GWRE', 'GXO', 'H', 'HAE', 'HALO', 'HGV', 'HIMS', 'HL',
+            'HLI', 'HLNE', 'HOG', 'HOMB', 'HQY', 'HR', 'HRB', 'HWC', 'HXL', 'IBOC',
+            'IDA', 'IDCC', 'IESC', 'ILMN', 'INGR', 'IPGP', 'IRT', 'ITT', 'JAZZ', 'JEF',
+            'JLL', 'KBH', 'KBR', 'KD', 'KEX', 'KNF', 'KNSL', 'KNX', 'KRC', 'KRG',
+            'KRYS', 'KTOS', 'LAD', 'LAMR', 'LEA', 'LECO', 'LFUS', 'LIVN', 'LNTH', 'LOPE',
+            'LPX', 'LSCC', 'LSTR', 'M', 'MANH', 'MAT', 'MEDP', 'MIDD', 'MKSI', 'MLI',
+            'MMS', 'MOG-A', 'MOH', 'MORN', 'MP', 'MSA', 'MSM', 'MTDR', 'MTG', 'MTN',
+            'MTSI', 'MTZ', 'MUR', 'MUSA', 'MZTI', 'NBIX', 'NEU', 'NFG', 'NJR', 'NLY',
+            'NNN', 'NOV', 'NOVT', 'NTNX', 'NVST', 'NVT', 'NWE', 'NXST', 'NXT', 'NYT',
+            'OC', 'OGE', 'OGS', 'OHI', 'OKTA', 'OLED', 'OLLI', 'OLN', 'ONB', 'ONTO',
+            'OPCH', 'ORA', 'ORI', 'OSK', 'OVV', 'OZK', 'P', 'PAG', 'PATH', 'PB',
+            'PBF', 'PCTY', 'PEGA', 'PEN', 'PFGC', 'PII', 'PINS', 'PK', 'PLNT', 'PNFP',
+            'POR', 'POST', 'PPC', 'PR', 'PRI', 'PSN', 'PVH', 'QLYS', 'R', 'RBA',
+            'RBC', 'REXR', 'RGA', 'RGEN', 'RGLD', 'RH', 'RLI', 'RMBS', 'RNR', 'ROIV',
+            'ROKU', 'RPM', 'RRC', 'RRX', 'RS', 'RYAN', 'RYN', 'SAIA', 'SAIC', 'SAM',
+            'SANM', 'SARO', 'SBRA', 'SCI', 'SEIC', 'SF', 'SFM', 'SGI', 'SHC', 'SIGI',
+            'SIRI', 'SITM', 'SLAB', 'SLGN', 'SLM', 'SMG', 'SMTC', 'SN', 'SNX', 'SOLS',
+            'SON', 'SPXC', 'SR', 'SSB', 'SSD', 'ST', 'STAG', 'STRL', 'STWD', 'SUI',
+            'SWX', 'SYNA', 'TCBI', 'TEX', 'THC', 'THG', 'THO', 'TKR', 'TLN', 'TNL',
+            'TOL', 'TOST', 'TREX', 'TRU', 'TTC', 'TTEK', 'TTMI', 'TWLO', 'TXNM', 'TXRH',
+            'UBSI', 'UFPI', 'UGI', 'ULS', 'UMBF', 'UNM', 'USFD', 'UTHR', 'VAL', 'VC',
+            'VFC', 'VIAV', 'VICR', 'VLY', 'VMI', 'VNO', 'VNOM', 'VNT', 'VOYA', 'VVV',
+            'WAL', 'WCC', 'WEX', 'WFRD', 'WH', 'WHR', 'WING', 'WLK', 'WMG', 'WMS',
+            'WPC', 'WSO', 'WTFC', 'WTRG', 'WTS', 'WWD', 'XPO', 'XRAY', 'YETI', 'ZION',
+        ],
+    ],
     // Composicion completa verificada contra la revision oficial del comite
     // asesor tecnico del IBEX 35 (BME, revision num. 136 del 22/06/2026, sin
     // cambios desde la num. 130 del 22/07/2024 que incluyo PUIG y excluyo MEL).
