@@ -94,4 +94,42 @@ class ScoreWeights
 
         return $result;
     }
+
+    /**
+     * Categorias que este proyecto entiende como "el bloque fundamental"
+     * (FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND, ver `ScoreCategory::maxScore()`
+     * y la rama `feature/solo-tecnico`), como porcentaje del maximo total
+     * vigente. Añadido tras la auditoria Astra/Codex del `2026-09-08`
+     * (`BacktestPage`, aviso de fundamentales point-in-time): antes ese
+     * aviso citaba un "56%" fijo, que dejo de ser cierto en cuanto estas
+     * cuatro categorias pasaron a pesar 0 -- este metodo calcula la cifra
+     * REAL con los pesos vigentes (los de `config/weights.php` si hay
+     * overrides, si no los de `ScoreCategory::maxScore()`), para que nunca
+     * vuelva a quedarse desactualizado si los pesos cambian.
+     *
+     * @return float 0.0 si getTotalMax() es 0 (config invalida, nunca
+     *         deberia pasar en la practica).
+     */
+    public function fundamentalBlockPercent(): float
+    {
+        $totalMax = $this->getTotalMax();
+
+        if ($totalMax <= 0.0) {
+            return 0.0;
+        }
+
+        $fundamentalCategories = [
+            ScoreCategory::FUNDAMENTAL,
+            ScoreCategory::VALUATION,
+            ScoreCategory::QUALITY,
+            ScoreCategory::DIVIDEND,
+        ];
+
+        $fundamentalMax = array_sum(array_map(
+            fn (ScoreCategory $category): float => $this->getMax($category),
+            $fundamentalCategories
+        ));
+
+        return ($fundamentalMax / $totalMax) * 100;
+    }
 }

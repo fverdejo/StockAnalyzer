@@ -7335,3 +7335,25 @@ Verificado tambien contra MySQL real (no solo el esquema de test): `bin/migrate.
 **Queda el ultimo hallazgo de la auditoria de Astra sin empezar** (P2, presentacion de `BacktestPage`: horizonte del formulario no coincide con el calculado, errores por ticker ocultos, aviso de fundamentales con el 56% desactualizado ya que el peso activo es 0/50) -- de severidad menor (interfaz, no calculo), decision de continuar pendiente de la siguiente sesion.
 
 Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **668 tests, 1.822 assertions, OK** (1 skip preexistente, sube desde 661), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-08 (septima entrada) - Ultimo hallazgo de la auditoria de Astra: presentacion de `BacktestPage`, corregido -- auditoria completa
+
+Estado: implementado y verificado. Cierra el documento completo de Astra (`AUDITORIA_BACKTESTING_ASTRA_2026-09-08.md`): los ocho hallazgos, de P0 a P2, quedan atendidos (cinco con correccion de codigo, tres documentados con medicion real de impacto nulo).
+
+**Los tres hallazgos de presentacion, confirmados leyendo `BacktestPage.php` antes de tocar nada:**
+
+1. **El input de horizonte tenia `value="20"` fijo** (linea 57), sin importar que horizonte se hubiera pedido de verdad -- una nueva pulsacion de "Probar" podia lanzar el horizonte 20 aunque el resultado en pantalla fuera de otro. Corregido a `value="{$horizon}"`.
+2. **`$result['errors']` (ticker => mensaje) nunca se pintaba.** Ni un fallo parcial (unos pocos tickers) ni uno total (el universo entero sin ningun resultado, que ademas devolvia "Sin resultados de backtesting." sin ninguna causa) dejaban rastro visible. Nuevo `renderTickerErrors()`, mostrado tambien en la rama "sin filas".
+3. **El aviso de fundamentales point-in-time citaba un "56% del peso del score" fijo**, desactualizado desde que `FUNDAMENTAL`/`VALUATION`/`QUALITY`/`DIVIDEND` pasaron a 0 en la rama `feature/solo-tecnico` (confirmado: el bloque pesa hoy 0/50, no 56/115). Nuevo `ScoreWeights::fundamentalBlockPercent()` calcula la cifra REAL con los pesos vigentes (incluye overrides de `config/weights.php`), pasada desde `Application.php` (que ya tiene el `ScoreCalculator`) hasta `BacktestPage::render()` como parametro nuevo. Con el bloque a 0 (el caso real de hoy), el aviso deja de sonar a alerta (`panel-notice` -> nota informativa): la cobertura point-in-time no afecta a ninguna recomendacion mientras el peso sea 0.
+
+**De paso, la afirmacion categorica del t-stat** ("|t| &ge; 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza", tambien citada por Astra en el hallazgo de intervalos/Welch, `BacktestPage.php:154`/`:159`) se suaviza a "es la aproximacion habitual para decir que la diferencia no se explica facilmente por azar", sin cambiar ningun calculo -- coherente con la entrada de ayer que documento por que el Welch de esta pagina no corrige la dependencia entre muestras del mismo ticker.
+
+**Tests nuevos** (`tests/Web/BacktestPagePaginationTest.php`, 6 nuevos sobre los 6 ya existentes): horizonte del input coincide con el pedido, errores por ticker se pintan con su mensaje, se pintan tambien sin ninguna fila, sin errores no se pinta la seccion, con el bloque a 0 el aviso no cita "56%" y dice "pesa 0 puntos", con un porcentaje real distinto de cero el aviso lo cita literalmente (nunca el fijo).
+
+Verificado tambien por HTTP real contra `ddev`: `?page=backtest&universe=largecap60&horizon=60` responde 200, el input muestra `value="60"`, cero apariciones de "56%", aparece "pesa 0 puntos del score vigente", cero errores fatales.
+
+**Con esto, los ocho hallazgos de la auditoria de Astra (`AUDITORIA_BACKTESTING_ASTRA_2026-09-08.md`) quedan todos atendidos**: dos P0 corregidos (vela de entrada ignorada, orden stop/objetivo sin mirar la apertura), cuatro P1 (CLI truncando corregido, guarda de huecos de calendario añadida, solape de `step=horizon` e intervalos normales medidos y documentados sin impacto real), y dos P2 (cache sin versionar corregido, presentacion de `BacktestPage` corregida). `config/weights.php` no se toca en ningun momento de toda la auditoria.
+
+Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **674 tests, 1.837 assertions, OK** (1 skip preexistente, sube desde 668), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**.

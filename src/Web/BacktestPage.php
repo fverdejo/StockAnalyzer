@@ -29,7 +29,15 @@ class BacktestPage
         ?array $result,
         ?string $error,
         int $horizon = 20,
-        int $pageNum = 1
+        int $pageNum = 1,
+        // Auditoria Astra/Codex (`2026-09-08`, P2): el aviso de
+        // fundamentales point-in-time citaba un "56% del peso del score"
+        // fijo, desactualizado desde que FUNDAMENTAL/VALUATION/QUALITY/
+        // DIVIDEND pasaron a 0 (rama feature/solo-tecnico). Se pasa el
+        // porcentaje REAL, calculado por quien llama (`Application.php`,
+        // que tiene el `ScoreCalculator` vigente) en vez de hardcodearlo
+        // aqui -- `BacktestPage` no deberia conocer `ScoreWeights`.
+        float $fundamentalWeightPercent = 0.0
     ): string {
         $tickerValue = Layout::escape($rawTickers);
         $options = self::renderUniverseOptions($universes, $universe);
@@ -38,7 +46,7 @@ class BacktestPage
         // manda el formulario GET de arriba, para que cambiar de pagina no
         // pierda el universo/tickers/horizonte elegidos.
         $paginationBase = '?page=backtest&universe=' . urlencode($universe) . '&tickers=' . urlencode($rawTickers) . '&horizon=' . urlencode((string) $horizon);
-        $resultHtml = $result !== null ? self::renderResult($result, $pageNum, $paginationBase) : '';
+        $resultHtml = $result !== null ? self::renderResult($result, $pageNum, $paginationBase, $fundamentalWeightPercent) : '';
 
         $body = <<<HTML
         <section class="panel">
@@ -54,7 +62,7 @@ class BacktestPage
                 </div>
                 <div>
                     <label for="horizon">Horizonte</label>
-                    <input id="horizon" name="horizon" type="number" min="5" max="120" value="20">
+                    <input id="horizon" name="horizon" type="number" min="5" max="120" value="{$horizon}">
                 </div>
                 <button type="submit">Probar</button>
             </form>
@@ -100,12 +108,13 @@ HTML;
     /**
      * @param array<string,mixed> $result
      */
-    private static function renderResult(array $result, int $pageNum, string $paginationBase): string
+    private static function renderResult(array $result, int $pageNum, string $paginationBase, float $fundamentalWeightPercent): string
     {
         $allResults = is_array($result['results'] ?? null) ? $result['results'] : [];
         $totalPages = max(1, (int) ceil(count($allResults) / self::PAGE_SIZE));
         $pageNum = max(1, min($pageNum, $totalPages));
         $pagedResults = array_slice($allResults, ($pageNum - 1) * self::PAGE_SIZE, self::PAGE_SIZE);
+        $tickerErrorsHtml = self::renderTickerErrors(is_array($result['errors'] ?? null) ? $result['errors'] : []);
         $rows = [];
 
         foreach ($pagedResults as $item) {
@@ -133,12 +142,13 @@ HTML;
         }
 
         if ($rows === []) {
-            return '<section class="panel"><div class="muted">Sin resultados de backtesting.</div></section>';
+            return $tickerErrorsHtml . '<section class="panel"><div class="muted">Sin resultados de backtesting.</div></section>';
         }
 
         $summary = self::renderUniverseSummary(is_array($result['aggregate'] ?? null) ? $result['aggregate'] : []);
 
-        return $summary
+        return $tickerErrorsHtml
+            . $summary
             . '<section class="panel"><h2>Backtesting básico</h2><div class="table-wrap"><table><thead><tr>'
             . '<th>Ticker</th>'
             . self::columnHeader('Muestras', 'Fotos históricas analizadas de este ticker: cada cierto número de días se recalcula la puntuación usando solo los datos disponibles hasta esa fecha y se mide qué hizo el precio durante el horizonte elegido. Cuantas más muestras, más fiable es el resto de la fila.')
@@ -151,14 +161,46 @@ HTML;
             . self::columnHeader('Benchmark', 'Retorno de comprar y mantener el ticker desde el primer hasta el último día del histórico disponible, sin usar ninguna señal. Es la referencia pasiva; cubre todo el histórico, no el horizonte, así que no se compara dato a dato con las columnas de retorno.', true)
             . self::columnHeader('Peor gestionado', 'Peor resultado de una sola operación entre las compras simuladas con gestión de riesgo (stop loss y objetivo activos): el golpe máximo que habría encajado la estrategia. Solo entran las señales Comprar con niveles de riesgo calculables.', true)
             . self::columnHeader('Alpha vs todos los días', 'Retorno medio de las compras de este ticker menos el retorno medio de todas sus muestras, con señal o sin ella. Positivo = filtrar por señal aporta algo frente a estar comprado cualquier día; cerca de cero = la señal no añade nada. Es alpha contra el propio ticker, no contra el universo: esa es la tarjeta "Alpha del universo" de arriba.', true)
-            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estándar (Welch). |t| mayor o igual que 1,96 significa que la diferencia no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.', true)
+            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estándar (Welch), sin corregir por la posible dependencia entre muestras del mismo ticker. |t| mayor o igual que 1,96 es la aproximación habitual para decir que la diferencia no se explica fácilmente por azar; por debajo de ese valor, la alpha no se distingue del ruido.', true)
             . '</tr></thead><tbody>'
             . implode('', $rows)
             . '</tbody></table></div>'
             . Layout::renderPagination($pageNum, $totalPages, $paginationBase)
-            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estándar (Welch). |t| &ge; 1,96 &rarr; la diferencia entre las señales de compra y la media de todos los días no es atribuible al azar al 95% de confianza; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
-            . self::renderPointInTimeNote($allResults)
+            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estándar (Welch), sin corregir por la posible dependencia entre muestras del mismo ticker. |t| &ge; 1,96 &rarr; aproximación habitual para decir que la diferencia entre las señales de compra y la media de todos los días no se explica fácilmente por azar; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
+            . self::renderPointInTimeNote($allResults, $fundamentalWeightPercent)
             . '</section>';
+    }
+
+    /**
+     * Errores por ticker (auditoria Astra/Codex, `2026-09-08`, P2): antes
+     * `$result['errors']` (ticker => mensaje) nunca se pintaba -- ni un
+     * fallo parcial (unos pocos tickers) ni uno total (el universo entero
+     * sin ningun resultado) dejaban rastro visible de la causa, solo la
+     * ausencia silenciosa de esas filas en la tabla.
+     *
+     * @param array<string,mixed> $errors ticker => mensaje
+     */
+    private static function renderTickerErrors(array $errors): string
+    {
+        if ($errors === []) {
+            return '';
+        }
+
+        $items = [];
+
+        foreach ($errors as $ticker => $message) {
+            $items[] = sprintf(
+                '<li><strong>%s</strong>: %s</li>',
+                Layout::escape((string) $ticker),
+                Layout::escape((string) $message)
+            );
+        }
+
+        return sprintf(
+            '<section class="panel errors"><strong>%d ticker(s) con error, excluido(s) de la tabla:</strong><ul>%s</ul></section>',
+            count($errors),
+            implode('', $items)
+        );
     }
 
     /**
@@ -170,15 +212,18 @@ HTML;
      * fechas y la misma serie de snapshots), y en una tabla que ya tiene 12
      * columnas una mas se perderia.
      *
-     * Se muestra **siempre que haya el dato**, tambien —sobre todo— cuando
-     * la cobertura es baja: mientras `fundamentals_history` no tenga
-     * profundidad, el 56% del peso del score sigue entrando con sesgo de
-     * anticipacion, y esa es justo la advertencia que no puede faltar al
-     * leer estos numeros.
+     * `$fundamentalWeightPercent` (auditoria Astra/Codex, `2026-09-08`):
+     * antes el texto afirmaba un "56% del peso del score" fijo, que dejo de
+     * ser cierto en cuanto FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND pasaron a
+     * 0 (rama feature/solo-tecnico) -- hoy es 0%, no 56%. Con el bloque
+     * fundamental a 0, la cobertura point-in-time no afecta a ninguna
+     * recomendacion actual: el aviso pasa a ser informativo, no de alerta
+     * (sin `panel-notice`), y solo vuelve a avisar de verdad si algun dia
+     * se reactiva ese bloque con peso > 0.
      *
      * @param list<array<string,mixed>> $results
      */
-    private static function renderPointInTimeNote(array $results): string
+    private static function renderPointInTimeNote(array $results, float $fundamentalWeightPercent): string
     {
         $coverages = [];
 
@@ -196,13 +241,21 @@ HTML;
 
         $average = array_sum($coverages) / count($coverages);
 
+        if ($fundamentalWeightPercent <= 0.0) {
+            return sprintf(
+                '<p class="muted panel-note">Fundamentales point-in-time: %s%% de las muestras usó los ratios que se conocían en su propia fecha. Sin efecto en la recomendación actual: el bloque fundamental (FUNDAMENTAL/VALUATION/QUALITY/DIVIDEND) pesa 0 puntos del score vigente.</p>',
+                Layout::escape(Layout::formatNumber($average))
+            );
+        }
+
         if ($average >= 99.5) {
             return '<p class="muted panel-note">Fundamentales point-in-time: el 100% de las muestras usó los ratios que se conocían en su propia fecha, no los de hoy.</p>';
         }
 
         return sprintf(
-            '<section class="panel panel-notice"><strong>Solo el %s%% de las muestras usó fundamentales de su propia fecha.</strong> El resto se calculó con los ratios de HOY, que en aquella fecha nadie conocía: sobre esa parte, las categorías FUNDAMENTAL, VALUATION, QUALITY y DIVIDEND —el 56%% del peso del score— entran con sesgo de anticipación y tienden a favorecer a la señal. La serie de snapshots (<code>fundamentals_history</code>) empezó a acumularse el 2026-08-14 y crece un día por sesión de mercado: esta cifra subirá sola.</section>',
-            Layout::escape(Layout::formatNumber($average))
+            '<section class="panel panel-notice"><strong>Solo el %s%% de las muestras usó fundamentales de su propia fecha.</strong> El resto se calculó con los ratios de HOY, que en aquella fecha nadie conocía: sobre esa parte, las categorías FUNDAMENTAL, VALUATION, QUALITY y DIVIDEND —el %s%% del peso del score vigente— entran con sesgo de anticipación y tienden a favorecer a la señal. La serie de snapshots (<code>fundamentals_history</code>) empezó a acumularse el 2026-08-14 y crece un día por sesión de mercado: esta cifra subirá sola.</section>',
+            Layout::escape(Layout::formatNumber($average)),
+            Layout::escape(Layout::formatNumber($fundamentalWeightPercent))
         );
     }
 

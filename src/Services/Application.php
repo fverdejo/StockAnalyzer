@@ -1183,7 +1183,11 @@ class Application
             $horizon,
             // Paginacion de la tabla de resultados (v2.98), mismo criterio
             // que el Ranking del Home: sin `page_num` cae en la pagina 1.
-            max(1, (int) $this->queryString('page_num'))
+            max(1, (int) $this->queryString('page_num')),
+            // Auditoria Astra/Codex (2026-09-08): cifra REAL, no la del
+            // "56%" que quedo desactualizado en cuanto el bloque
+            // fundamental paso a pesar 0 (ver ScoreWeights::fundamentalBlockPercent()).
+            $this->scoreCalculator->getWeights()->fundamentalBlockPercent()
         );
     }
 

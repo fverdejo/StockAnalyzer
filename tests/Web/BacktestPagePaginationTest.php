@@ -109,4 +109,96 @@ final class BacktestPagePaginationTest extends TestCase
         self::assertStringContainsString('<strong>12</strong>', $paginaUno);
         self::assertStringContainsString('<strong>12</strong>', $paginaDos);
     }
+
+    /**
+     * Auditoria Astra/Codex (`2026-09-08`, P2): el input del formulario
+     * tenia `value="20"` fijo, sin importar que horizonte se hubiera
+     * pedido de verdad -- una nueva pulsacion de "Probar" podia lanzar el
+     * horizonte 20 aunque el resultado en pantalla fuera de otro.
+     */
+    public function testElInputDeHorizonteMuestraElHorizonteRealmentePedido(): void
+    {
+        $html = BacktestPage::render(null, '', 'largecap60', [], $this->resultWith(5), null, 60);
+
+        self::assertStringContainsString('id="horizon" name="horizon" type="number" min="5" max="120" value="60"', $html);
+        self::assertStringNotContainsString('value="20"', $html);
+    }
+
+    /**
+     * Auditoria Astra/Codex (`2026-09-08`, P2): `$result['errors']`
+     * (ticker => mensaje) nunca se pintaba -- ni un fallo parcial ni uno
+     * total dejaban rastro visible de la causa.
+     */
+    public function testLosErroresPorTickerSePintanConSuMensaje(): void
+    {
+        $result = $this->resultWith(3);
+        $result['errors'] = ['ZZZ' => 'Historico insuficiente', 'YYY' => 'Ticker no encontrado'];
+
+        $html = BacktestPage::render(null, '', 'largecap60', [], $result, null);
+
+        self::assertStringContainsString('ZZZ', $html);
+        self::assertStringContainsString('Historico insuficiente', $html);
+        self::assertStringContainsString('YYY', $html);
+        self::assertStringContainsString('Ticker no encontrado', $html);
+        self::assertStringContainsString('2 ticker(s) con error', $html);
+    }
+
+    /**
+     * Mismo hallazgo: los errores deben verse tambien cuando NINGUN ticker
+     * produjo resultado (el universo entero fallo), no solo en un fallo
+     * parcial -- antes esa rama devolvia solo "Sin resultados de
+     * backtesting." sin ninguna causa.
+     */
+    public function testLosErroresSePintanAunqueNoQuedeNingunaFila(): void
+    {
+        $html = BacktestPage::render(null, '', 'largecap60', [], ['results' => [], 'aggregate' => [], 'errors' => ['AAA' => 'Proveedor caido']], null);
+
+        self::assertStringContainsString('AAA', $html);
+        self::assertStringContainsString('Proveedor caido', $html);
+        self::assertStringContainsString('Sin resultados de backtesting.', $html);
+    }
+
+    public function testSinErroresNoSePintaLaSeccionDeErrores(): void
+    {
+        $html = BacktestPage::render(null, '', 'largecap60', [], $this->resultWith(5), null);
+
+        self::assertStringNotContainsString('ticker(s) con error', $html);
+    }
+
+    /**
+     * Auditoria Astra/Codex (`2026-09-08`, P2): el aviso de fundamentales
+     * point-in-time afirmaba un "56% del peso del score" fijo, ya
+     * desactualizado (el bloque fundamental pesa 0 desde la rama
+     * feature/solo-tecnico). Con `$fundamentalWeightPercent=0.0` (el valor
+     * por defecto, el real de produccion hoy) el aviso deja de sonar a
+     * alerta -- nunca debe citar un "56%" que ya no es cierto.
+     */
+    public function testConElBloqueFundamentalAPesoCeroElAvisoNoCitaUnPorcentajeFalso(): void
+    {
+        $result = $this->resultWith(2);
+        $result['results'][0]['fundamentals_point_in_time_pct'] = 40.0;
+        $result['results'][1]['fundamentals_point_in_time_pct'] = 60.0;
+
+        $html = BacktestPage::render(null, '', 'largecap60', [], $result, null);
+
+        self::assertStringNotContainsString('56%', $html);
+        self::assertStringContainsString('pesa 0 puntos del score vigente', $html);
+    }
+
+    /**
+     * Simetrico: si se pasa un porcentaje real distinto de cero (el bloque
+     * fundamental reactivado algun dia), el aviso lo cita literalmente, no
+     * un valor fijo.
+     */
+    public function testConElBloqueFundamentalActivoElAvisoCitaElPorcentajeReal(): void
+    {
+        $result = $this->resultWith(2);
+        $result['results'][0]['fundamentals_point_in_time_pct'] = 40.0;
+        $result['results'][1]['fundamentals_point_in_time_pct'] = 60.0;
+
+        $html = BacktestPage::render(null, '', 'largecap60', [], $result, null, 20, 1, 32.5);
+
+        self::assertStringContainsString('32,50%', $html);
+        self::assertStringNotContainsString('56%', $html);
+    }
 }
