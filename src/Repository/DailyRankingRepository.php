@@ -38,6 +38,26 @@ class DailyRankingRepository
     }
 
     /**
+     * Solo la fecha del ranking mas reciente, sin decodificar el payload
+     * entero -- lo usa AnalysisRefreshTrigger para decidir si falta el
+     * snapshot de hoy sin pagar el coste de json_decode() en cada peticion.
+     */
+    public function latestDate(string $name): ?DateTimeImmutable
+    {
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT ranking_date FROM daily_rankings WHERE name = :name ORDER BY ranking_date DESC LIMIT 1'
+        );
+        $statement->execute(['name' => $name]);
+        $date = $statement->fetchColumn();
+
+        if (!is_string($date) || $date === '') {
+            return null;
+        }
+
+        return DateTimeImmutable::createFromFormat('Y-m-d', $date) ?: null;
+    }
+
+    /**
      * @return array<string,mixed>|null
      */
     public function latest(string $name): ?array

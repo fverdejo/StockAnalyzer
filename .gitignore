@@ -38,3 +38,7 @@ Thumbs.db
 
 # Volcados de datos para trasvasar entre entornos (no son codigo y pesan MB).
 /storage/exports/
+
+# Candado y log de AnalysisRefreshTrigger (runtime, no codigo).
+/storage/locks/
+/storage/logs/

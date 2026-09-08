@@ -28,6 +28,7 @@ use StockAnalyzer\Providers\FmpProvider;
 use StockAnalyzer\Providers\YahooCorporateProfileProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Repository\AlertRepository;
+use StockAnalyzer\Repository\DailyRankingRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\CorporateProfileCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
@@ -104,6 +105,7 @@ class Application
     private CorporateProfileCacheRepository $corporateProfileCache;
     private ScoreHistoryRepository $scoreHistoryRepository;
     private FundamentalsHistoryRepository $fundamentalsHistoryRepository;
+    private AnalysisRefreshTrigger $analysisRefreshTrigger;
 
     public function __construct()
     {
@@ -153,6 +155,12 @@ class Application
             new ExchangeRateService($this->marketDataProvider),
             $this->historicalExchangeRates
         );
+        $projectRoot = dirname(__DIR__, 2);
+        $this->analysisRefreshTrigger = new AnalysisRefreshTrigger(
+            new DailyRankingRepository($this->connection),
+            $projectRoot,
+            $projectRoot . '/storage/locks/analyze-largecap60.lock'
+        );
     }
 
     public function run(): void
@@ -164,6 +172,12 @@ class Application
 
             return;
         }
+
+        // Sustituto del cron de la Pi (retirado): siembra el snapshot
+        // diario de largecap60 la primera vez que se entra en la app cada
+        // dia habil, en segundo plano, sin bloquear esta peticion. Ver
+        // AnalysisRefreshTrigger para el porque.
+        $this->analysisRefreshTrigger->triggerIfStale();
 
         if ($page === 'login') {
             echo LoginPage::render(null, '', CsrfToken::get(), $this->queryString('message') ?: null);
