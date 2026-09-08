@@ -413,9 +413,18 @@ final class PortfolioPageTest extends TestCase
     /**
      * Historial de operaciones paginado (v2.116): con mas de
      * `PortfolioPage::TRANSACTIONS_PAGE_SIZE` (20) operaciones, la pagina 1
-     * muestra las 20 MAS RECIENTES (orden invertido respecto a como las
-     * devuelve `TransactionRepository`, que va ASC por fecha para el
-     * calculo FIFO de coste) y deja el resto para la pagina 2.
+     * muestra las 20 MAS RECIENTES y deja el resto para la pagina 2.
+     *
+     * El fixture construye las transacciones en ASC (como las devuelve
+     * `TransactionRepository`, el orden que necesita el calculo FIFO de
+     * coste) y las invierte UNA VEZ antes de pasarlas a `Portfolio` -- el
+     * mismo paso que hace `PortfolioService::getPortfolio()` de verdad
+     * (`array_reverse()` sobre el resultado de `accumulatePositions()`,
+     * que ya consumio el ASC original). Corregido el `2026-09-08`: antes
+     * este fixture pasaba el ASC directo sin invertir, lo que ocultaba el
+     * bug real de doble inversion (`PortfolioService` invierte,
+     * `PortfolioPage` volvia a invertir) porque aqui nunca se simulaba el
+     * primer paso.
      */
     private function renderWithTransactions(int $pageNum): string
     {
@@ -433,7 +442,7 @@ final class PortfolioPageTest extends TestCase
             );
         }
 
-        $portfolio = new Portfolio([], $transactions, 0.0);
+        $portfolio = new Portfolio([], array_reverse($transactions), 0.0);
 
         return PortfolioPage::render(
             $this->user(),
@@ -462,6 +471,16 @@ final class PortfolioPageTest extends TestCase
         self::assertStringNotContainsString('T01', $pagina1);
         self::assertStringContainsString('page_num=2', $pagina1);
 
+        // No basta con que ambas aparezcan en la pagina (bug real del
+        // 2026-09-08: una doble inversion dejaba el orden ASC dentro de
+        // cada pagina, invisible a las aserciones de arriba). T25 tiene
+        // que aparecer literalmente ANTES que T06 en el HTML.
+        self::assertLessThan(
+            strpos($pagina1, 'T06'),
+            strpos($pagina1, 'T25'),
+            'La operacion mas reciente (T25) debe aparecer antes que la mas antigua de la pagina (T06), no al reves.'
+        );
+
         $pagina2 = $this->renderWithTransactions(2);
 
         // Las 5 restantes, las mas antiguas: T05 hasta T01.
@@ -469,6 +488,11 @@ final class PortfolioPageTest extends TestCase
         self::assertStringContainsString('T01', $pagina2);
         self::assertStringNotContainsString('T06', $pagina2);
         self::assertStringNotContainsString('T25', $pagina2);
+        self::assertLessThan(
+            strpos($pagina2, 'T01'),
+            strpos($pagina2, 'T05'),
+            'Tambien dentro de la pagina 2, la mas reciente (T05) va antes que la mas antigua (T01).'
+        );
     }
 
     public function testUnaPaginaFueraDeRangoSeAcotaALaUltima(): void

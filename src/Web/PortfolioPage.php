@@ -656,12 +656,22 @@ HTML;
 
     private static function renderTransactions(Portfolio $portfolio, int $pageNum): string
     {
-        // `Portfolio::getTransactions()` viene ASC por fecha (TransactionRepository):
-        // ese orden es el que necesita el calculo de coste FIFO, no se toca.
-        // Para mostrar se invierte (mas reciente primero, lo habitual en un
-        // historial) SOLO aqui, en la vista -- getTransactionProfit() busca
-        // por id de transaccion, no depende del orden de iteracion.
-        $transactions = array_reverse($portfolio->getTransactions());
+        // Bug real corregido el `2026-09-08` (reportado por el usuario con
+        // una captura: el historial mostraba las OPERACIONES MAS ANTIGUAS
+        // primero). `PortfolioService::getPortfolio()` YA entrega
+        // `Portfolio::getTransactions()` en orden mas-reciente-primero
+        // (invierte el ASC de `TransactionRepository` -- ese ASC original
+        // solo lo necesita `PortfolioService::accumulatePositions()` para
+        // el calculo de coste FIFO, ANTES de esa inversion, asi que no se
+        // ve afectado). Este metodo volvia a invertir aqui mismo, sobre una
+        // premisa incorrecta ("viene ASC") que dejo de ser cierta en cuanto
+        // se añadio esa inversion en `PortfolioService` -- las dos
+        // inversiones se cancelaban entre si y el resultado final volvia a
+        // ser ASC (mas antiguas primero), justo lo contrario de lo que dice
+        // el pie de la tabla ("Las mas recientes primero"). No hace falta
+        // invertir nada aqui: `getTransactions()` ya viene en el orden
+        // correcto para mostrar.
+        $transactions = $portfolio->getTransactions();
 
         if ($transactions === []) {
             return '<div class="muted">Sin operaciones registradas.</div>';
