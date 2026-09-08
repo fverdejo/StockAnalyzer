@@ -402,63 +402,98 @@ class BacktestingService
         $droppedNotMember = 0;
         $samplesKept = 0;
         $momentumNullDropped = 0;
+        $droppedCalendarGap = 0;
+        $tickersDroppedCalendarGap = [];
         // P0.2: calendario bursatil real, union de las fechas de $history de
         // TODOS los tickers recorridos (ver el docblock de este metodo).
         $tradingCalendar = [];
+        // Auditoria Astra/Codex (`2026-09-08`): dos pasadas, no una. La
+        // primera solo recoge fechas propias (no las velas completas, para
+        // no duplicar en memoria el historico de cada ticker) y muestras;
+        // el calendario compartido no esta completo hasta que TODOS los
+        // tickers han pasado. La segunda valida cada ticker CONTRA ese
+        // calendario ya completo antes de sumarlo a $samplesByDate -- ver
+        // hasCalendarGap().
+        $perTicker = [];
 
         foreach ($tickers as $ticker) {
             try {
                 $collected = $this->collectSamplesWithHistory($ticker, $horizonDays, $step, $mode);
                 $momentumNullDropped += $this->momentumNullDropped;
 
+                $ownDates = [];
+
                 foreach ($collected['history'] as $quote) {
-                    $tradingCalendar[$quote->getDate()->format('Y-m-d')] = true;
+                    $isoDate = $quote->getDate()->format('Y-m-d');
+                    $tradingCalendar[$isoDate] = true;
+                    $ownDates[$isoDate] = true;
                 }
 
-                foreach ($collected['samples'] as $sample) {
-                    if ($membershipActive) {
-                        $sampleDate = new \DateTimeImmutable((string) $sample['date']);
-
-                        if (!$this->indexMembership->isMemberAt($ticker, (string) $indexCode, $sampleDate)) {
-                            $droppedNotMember++;
-
-                            continue;
-                        }
-                    }
-
-                    $samplesKept++;
-                    $samplesByDate[$sample['date']][] = [
-                        'ticker' => strtoupper($ticker),
-                        'percentage' => $sample['percentage'],
-                        'forward_return' => $sample['forward_return'],
-                        // P3.4: expuestos siempre (no solo con
-                        // $mode='momentum') para no bifurcar esta
-                        // recopilacion por modo -- full/technical
-                        // simplemente no los leen.
-                        'momentum12m1' => $sample['momentum12m1'],
-                        'sector' => $sample['sector'],
-                        'market_cap' => $sample['market_cap'],
-                        'market_cap_is_point_in_time' => $sample['market_cap_is_point_in_time'],
-                        // P3.3: expuestos siempre, mismo criterio que los
-                        // campos de momentum de arriba -- full/technical/
-                        // momentum simplemente no los leen.
-                        'free_cash_flow_yield' => $sample['free_cash_flow_yield'],
-                        'ev_to_ebitda' => $sample['ev_to_ebitda'],
-                        'roic' => $sample['roic'],
-                        'operating_margin' => $sample['operating_margin'],
-                        'debt_to_equity' => $sample['debt_to_equity'],
-                        'earnings_yield' => $sample['earnings_yield'],
-                        'cash_conversion' => $sample['cash_conversion'],
-                        'fundamentals_is_point_in_time' => $sample['fundamentals_is_point_in_time'],
-                    ];
-                }
+                $perTicker[$ticker] = ['dates' => $ownDates, 'samples' => $collected['samples']];
             } catch (\Throwable $exception) {
                 $errors[$ticker] = $exception->getMessage();
             }
         }
 
-        ksort($samplesByDate);
         ksort($tradingCalendar);
+
+        foreach ($perTicker as $ticker => $collected) {
+            if ($this->hasCalendarGap($collected['dates'], $tradingCalendar)) {
+                // Historico con huecos internos (fechas en las que OTROS
+                // tickers cotizaron y este no, dentro de su propio rango
+                // activo): sus muestras se descartan enteras en vez de
+                // sumarse desalineadas al resto del universo -- un ticker
+                // asi desplaza sus fechas muestreadas frente a sus pares sin
+                // ningun aviso (reproducido de forma sintetica por Astra;
+                // medido el mismo dia sobre datos reales de sp400+sp600,
+                // 1.002 tickers, 0 casos -- guarda de seguridad para cuando
+                // si ocurra, no una correccion de un problema ya observado).
+                $droppedCalendarGap += count($collected['samples']);
+                $tickersDroppedCalendarGap[] = $ticker;
+
+                continue;
+            }
+
+            foreach ($collected['samples'] as $sample) {
+                if ($membershipActive) {
+                    $sampleDate = new \DateTimeImmutable((string) $sample['date']);
+
+                    if (!$this->indexMembership->isMemberAt($ticker, (string) $indexCode, $sampleDate)) {
+                        $droppedNotMember++;
+
+                        continue;
+                    }
+                }
+
+                $samplesKept++;
+                $samplesByDate[$sample['date']][] = [
+                    'ticker' => strtoupper($ticker),
+                    'percentage' => $sample['percentage'],
+                    'forward_return' => $sample['forward_return'],
+                    // P3.4: expuestos siempre (no solo con
+                    // $mode='momentum') para no bifurcar esta
+                    // recopilacion por modo -- full/technical
+                    // simplemente no los leen.
+                    'momentum12m1' => $sample['momentum12m1'],
+                    'sector' => $sample['sector'],
+                    'market_cap' => $sample['market_cap'],
+                    'market_cap_is_point_in_time' => $sample['market_cap_is_point_in_time'],
+                    // P3.3: expuestos siempre, mismo criterio que los
+                    // campos de momentum de arriba -- full/technical/
+                    // momentum simplemente no los leen.
+                    'free_cash_flow_yield' => $sample['free_cash_flow_yield'],
+                    'ev_to_ebitda' => $sample['ev_to_ebitda'],
+                    'roic' => $sample['roic'],
+                    'operating_margin' => $sample['operating_margin'],
+                    'debt_to_equity' => $sample['debt_to_equity'],
+                    'earnings_yield' => $sample['earnings_yield'],
+                    'cash_conversion' => $sample['cash_conversion'],
+                    'fundamentals_is_point_in_time' => $sample['fundamentals_is_point_in_time'],
+                ];
+            }
+        }
+
+        ksort($samplesByDate);
         $sessionIndex = array_flip(array_keys($tradingCalendar));
 
         $dates = [];
@@ -638,6 +673,14 @@ class BacktestingService
                 'index_code' => $membershipActive ? strtoupper((string) $indexCode) : null,
                 'samples_kept' => $samplesKept,
                 'samples_dropped_not_member' => $droppedNotMember,
+                // Auditoria Astra/Codex (`2026-09-08`): tickers con huecos
+                // internos frente al calendario compartido, excluidos
+                // ENTEROS (ver hasCalendarGap()). 0/[] en la practica con
+                // los datos ya medidos hoy -- publicado igual que el resto
+                // de contadores de merma para que, si algun dia deja de
+                // ser 0, sea visible y no silencioso.
+                'samples_dropped_calendar_gap' => $droppedCalendarGap,
+                'tickers_dropped_calendar_gap' => $tickersDroppedCalendarGap,
             ],
             $this->crossSectionalStatistics($alphas, $topAverages, $universeAverages, $topReturns, $universeReturns),
             [
@@ -1721,6 +1764,58 @@ class BacktestingService
             'samples' => $this->sampleHistory($stock, $history, $horizonDays, $step, $mode),
             'history' => $history,
         ];
+    }
+
+    /**
+     * Detecta si un ticker tiene HUECOS internos frente al calendario
+     * compartido: fechas en las que otros tickers del mismo recorrido
+     * cotizaron pero este no, DENTRO de su propio rango activo (primera a
+     * ultima cotizacion propia -- antes de existir o despues de delistar
+     * nunca cuenta como hueco, es normal no tener precio ahi).
+     *
+     * Por que importa (auditoria Astra/Codex, `2026-09-08`):
+     * `sampleHistory()` muestrea por INDICE LOCAL de cada ticker (cada
+     * `$step` velas desde el 80), no por fecha compartida. Un ticker con un
+     * hueco desplaza TODAS sus fechas muestreadas posteriores frente a sus
+     * pares, sin que `runCrossSectional()` lo note: sus muestras siguen
+     * cayendo en $samplesByDate, solo que en fechas ligeramente distintas a
+     * las que "deberian" -- el efecto es silencioso, no un error.
+     * Reproducido de forma sintetica por Astra quitando una unica vela
+     * antigua de un ticker; medido el mismo dia con datos reales de
+     * `sp400`+`sp600` (1.002 tickers, precios de Yahoo ya cacheados): CERO
+     * huecos. Esta comprobacion es una guarda para si el caso real
+     * apareciera alguna vez (una recaptura con un hueco de proveedor, un
+     * universo futuro con datos menos limpios), no la correccion de un
+     * problema ya observado -- ver versions.md para la medicion completa.
+     *
+     * @param array<string,true> $ownDates fechas propias del ticker, ya en formato Y-m-d
+     * @param array<string,true> $tradingCalendar calendario compartido, YA ordenado (ksort)
+     */
+    private function hasCalendarGap(array $ownDates, array $tradingCalendar): bool
+    {
+        if ($ownDates === []) {
+            return false;
+        }
+
+        $ownKeys = array_keys($ownDates);
+        $first = min($ownKeys);
+        $last = max($ownKeys);
+
+        foreach ($tradingCalendar as $date => $true) {
+            if ($date < $first) {
+                continue;
+            }
+
+            if ($date > $last) {
+                break;
+            }
+
+            if (!isset($ownDates[$date])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

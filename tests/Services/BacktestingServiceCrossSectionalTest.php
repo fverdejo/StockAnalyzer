@@ -336,6 +336,49 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
     }
 
     /**
+     * Auditoria Astra/Codex (`2026-09-08`): un ticker con un HUECO interno
+     * (una fecha en la que sus pares cotizaron y el no, dentro de su propio
+     * rango activo -- distinto de "empezo mas tarde", que es el caso
+     * legitimo del test anterior) desplaza su indice local frente al resto
+     * sin ningun aviso. Se quita una vela intermedia del prefijo plano de
+     * DDD (fecha muy anterior a cualquier señal real, para que el hueco no
+     * se confunda con "no habia arrancado todavia": DDD sigue teniendo
+     * velas antes Y despues de la fecha quitada).
+     *
+     * DDD debe excluirse ENTERO (sus muestras nunca llegan a
+     * `$samplesByDate`) en vez de sumarse desalineado: el resultado debe
+     * ser IDENTICO al universo de 3 tickers limpios (AAA/BBB/CCC), no una
+     * version corrompida por DDD.
+     */
+    public function testUnTickerConUnHuecoInternoSeExcluyeEnteroEnVezDeDesalinear(): void
+    {
+        $clean = $this->universeWhereTopIsBest();
+        $ddd = $clean['DDD'];
+        // Indice 85: dentro del prefijo plano (170 velas), muy anterior a
+        // cualquier señal real -- DDD conserva velas antes y despues, asi
+        // que esto es un HUECO, no un arranque tardio (ver el test
+        // anterior para ese otro caso, ya cubierto y ya benigno).
+        self::assertLessThan(self::MOMENTUM_PREFIX_LENGTH, 85, 'Fixture de test mal construido: el indice debe caer dentro del prefijo plano.');
+        unset($ddd[85]);
+        $dddWithGap = array_values($ddd);
+
+        $withGap = $this->service(array_merge($clean, ['DDD' => $dddWithGap]))
+            ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
+        $threeTickerBaseline = $this->service($clean)
+            ->runCrossSectional(['AAA', 'BBB', 'CCC'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
+
+        self::assertSame([], $withGap['errors']);
+        self::assertSame(['DDD'], $withGap['tickers_dropped_calendar_gap']);
+        self::assertGreaterThan(0, $withGap['samples_dropped_calendar_gap']);
+
+        // El resultado con DDD (con hueco, excluido entero) debe coincidir
+        // EXACTO con el universo de 3 tickers limpios: ni rastro de DDD.
+        self::assertSame($threeTickerBaseline['avg_alpha'], $withGap['avg_alpha']);
+        self::assertSame($threeTickerBaseline['dates'], $withGap['dates']);
+        self::assertSame($threeTickerBaseline['dates_evaluated'], $withGap['dates_evaluated']);
+    }
+
+    /**
      * Tres tickers desplazados un solo dia generan fechas con amplitud
      * suficiente (3 > top-2) pero solapadas con las ya evaluadas: su ventana
      * de retorno futuro comparte 4 de sus 5 dias con la anterior, asi que
