@@ -7203,3 +7203,30 @@ Estado: implementado y verificado. El usuario pide seguir con lo pendiente mient
 **Pendiente, siguiente paso real (no hecho en esta entrada):** backfill de fundamentales EODHD para los 602 tickers (~6.020 unidades de cuota, lejos del limite de 100.000/dia), auditar calidad con `FundamentalsQualityAuditor` (mismo chequeo `filing_date_placeholder` que ya limpio a `sp400`) y, si la calidad es buena, predeclarar con `auditor-estadistico` y medir `mode=fundamental` -- misma secuencia ya probada tres veces hoy.
 
 Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **656 tests, 1.780 assertions, OK** (1 skip preexistente), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-08 - Backfill y medicion completos de `sp600`: 602/602 archivados, 1.380.958 filas de historico, score fundamental NULO en small-cap tambien
+
+Estado: cerrado. Continuacion de la entrada anterior (sesion interrumpida por un reinicio del entorno a mitad del primer archivado -- retomado limpio sin perdida de datos, verificado por consulta directa a `eodhd_raw_fundamentals` antes de continuar).
+
+**Backfill**: `bin/archive-eodhd-fundamentals.php --tickers=...` (los 602 de `sp600` explicitos, para no repetir sin necesidad los ~384 fallos ya conocidos de `msci_world`): 602/602 archivados, 0 errores. `bin/backfill-fundamentals-history-from-archive.php --universe=sp600`: 600/602 rellenados (1 ya cubierto por solape con otro universo, 1 error real -- `HOS`, Helix Energy Solutions, sin trimestres de `Income_Statement` utilizables en el payload archivado de EODHD, un hueco de datos legitimo y aislado, no un bug), **1.380.958 filas nuevas** en `fundamentals_history`.
+
+**Auditoria de calidad**: mismo patron limpio que `sp400`, algo mas alto pero igual de tranquilizador -- agregado global `filing_date_placeholder` desde 2020: **5,0% (766/15.300)**, frente al 2,9% de `sp400` y el 47%+ de los ADR. 548/601 tickers (91,2%) por debajo del 25%. Confirma una vez mas que el regimen regulatorio SEC/10-Q (large, mid y small-cap EEUU por igual) es limpio; el problema es geografico (emisores extranjeros), no de tamaño de empresa.
+
+**Misma regla predeclarada aplicada mecanicamente** (no una decision nueva: el umbral del 25% y el criterio Bonferroni N=2 sin acumular entre poblaciones ya se fijaron para `sp400`, y se generalizan sin cambios a cualquier poblacion nueva genuinamente distinta). Filtro de calidad: 27 excluidos por `filing_before_period_end` + 53 por `filing_date_placeholder>=25%` (con solape) = 75 de 602, **universo final 527 tickers**.
+
+**Resultado, `BacktestingService::runCrossSectional(mode='fundamental', indexCode=null)`, 10 años:**
+
+| Horizonte | Fechas | Alpha medio | t pareado |
+|---|---|---|---|
+| 20 sesiones | 121 | -0,29 pp | **-1,42** |
+| 60 sesiones | 40 | -1,08 pp | **-1,45** |
+
+**Veredicto NULO en ambos horizontes**, ninguno cerca de 1,96 ni de 2,24. Split-half no necesario (mismo criterio: ningun horizonte cruza 1,96). Signo negativo en los dos, igual que `sp400` (y al contrario que el positivo-pero-nulo de large-cap) -- con `|t|` maximo 1,45, sigue siendo ruido, no señal, y ahora con TRES poblaciones (large-cap, mid-cap, small-cap) mostrando el mismo patron de "sin ventaja, sin importar el signo" refuerza que no hay nada que perseguir aqui.
+
+**Con esto, la investigacion del score fundamental como predictor cross-sectional a 20/60 dias esta medida en los tres tamaños de empresa de EEUU (large/mid/small-cap), en CUATRO corridas independientes (`P3.3`, `v2.114`, `sp400`, `sp600`), todas nulas.** `config/weights.php` no se toca. `IJH`/`IJR` quedan como universos permanentes del proyecto (`sp400`/`sp600`), utiles para futuras investigaciones tecnicas/momentum aunque la via fundamental quede cerrada.
+
+Script de medicion (`storage/scratch/run_sp600_fundamental_backtest.php`) y resultado completo (`sp600_fundamental_backtest_results.json`) conservados para reproducibilidad, mismo patron que `sp400`. No se toca ningun archivo de `src/`.
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **656 tests, 1.780 assertions, OK** (sin cambios de `src/`), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**.
