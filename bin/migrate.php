@@ -41,9 +41,31 @@ foreach ($files as $file) {
         $statement = $pdo->prepare('INSERT INTO schema_migrations (migration, applied_at) VALUES (:migration, NOW())');
         $statement->execute(['migration' => $name]);
         echo "APPLIED {$name}\n";
-    } catch (Throwable $exception) {
+    } catch (PDOException $exception) {
+        if (isAlreadyAppliedError($exception)) {
+            $statement = $pdo->prepare('INSERT INTO schema_migrations (migration, applied_at) VALUES (:migration, NOW())');
+            $statement->execute(['migration' => $name]);
+            echo "WARN  {$name}: {$exception->getMessage()} -- el cambio ya existia en el esquema (aplicado por otra via antes de que schema_migrations lo registrara); se marca como aplicada sin repetirla.\n";
+            continue;
+        }
+
         throw $exception;
     }
 }
 
 echo "DONE\n";
+
+/**
+ * Un esquema puede llegar mas avanzado que schema_migrations (restauracion de
+ * backup, cambio manual, migracion antigua nunca registrada). En ese caso el
+ * DDL falla con un error de "ya existe" -- no es un fallo real de la
+ * migracion, es que su efecto ya esta presente. Cualquier otro error se sigue
+ * propagando tal cual.
+ */
+function isAlreadyAppliedError(PDOException $exception): bool
+{
+    $driverCode = $exception->errorInfo[1] ?? null;
+
+    // 1050 tabla ya existe, 1060 columna duplicada, 1061 nombre de indice/clave duplicado.
+    return in_array($driverCode, [1050, 1060, 1061], true);
+}
