@@ -95,6 +95,14 @@ final class BacktestingServiceP0FixesTest extends TestCase
      * cierre de la señal (104,0) el resultado seria absurdo (+93,27%), asi
      * que basta con comprobar que el valor real es 0,5 -y no ese otro- para
      * demostrar cual de los dos precios se esta usando de verdad.
+     *
+     * El alto/bajo de la vela de entrada (200,5/199,5) se mantienen DENTRO
+     * de la banda de stop/objetivo (197,5/205,0 sobre ATR14=1,0) a
+     * proposito: desde el `2026-09-08` esa vela SI se comprueba (ver
+     * `simulateManagedExit()`), y este test aisla el precio de entrada, no
+     * el mecanismo de stop/objetivo -- un alto/bajo mas ancho (205,0/195,0,
+     * el valor original) dispararia el stop en la propia vela de entrada y
+     * dejaria de probar lo que este test dice probar.
      */
     public function testLaEntradaUsaLaAperturaDeLaSesionSiguienteNoElCierreDeLaSenal(): void
     {
@@ -103,7 +111,7 @@ final class BacktestingServiceP0FixesTest extends TestCase
 
         // Vela de entrada: abre en 200,0, un hueco enorme frente al cierre
         // de la señal (104,0).
-        $history[] = new HistoricalQuote($date, 200.0, 205.0, 195.0, 200.0, 1_000_000);
+        $history[] = new HistoricalQuote($date, 200.0, 200.5, 199.5, 200.0, 1_000_000);
         $date = $date->modify('+1 day');
 
         for ($i = 0; $i < 5; $i++) {

@@ -1981,12 +1981,30 @@ class BacktestingService
      * Recorre el historico dia a dia desde la señal hasta el horizonte para
      * saber si el stop-loss/objetivo basado en ATR14 (RiskLevelsCalculator)
      * se dispara antes que el horizonte fijo. Criterio conservador: si un
-     * mismo dia cruza stop y objetivo a la vez, se asume que el stop-loss
-     * se ejecuta primero, porque no hay datos intradia para saber cual de
-     * los dos sucedio antes.
+     * mismo dia cruza stop y objetivo a la vez SIN que la apertura ya lo
+     * resuelva, se asume que el stop-loss se ejecuta primero, porque no hay
+     * datos intradia para saber cual de los dos sucedio antes.
      *
-     * @param list<HistoricalQuote> $history
-     * @return array{0: string, 1: float, 2: int}
+     * `$offset` empieza en 0 (la propia vela de entrada, `$history[$index]`,
+     * cuya apertura es `entryPrice`) y no en 1 -- corregido el `2026-09-08`
+     * tras una auditoria externa (Astra/Codex): la version anterior
+     * arrancaba en `$offset = 1`, dejando la vela de entrada COMPLETA fuera
+     * de la simulacion (su alto/bajo nunca se comprobaban), pese a que la
+     * posicion ya esta abierta desde su apertura. `exit_day` puede salir 0
+     * si el stop/objetivo se dispara ese mismo dia -- mismo rango de
+     * sesiones que ya usa `forward_return` (`$future` es el cierre de
+     * `$index + $horizonDays`, con `$index` como dia 0 de referencia, no
+     * como el primero de los `$horizonDays`), asi que esto no cambia
+     * cuantas sesiones representa un horizonte, solo corrige que la primera
+     * ya contaba.
+     *
+     * Alcance del bug corregido: **solo** `managed_return`/`exit_reason`/
+     * `exit_day` (la simulacion de stop-loss/objetivo). No afecta a
+     * `forward_return` (retorno bruto de mercado, calculado aparte con el
+     * cierre de `$future`), que es lo unico que alimenta la alpha
+     * transversal de `runCrossSectional()` -- los veredictos de las
+     * investigaciones fundamentales ya cerradas (P3.3/`v2.114`/`sp400`/
+     * `sp600`, ver versions.md) no dependen de este metodo.
      */
     private function simulateManagedExit(
         array $history,
@@ -1995,35 +2013,70 @@ class BacktestingService
         RiskLevels $riskLevels,
         HistoricalQuote $future
     ): array {
-        for ($offset = 1; $offset <= $horizonDays; $offset++) {
+        for ($offset = 0; $offset <= $horizonDays; $offset++) {
             $day = $history[$index + $offset];
-            $hitStop = $day->getLow() <= $riskLevels->getStopLoss();
-            $hitTarget = $day->getHigh() >= $riskLevels->getTarget();
+            $exit = $this->resolveDayExit($day, $riskLevels);
 
-            if ($hitStop) {
-                // Hueco de apertura (v2.73): si la sesion ABRE ya por debajo
-                // del stop, la orden no se ejecuta al stop — se ejecuta a la
-                // apertura, que es peor. Cobrar el stop en ese caso es la
-                // forma mas silenciosa de inflar el resultado, y afecta
-                // justo a los peores dias, que son los que definen el
-                // drawdown.
-                $exitPrice = min($day->getOpen(), $riskLevels->getStopLoss());
-
-                return ['stop_loss', $exitPrice, $offset];
-            }
-
-            if ($hitTarget) {
-                // Simetrico y por el mismo motivo: si abre por encima del
-                // objetivo, la venta se ejecuta a la apertura, que aqui
-                // juega a favor. Modelar solo el hueco malo seria sesgar el
-                // resultado en la direccion contraria.
-                $exitPrice = max($day->getOpen(), $riskLevels->getTarget());
-
-                return ['target', $exitPrice, $offset];
+            if ($exit !== null) {
+                return [$exit[0], $exit[1], $offset];
             }
         }
 
         return ['horizon', $future->getClose(), $horizonDays];
+    }
+
+    /**
+     * Resuelve si UNA vela dispara el stop-loss o el objetivo, y a que
+     * precio. Corregido el `2026-09-08` (auditoria Astra/Codex): antes se
+     * comprobaba siempre el low contra el stop ANTES que el high contra el
+     * objetivo, sin importar por donde abrio la sesion -- un hueco alcista
+     * que ya abria por encima del objetivo (venta resuelta, sin exposicion
+     * al resto de la sesion) podia perder frente a un minimo posterior que
+     * tambien perforase el stop, invirtiendo el orden real de los hechos
+     * (la apertura sucede antes que cualquier minimo/maximo intradia
+     * posterior).
+     *
+     * Primero se comprueba si la propia APERTURA ya resuelve la salida sin
+     * ambigüedad (huecos, ver v2.73): un hueco bajista sale por stop, uno
+     * alcista por objetivo, cada uno a su precio de apertura. Solo si la
+     * apertura cae DENTRO de la banda [stop, objetivo] (orden intradia
+     * desconocido) se cae al criterio conservador de low/high con el
+     * stop-loss ganando el empate.
+     *
+     * @return null|array{0: string, 1: float}
+     */
+    private function resolveDayExit(HistoricalQuote $day, RiskLevels $riskLevels): ?array
+    {
+        $stop = $riskLevels->getStopLoss();
+        $target = $riskLevels->getTarget();
+        $open = $day->getOpen();
+
+        if ($open >= $target) {
+            // Hueco alcista: la venta ya se resuelve en apertura, a favor
+            // (v2.73). El resto de la sesion es irrelevante, la posicion ya
+            // esta cerrada.
+            return ['target', max($open, $target)];
+        }
+
+        if ($open <= $stop) {
+            // Simetrico: hueco bajista, la orden se ejecuta en apertura, en
+            // contra. Cobrar el stop en vez de la apertura real seria la
+            // forma mas silenciosa de inflar el resultado, y afecta justo a
+            // los peores dias, que son los que definen el drawdown.
+            return ['stop_loss', min($open, $stop)];
+        }
+
+        // Apertura dentro de la banda: orden intradia desconocido, gana el
+        // stop-loss si ambos se cruzan el mismo dia (criterio conservador).
+        if ($day->getLow() <= $stop) {
+            return ['stop_loss', $stop];
+        }
+
+        if ($day->getHigh() >= $target) {
+            return ['target', $target];
+        }
+
+        return null;
     }
 
     /**

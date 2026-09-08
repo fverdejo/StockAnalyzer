@@ -119,12 +119,17 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  *   exacto (solo sobre `recommendation === 'BUY'`), asi que no hace falta
  *   tocar ninguna asercion por este cambio.
  *
+
  * `historyWithPostEntryPath()` añade, justo despues de `baselineQuotes()` y
  * antes de los `$postEntryDays`, UNA vela de entrada nueva (indice 251) con
  * `open = ENTRY_PRICE` (104.0): es la apertura que P0.1 usa como precio de
- * entrada real. Su high/low/close no importan para la simulacion (que
- * empieza en `$entryIndex + 1`), solo se les da un valor razonable del
- * mismo estilo que las velas "sin disparo" que ya usa este fichero.
+ * entrada real. Desde el `2026-09-08` (auditoria Astra/Codex, ver
+ * `BacktestingService::simulateManagedExit()`) esa vela SI se comprueba
+ * contra el stop/objetivo -antes se ignoraba por completo, el bug que esa
+ * correccion arregla-, asi que su high/low (104.5/103.5) se eligen a
+ * proposito DENTRO de la banda [101.5, 109.0] de todos los tests de este
+ * fichero: no disparan nada en la vela de entrada, y cada test sigue
+ * probando exactamente lo que decia probar antes de la correccion.
  */
 final class BacktestingServiceTest extends TestCase
 {
@@ -226,11 +231,27 @@ final class BacktestingServiceTest extends TestCase
      */
     private function historyWithPostEntryPath(array $postEntryDays): array
     {
+        return $this->historyWithCustomEntryCandle(104.5, 103.5, $postEntryDays);
+    }
+
+    /**
+     * Igual que `historyWithPostEntryPath()`, pero permite fijar el
+     * alto/bajo de la propia vela de entrada -- necesario para probar la
+     * correccion del `2026-09-08` (auditoria Astra/Codex): esa vela ahora
+     * SI se comprueba contra el stop/objetivo (offset 0 de
+     * `simulateManagedExit()`), y antes no habia forma de ponerla a prueba
+     * directamente.
+     *
+     * @param list<array{0: float, 1: float, 2: float}> $postEntryDays
+     * @return list<HistoricalQuote>
+     */
+    private function historyWithCustomEntryCandle(float $entryHigh, float $entryLow, array $postEntryDays): array
+    {
         self::assertCount(self::HORIZON_DAYS, $postEntryDays, 'Fixture de test mal construido.');
 
         $quotes = $this->baselineQuotes();
         $date = $quotes[count($quotes) - 1]->getDate()->modify('+1 day');
-        $quotes[] = new HistoricalQuote($date, self::ENTRY_PRICE, 104.5, 103.5, self::ENTRY_PRICE, 1_000_000);
+        $quotes[] = new HistoricalQuote($date, self::ENTRY_PRICE, $entryHigh, $entryLow, self::ENTRY_PRICE, 1_000_000);
         $date = $date->modify('+1 day');
 
         foreach ($postEntryDays as $day) {
@@ -494,6 +515,132 @@ final class BacktestingServiceTest extends TestCase
 
         self::assertSame('stop_loss', $sample['exit_reason'], 'Cuando stop y objetivo se cruzan el mismo dia, debe ganar el stop-loss (criterio conservador).');
         self::assertSame(3, $sample['exit_day']);
+    }
+
+    /**
+     * Caso 4b (`2026-09-08`, auditoria Astra/Codex): la propia vela de
+     * ENTRADA puede disparar el stop-loss. Antes de esta correccion
+     * `simulateManagedExit()` empezaba a comprobar en `$entryIndex + 1`, asi
+     * que una caida brusca justo el dia que se abre la posicion nunca se
+     * detectaba -la posicion ya esta comprada desde su apertura, el riesgo
+     * empieza ahi, no al dia siguiente-.
+     */
+    public function testLaPropiaVelaDeEntradaPuedeDispararElStopLoss(): void
+    {
+        $history = $this->historyWithCustomEntryCandle(104.5, 101.0, [ // entrada: low=101.0 <= stop=101.5
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+        ]);
+
+        $sample = $this->runSingleSample($history);
+        $riskLevels = $this->expectedRiskLevels();
+
+        self::assertSame('stop_loss', $sample['exit_reason']);
+        self::assertSame(0, $sample['exit_day'], 'El stop se dispara el mismo dia de la entrada (dia 0), no el dia 1.');
+        self::assertSame($this->netReturn($riskLevels->getStopLoss()), $sample['managed_return']);
+    }
+
+    /**
+     * Caso 4c (`2026-09-08`, auditoria Astra/Codex): simetrico del anterior,
+     * la vela de entrada dispara el OBJETIVO el mismo dia de la compra.
+     */
+    public function testLaPropiaVelaDeEntradaPuedeDispararElObjetivo(): void
+    {
+        $history = $this->historyWithCustomEntryCandle(110.0, 103.5, [ // entrada: high=110.0 >= objetivo=109.0
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+        ]);
+
+        $sample = $this->runSingleSample($history);
+        $riskLevels = $this->expectedRiskLevels();
+
+        self::assertSame('target', $sample['exit_reason']);
+        self::assertSame(0, $sample['exit_day']);
+        self::assertSame($this->netReturn($riskLevels->getTarget()), $sample['managed_return']);
+    }
+
+    /**
+     * Caso 4d (`2026-09-08`, auditoria Astra/Codex): la vela de entrada
+     * cruza stop Y objetivo a la vez (mismo criterio conservador que el
+     * Caso 4, aplicado ahora tambien al dia 0).
+     */
+    public function testLaPropiaVelaDeEntradaConAmbosNivelesCruzadosResuelveComoStopLoss(): void
+    {
+        $history = $this->historyWithCustomEntryCandle(110.0, 100.0, [ // entrada: low<=stop Y high>=objetivo
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+        ]);
+
+        $sample = $this->runSingleSample($history);
+
+        self::assertSame('stop_loss', $sample['exit_reason']);
+        self::assertSame(0, $sample['exit_day']);
+    }
+
+    /**
+     * Caso 4e (`2026-09-08`, auditoria Astra/Codex, hallazgo P0 #2): un
+     * hueco ALCISTA que abre ya por encima del objetivo debe resolverse en
+     * la apertura, AUNQUE ese mismo dia el minimo tambien perfore el stop.
+     * La apertura sucede antes que cualquier minimo/maximo posterior: la
+     * venta ya se ejecuto al abrir, el resto de la sesion es irrelevante.
+     *
+     * Antes de esta correccion, `simulateManagedExit()` comprobaba SIEMPRE
+     * el low contra el stop antes que el high contra el objetivo, sin mirar
+     * la apertura: este caso habria resuelto (mal) como stop_loss.
+     */
+    public function testUnHuecoAlcistaQueTambienPerforaElStopEnElMismoDiaResuelveComoObjetivo(): void
+    {
+        $history = $this->historyWithPostEntryPath([
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [104.5, 103.5, 104.0],
+            [111.0, 100.0, 105.0, 110.0], // dia 10: abre en 110 (>= objetivo=109), low=100 tambien perfora el stop
+        ]);
+
+        $sample = $this->runSingleSample($history);
+        $riskLevels = $this->expectedRiskLevels();
+
+        self::assertSame(
+            'target',
+            $sample['exit_reason'],
+            'La apertura ya resuelve la venta a favor: el low posterior no puede deshacer una venta ya ejecutada.'
+        );
+        self::assertSame($this->netReturn(110.0), $sample['managed_return']);
+        self::assertGreaterThan(
+            $this->netReturn($riskLevels->getTarget()),
+            $sample['managed_return'],
+            'Con hueco alcista la salida tiene que ser MEJOR que ejecutar exactamente en el objetivo.'
+        );
     }
 
     /**
