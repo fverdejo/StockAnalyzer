@@ -7294,3 +7294,24 @@ Estado: implementado y verificado. Decision del usuario: "tu decides" con qué s
 **Resto de la auditoria de Astra sin empezar**: P1 (convencion de solape en `step=horizon`, intervalos/Welch que no respetan sus supuestos), P2 (cache sin versionar, presentacion de `BacktestPage`).
 
 Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **661 tests, 1.814 assertions, OK** (1 skip preexistente, sube desde 660), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-08 (quinta entrada) - Dos hallazgos mas de la auditoria de Astra, medidos y cerrados como limitacion documentada sin impacto real: solape de `step=horizon` e intervalos de confianza normales en vez de t de Student
+
+Estado: investigado y documentado, sin cambio de codigo -- mismo criterio de "medir antes de decidir la magnitud de la correccion" que la entrada anterior (hueco de calendario).
+
+**Hallazgo P1 "step=horizon comparte retorno intradia"**: confirmado leyendo el codigo. Con `step === horizonDays` (la configuracion "independiente" estandar del proyecto, recomendada en el comentario de `bin/backtest.php`), la sesion de SALIDA de una ventana (`entryIndex + horizonDays`) es exactamente la misma que la sesion de ENTRADA de la siguiente (`entryIndex_{N+1} = entryIndex_N + horizonDays`) -- su movimiento open->close se cuenta en ambas ventanas. Astra lo demuestra de forma sintetica forzando el 100% del movimiento de dos ventanas dentro de esa unica sesion compartida (dos retornos identicos de +10%, correlacion perfecta).
+
+**Medido sobre datos reales antes de decidir si hacia falta cambiar la convencion** (50 tickers de `sp400`, precios ya cacheados, horizon=step=20, sin llamada nueva): la correlacion de Pearson entre retornos consecutivos de un mismo ticker sale **practicamente nula** -- media -0,031, mediana -0,019, rango [-0,243, +0,155] entre los 50 tickers. Nada parecido al +1 del caso sintetico extremo de Astra: en datos reales, el dia compartido pesa de media un 16,9% del movimiento total de la ventana (mediana), pero no arrastra el retorno del dia siguiente en ninguna direccion sistematica. **Conclusion: la violacion de independencia estricta es real en el papel pero sin efecto practico medible en el t-stat pareado.**
+
+**Decision**: no se cambia la convencion `step >= horizonDays` (exigir `step > horizonDays` para independencia total invalidaria la comparabilidad numerica de TODAS las mediciones ya publicadas en este proyecto -- P3.3, `v2.114`, `sp400`, `sp600`, momentum P3.4 -- para un beneficio medido como nulo). Documentado aqui como limitacion conocida y medida, no una correccion pendiente.
+
+**Hallazgo P1 "intervalos/Welch no respetan sus supuestos"**: dos criticas distintas, evaluadas por separado.
+
+1. `crossSectionalStatistics()` usa siempre `1.96 * stderr` para el IC95 (aproximacion normal), sin corregir por grados de libertad con muestras pequeñas -- una t de Student seria mas correcta, sobre todo con pocas fechas. **Medido**: la muestra mas pequeña usada en cualquier medicion real de este proyecto hasta hoy es `n=40` (horizonte 60 de `sp400`/`sp600`); el cuantil t de Student al 95% con 39 grados de libertad es ≈2,023 frente al 1,96 normal -- una diferencia del 3%, muy por debajo de cualquier umbral relevante (nada medido hasta hoy estuvo cerca de 1,96, y mucho menos del Bonferroni 2,24). Implementar el cuantil t exacto es una mejora de precision real pero de beneficio nulo para cualquier conclusion ya publicada; se deja como mejora futura, no urgente.
+2. El contraste Welch de `pooled_alpha_t_stat`/`pooled_alpha_stderr` compara BUY contra TODO (que INCLUYE a BUY), violando el supuesto de independencia de grupos de Welch -- cierto y real. Pero este campo **nunca ha sido la metrica principal** de ninguna investigacion de este proyecto: el criterio establecido desde el inicio (ver notas de `auditor-estadistico` en entradas anteriores) es que el t pareado por fecha (`alpha_t_stat`, no `pooled_alpha_t_stat`) es la UNICA metrica que decide significancia; el pooled se expone solo como contraste secundario, ya con esa advertencia impl​ícita en como se ha usado siempre. No autoriza cambiar ninguna conclusion ya cerrada.
+
+**Con esto se cierran, con medicion real, los cuatro hallazgos P1 de la auditoria de Astra** (calendario, CLI, solape, intervalos/Welch) -- dos con correccion de codigo (CLI truncando, guarda de huecos de calendario) y dos documentados como impacto medido nulo sobre los datos reales de este proyecto. Quedan los dos P2 (cache sin versionar, presentacion de `BacktestPage`), de severidad menor -- no se ha empezado, decision de continuar o no pendiente de la siguiente sesion.
+
+Sin cambios de codigo en esta entrada: `ddev exec vendor/bin/phpunit`/`phpstan` sin novedad respecto a la entrada anterior (661 tests, sin errores). `config/weights.php` no se toca.

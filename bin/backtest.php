@@ -23,12 +23,21 @@ use StockAnalyzer\Services\DividendGrowthCalculator;
 use StockAnalyzer\Services\RiskLevelsCalculator;
 use StockAnalyzer\Utils\UniverseTickerResolver;
 
-// Para validar hallazgos con muestras estadisticamente independientes
-// (no solapadas), ejecutar con --step=<valor igual a --horizon>: p.ej.
-// --horizon=20 --step=20. Con el --step por defecto (5) y horizontes
-// tipicos de 20 dias, cada muestra comparte hasta 15 de sus 20 dias de
-// retorno futuro con la siguiente (autocorrelacion): ver
-// 'effective_independent_samples' en la salida de cada ticker.
+// Para validar hallazgos con muestras estadisticamente independientes,
+// ejecutar con --step=<valor igual a --horizon>: p.ej. --horizon=20
+// --step=20. Con el --step por defecto (5) y horizontes tipicos de 20
+// dias, cada muestra comparte hasta 15 de sus 20 dias de retorno futuro
+// con la siguiente (autocorrelacion): ver 'effective_independent_samples'
+// en la salida de cada ticker.
+//
+// Nota de precision (auditoria Astra/Codex, 2026-09-08): con
+// --step=--horizon la sesion de SALIDA de una ventana y la de ENTRADA de
+// la siguiente son la misma vela -- "no solapadas" no es exacto al 100%.
+// Medido sobre datos reales (versions.md, 2026-09-08): la correlacion
+// entre retornos consecutivos sale practicamente nula (media -0,03 sobre
+// 50 tickers de sp400), asi que en la practica --step=--horizon sigue
+// dando muestras utilizables para el t-stat pareado; el efecto teorico
+// no es cero, pero no se ha medido ningun caso real donde importe.
 //
 // --persist: en vez de imprimir el JSON de run() a stdout, recorre los
 // tickers uno a uno via BacktestingService::runForTickerCached() para
