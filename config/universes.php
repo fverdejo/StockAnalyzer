@@ -186,6 +186,14 @@ return [
     // de relleno) y el porque de elegir IJH sobre IJR/una mezcla de ambos.
     'sp400' => [
         'label' => 'S&P MidCap 400',
+        // 'selectable' => false (2026-09-08, antes del primer despliegue a
+        // la Raspberry Pi tras la pausa): 400 tickers en vivo en una sola
+        // peticion web es el mismo riesgo que ya evito 'msci_world' -- la
+        // Pi tiene 906 MiB de RAM y ya sufrio un incidente real por una
+        // operacion de golpe. Decision explicita del usuario, precaucion
+        // antes de medir, no una lentitud ya observada. Sigue disponible
+        // completo via `bin/analyze.php --universe=sp400`.
+        'selectable' => false,
         'tickers' => [
             'AA', 'AAL', 'AAON', 'ACI', 'ACM', 'ADC', 'AEIS', 'AFG', 'AGCO', 'AHR',
             'AIT', 'ALGM', 'ALK', 'ALLY', 'ALSN', 'ALV', 'AM', 'AMG', 'AMH', 'AMKR',
@@ -259,6 +267,10 @@ return [
     // en un regimen de mercado genuinamente distinto (small-cap).
     'sp600' => [
         'label' => 'S&P SmallCap 600',
+        // 'selectable' => false: mismo motivo que 'sp400', ver su
+        // comentario -- 602 tickers en vivo en la Pi (906 MiB RAM) es el
+        // mismo riesgo que ya evito 'msci_world'.
+        'selectable' => false,
         'tickers' => [
             'AAMI', 'AAP', 'AAT', 'ABCB', 'ABG', 'ABM', 'ABR', 'ACA', 'ACAD', 'ACHC',
             'ACIW', 'ACLS', 'ACMR', 'ACT', 'ADAM', 'ADEA', 'ADIG', 'ADMA', 'ADNT', 'ADT',
