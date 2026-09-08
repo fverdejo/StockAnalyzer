@@ -40,6 +40,18 @@ class RiskLevelsCalculator
     ) {
     }
 
+    /**
+     * Expuesto para poder construir una firma de configuracion estable
+     * (`BacktestingService::cacheConfigSignature()`, `2026-09-08`): sin
+     * esto, `TickerBacktestCacheRepository` no tenia forma de saber si el
+     * ATR multiplier/reward ratio vigentes son los mismos con los que se
+     * cacheo un resultado.
+     */
+    public function getConfig(): RiskLevelsConfig
+    {
+        return $this->config;
+    }
+
     public function compute(TechnicalSnapshot $technical, float $price): ?RiskLevels
     {
         $atr14 = $technical->getAtr14();

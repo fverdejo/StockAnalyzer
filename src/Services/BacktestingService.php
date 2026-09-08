@@ -1636,6 +1636,43 @@ class BacktestingService
     }
 
     /**
+     * Version del MOTOR de simulacion, no de la configuracion (auditoria
+     * Astra/Codex, `2026-09-08`): forma parte de `cacheConfigSignature()`
+     * para invalidar `ticker_backtest_cache` cuando cambia la LOGICA de
+     * `simulateManagedExit()`/`resolveDayExit()` aunque ningun valor de
+     * `config/` se haya tocado -- exactamente el caso de la correccion P0
+     * del mismo dia (versions.md), que sin esto habria seguido sirviendo
+     * `managed_return` calculado con el bug durante hasta 1 dia tras
+     * desplegarse. Subir a mano cada vez que cambie esa logica.
+     */
+    private const ENGINE_CACHE_VERSION = 1;
+
+    /**
+     * Huella de todo lo que puede cambiar el resultado de un backtest para
+     * el MISMO ticker/horizonte/paso: coste por operacion, pesos del
+     * score, niveles de riesgo (ATR multiplier/reward ratio) y la version
+     * del motor de simulacion. `TickerBacktestCacheRepository` la usa para
+     * distinguir "cache vigente" de "cache de una configuracion o version
+     * de codigo distinta" -- antes de esto, cambiar cualquiera de esos
+     * cuatro seguia sirviendo el resultado antiguo hasta que caducase el
+     * TTL, sin ningun aviso (reproducido por Astra: mismo ticker, coste
+     * cambiado a 100pb, la cache seguia devolviendo el retorno calculado a
+     * 0pb).
+     */
+    private function cacheConfigSignature(): string
+    {
+        $riskConfig = $this->riskLevelsCalculator->getConfig();
+
+        return hash('sha256', json_encode([
+            'engine_version' => self::ENGINE_CACHE_VERSION,
+            'cost_bps' => $this->backtestingConfig->getCostBps(),
+            'atr_multiplier' => $riskConfig->getAtrMultiplier(),
+            'reward_ratio' => $riskConfig->getRewardRatio(),
+            'weights' => $this->scoreCalculator->getWeights()->toArray(),
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
      * Version cacheada de `runForTicker()` (ver versions.md v2.34,
      * `TickerBacktestCacheRepository`): solo cachea resultados en modo
      * 'full' (el que ve el usuario real), nunca los de `--mode=technical`
@@ -1652,7 +1689,8 @@ class BacktestingService
         ?DateInterval $ttl = null
     ): ?array {
         $ttl ??= new DateInterval('P1D');
-        $cached = $cache->find($ticker, $horizonDays, $step, $ttl);
+        $configSignature = $this->cacheConfigSignature();
+        $cached = $cache->find($ticker, $horizonDays, $step, $ttl, $configSignature);
 
         if ($cached !== null) {
             return $cached;
@@ -1661,7 +1699,7 @@ class BacktestingService
         $result = $this->runForTicker($ticker, $horizonDays, $step);
 
         if ($result !== null) {
-            $cache->save($ticker, $horizonDays, $step, $result);
+            $cache->save($ticker, $horizonDays, $step, $result, $configSignature);
         }
 
         return $result;
@@ -1699,9 +1737,10 @@ class BacktestingService
         $weightedReturnSum = 0.0;
         $liveComputations = 0;
         $ttl = new DateInterval('P1D');
+        $configSignature = $this->cacheConfigSignature();
 
         foreach ($tickers as $ticker) {
-            $cached = $cache->find($ticker, $horizonDays, $step, $ttl);
+            $cached = $cache->find($ticker, $horizonDays, $step, $ttl, $configSignature);
 
             if ($cached === null) {
                 if ($liveComputations >= $maxLiveComputations) {

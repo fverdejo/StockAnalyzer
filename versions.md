@@ -7315,3 +7315,23 @@ Estado: investigado y documentado, sin cambio de codigo -- mismo criterio de "me
 **Con esto se cierran, con medicion real, los cuatro hallazgos P1 de la auditoria de Astra** (calendario, CLI, solape, intervalos/Welch) -- dos con correccion de codigo (CLI truncando, guarda de huecos de calendario) y dos documentados como impacto medido nulo sobre los datos reales de este proyecto. Quedan los dos P2 (cache sin versionar, presentacion de `BacktestPage`), de severidad menor -- no se ha empezado, decision de continuar o no pendiente de la siguiente sesion.
 
 Sin cambios de codigo en esta entrada: `ddev exec vendor/bin/phpunit`/`phpstan` sin novedad respecto a la entrada anterior (661 tests, sin errores). `config/weights.php` no se toca.
+
+---
+
+## 2026-09-08 (sexta entrada) - P2 de la auditoria de Astra: `ticker_backtest_cache` sin versionar, corregido
+
+Estado: implementado y verificado. Continuacion de la sesion anterior: sin nada nuevo de Codex/Astra, se retoma con el hallazgo P2 mas serio de los dos pendientes (el otro, presentacion de `BacktestPage`, sigue sin empezar).
+
+**El hallazgo es real, confirmado leyendo `TickerBacktestCacheRepository.php`**: la clave de cache era `(ticker, horizon_days, step)`, sin incluir el coste por operacion, los pesos del score, los niveles de riesgo (ATR multiplier/reward ratio) ni ninguna version del motor. Cambiar cualquiera de esos cuatro despues de que algo ya estuviera cacheado seguia sirviendo el resultado ANTIGUO durante hasta 1 dia (el TTL), sin ningun aviso -- Astra lo demuestra con una comparacion directa (mismo ticker, coste recalculado a 100pb, la cache seguia devolviendo el retorno gestionado calculado a 0pb).
+
+**Caso mas silencioso todavia, real y de HOY**: un cambio en la LOGICA de simulacion (no en la configuracion) tampoco invalidaba nada -- exactamente lo que paso esta misma sesion con la correccion P0 de `simulateManagedExit()`. Sin este arreglo, cualquier fila ya cacheada ANTES de esa correccion habria seguido sirviendo `managed_return` calculado con el bug durante hasta 1 dia despues de desplegarla, en la ficha de detalle real que usa el usuario.
+
+**Correccion**: migracion `029` añade `config_signature VARCHAR(64) NULL` a `ticker_backtest_cache`. Nuevo metodo privado `BacktestingService::cacheConfigSignature()`: hash sha256 de coste (`BacktestingConfig::getCostBps()`), pesos del score (`ScoreCalculator::getWeights()->toArray()`, ya existia), niveles de riesgo (`RiskLevelsCalculator::getConfig()`, nuevo getter -- antes no habia forma de leer el `RiskLevelsConfig` interno) y una constante `ENGINE_CACHE_VERSION` que se sube A MANO cada vez que cambie la logica de `simulateManagedExit()`/`resolveDayExit()` (queda en `1`, primera version del esquema; subir a `2` en la proxima correccion de esa logica). `TickerBacktestCacheRepository::find()` exige que la firma coincida con la vigente; cualquier fila con firma distinta -- incluidas las que ya existian antes de esta migracion, con `config_signature` `NULL` -- se trata como cache MISS. No hace falta backfill ni borrar nada: se auto-corrige fila a fila en la siguiente peticion de cada ticker.
+
+**Tests nuevos** (`tests/Integration/TickerBacktestCacheRepositoryTest.php`, sin cobertura previa de este repositorio -- 0 tests antes de hoy): guardar/leer con la misma firma, una firma distinta es MISS (el caso central del hallazgo), guardar con firma nueva sobrescribe la anterior, una fila sin firma (pre-migracion) es MISS frente a cualquier firma vigente, TTL caducado sigue siendo MISS aunque la firma coincida, normalizacion de ticker a mayusculas.
+
+Verificado tambien contra MySQL real (no solo el esquema de test): `bin/migrate.php` aplica la `029` sin errores sobre la base de `ddev`, `DESCRIBE ticker_backtest_cache` confirma la columna nueva, y la ficha de detalle real (`?ticker=AAPL`) sigue respondiendo HTTP 200 sin errores tras el cambio.
+
+**Queda el ultimo hallazgo de la auditoria de Astra sin empezar** (P2, presentacion de `BacktestPage`: horizonte del formulario no coincide con el calculado, errores por ticker ocultos, aviso de fundamentales con el 56% desactualizado ya que el peso activo es 0/50) -- de severidad menor (interfaz, no calculo), decision de continuar pendiente de la siguiente sesion.
+
+Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **668 tests, 1.822 assertions, OK** (1 skip preexistente, sube desde 661), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.

@@ -1,0 +1,25 @@
+-- Hallazgo real senalado por Astra/Codex el 2026-09-08 (AUDITORIA_BACKTESTING_ASTRA_2026-09-08.md,
+-- P2): la clave de ticker_backtest_cache es (ticker, horizon_days, step) --
+-- no incluye coste por operacion, pesos del score, ni la configuracion de
+-- niveles de riesgo (ATR/ratio). Cambiar cualquiera de esos tres despues de
+-- que algo ya este cacheado sigue sirviendo el resultado ANTIGUO durante
+-- hasta 1 dia (el TTL), sin ningun aviso: reproducido por Astra con una
+-- comparacion directa (mismo ticker, coste cambiado a 100pb, la cache seguia
+-- devolviendo el retorno gestionado calculado a 0pb).
+--
+-- Tambien cubre un caso mas silencioso todavia: un cambio en la LOGICA de
+-- simulacion (no en la configuracion) -- exactamente lo que paso el mismo
+-- dia con la correccion P0 de simulateManagedExit() (versions.md,
+-- 2026-09-08) -- no invalida nada aqui, porque la clave no sabe que el
+-- CODIGO cambio, solo que el ticker/horizonte/paso siguen siendo los
+-- mismos.
+--
+-- config_signature: hash (ver BacktestingService::cacheConfigSignature())
+-- de coste + pesos del score + ATR multiplier/reward ratio + una constante
+-- de version del motor que se sube a mano cuando la logica de simulacion
+-- cambia. find() trata cualquier fila cuya firma no coincida con la
+-- configuracion vigente (incluidas las filas ya existentes, con
+-- config_signature NULL) como cache MISS -- no hace falta backfill ni
+-- borrar nada, se auto-corrige en la siguiente peticion de cada fila.
+ALTER TABLE ticker_backtest_cache
+    ADD COLUMN config_signature VARCHAR(64) NULL AFTER step;
