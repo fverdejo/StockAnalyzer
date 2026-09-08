@@ -7185,3 +7185,21 @@ Estado: medido y cerrado. Con esto se completa la cadena de trabajo de hoy (univ
 **Con esto, la condicion del usuario del `2026-08-21` queda satisfecha y la via del "score fundamental" como predictor cross-sectional a 20/60 dias queda cerrada tambien para mid-cap EEUU**, con la misma honestidad que P3.3/`v2.114`: nulo en la muestra medida, sin descartar que otro regimen de mercado (small-cap puro via `IJR`, ya descargado en `storage/scratch/ijr_holdings.csv` si se quisiera una cuarta replica) de una respuesta distinta. `config/weights.php` no se toca.
 
 Script de medicion (`storage/scratch/run_sp400_fundamental_backtest.php`, no versionado, mismo patron que el resto de scripts de investigacion de esta carpeta) y resultado completo (`sp400_fundamental_backtest_results.json`, con las 161 fechas individuales) conservados para reproducibilidad. No se toca ningun archivo de `src/`.
+
+---
+
+## 2026-09-07 (quinta entrada) - Universo nuevo: `sp600` (S&P SmallCap 600, 602 tickers reales), cuarta replica de la investigacion del score fundamental
+
+Estado: implementado y verificado. El usuario pide seguir con lo pendiente mientras Codex/Astra revisa por su lado; se continua la linea natural anotada como "no es una tarea de hoy" en la entrada anterior: completar la replica en small-cap puro.
+
+**Fuente real, mismo patron que `sp400`**: CSV publico de holdings de iShares Core S&P Small-Cap ETF (`IJR`), ya descargado el mismo dia que `IJH` pero SIN verificar hasta ahora. 669 filas `Asset Class=Equity`: 601 `Type=EQUITY` (0 duplicados entre si) + 66 `Type=SWAP` + 2 `Type=WARRANT` sin ticker real (descartadas). **El patron de deduplicacion NO fue identico al de `sp400`, confirmado explicitamente en vez de asumido**: de las 66 filas `SWAP`, 65 repiten un ticker `EQUITY` ya contado, pero una no -- `FG` (F&G Annuities & Life), exposicion 100% sintetica via swap sin tenencia fisica en el CSV, verificada tambien como posicion real contra Yahoo, se incluye aparte: 601 + 1 = **602 tickers**, ninguno fabricado de memoria.
+
+**Verificacion 602/602 contra Yahoo real**: 0 errores, 0 no-`EQUITY`, 0 fuera de bolsa EEUU, 0 simbolo devuelto distinto del solicitado. A diferencia de `sp400` (un caso de formato, `MOGA`->`MOG-A`), ningun ticker de `IJR` lleva guion/punto de clase de accion. 54 tickers tienen `firstTradeDate` desde 2021 (OPV/spin-offs recientes, incluidos 4 casos de 2026 -- `ADIG`, `MBGL`, `MFP`, `VGNT` -- confirmados como holdings reales por coincidencia exacta de nombre CSV/Yahoo, no ticker reciclado): dato real, no fallo de mapeo, mas rotacion que `sp400` como cabria esperar de small-cap pero sin ningun 404/delisting, mas limpio de lo esperado dado que el CSV tiene solo unos dias.
+
+**Solapamiento minimo**: solo 1/602 (`QRVO`) ya estaba en otro universo (`semiconductors_global`); **0 solapamiento con `sp400`** (confirmado explicitamente, coherente con ser un regimen genuinamente distinto). 601 tickers completamente nuevos. Total de tickers unicos en `config/universes.php` tras esta entrada: **2.372** (sube desde 1.771). `tests/Utils/UniverseTickerResolverTest.php` actualizado con la cifra real.
+
+**Mismo proposito que `sp400`**, explicito en el comentario del fichero: cuarta replica del mismo diseño (large-cap x2 nulo, mid-cap x1 nulo, ahora small-cap) para la pregunta de si el score fundamental tiene ventaja predictiva en ALGUN regimen de mercado EEUU. `selectable` por defecto (602 tickers, mismo orden que `sp400`/`sp500`, sin necesidad de tratamiento "solo cron").
+
+**Pendiente, siguiente paso real (no hecho en esta entrada):** backfill de fundamentales EODHD para los 602 tickers (~6.020 unidades de cuota, lejos del limite de 100.000/dia), auditar calidad con `FundamentalsQualityAuditor` (mismo chequeo `filing_date_placeholder` que ya limpio a `sp400`) y, si la calidad es buena, predeclarar con `auditor-estadistico` y medir `mode=fundamental` -- misma secuencia ya probada tres veces hoy.
+
+Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **656 tests, 1.780 assertions, OK** (1 skip preexistente), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.

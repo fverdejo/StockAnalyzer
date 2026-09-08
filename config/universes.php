@@ -229,6 +229,100 @@ return [
             'WPC', 'WSO', 'WTFC', 'WTRG', 'WTS', 'WWD', 'XPO', 'XRAY', 'YETI', 'ZION',
         ],
     ],
+    // Curado el 2026-09-07, mismo dia y mismo lote de descarga que 'sp400',
+    // desde el CSV publico de holdings de iShares Core S&P Small-Cap ETF
+    // (IJR, replica fisica/muestreo representativo). 669 filas Asset
+    // Class=Equity: 601 Type=EQUITY (0 duplicados entre si) + 66
+    // Type=SWAP (65 repiten el ticker de una tenencia EQUITY ya contada,
+    // descartadas) + 2 Type=WARRANT sin ticker real (descartadas). Una
+    // fila SWAP NO tiene equivalente EQUITY -- FG (F&G Annuities & Life),
+    // exposicion 100% sintetica via swap sin tenencia fisica en el CSV,
+    // pero una posicion real del fondo (confirmada tambien contra
+    // Yahoo) -- se incluye: 601 + 1 = 602 tickers. Ningun ticker
+    // fabricado de memoria, todos vienen literalmente del CSV. A
+    // diferencia de 'sp400' (un caso de formato, MOGA->MOG-A), aqui
+    // ningun ticker lleva guion/punto de clase de accion.
+    // Verificados 602/602 contra el endpoint de Yahoo Finance el mismo
+    // dia (cotizan hoy, EQUITY, bolsa EEUU, 0 errores). 54 tickers tienen
+    // `firstTradeDate` desde 2021 (OPV/spin-offs recientes, dato real no
+    // fallo de mapeo), incluidos 4 casos de 2026 (ADIG, MBGL, MFP, VGNT)
+    // confirmados como holdings reales por coincidencia exacta de nombre
+    // CSV/Yahoo, no ticker reciclado.
+    // Solo 1/602 (QRVO) ya estaba en otro universo de este fichero
+    // (`semiconductors_global`); 0 solapamiento con 'sp400' (regimen
+    // small-cap genuinamente distinto de mid-cap, coherente con el
+    // proposito de este universo). 601 tickers son completamente nuevos.
+    // Mismo proposito que 'sp400' (a diferencia de 'sp500'/'nasdaq100',
+    // que llevan escrito "no apto como universo independiente"): tercera
+    // replica de la investigacion del "score fundamental" (P3.3/`v2.114`
+    // large-cap nulo, `sp400` mid-cap nulo, ver versions.md 2026-09-07)
+    // en un regimen de mercado genuinamente distinto (small-cap).
+    'sp600' => [
+        'label' => 'S&P SmallCap 600',
+        'tickers' => [
+            'AAMI', 'AAP', 'AAT', 'ABCB', 'ABG', 'ABM', 'ABR', 'ACA', 'ACAD', 'ACHC',
+            'ACIW', 'ACLS', 'ACMR', 'ACT', 'ADAM', 'ADEA', 'ADIG', 'ADMA', 'ADNT', 'ADT',
+            'ADUS', 'AEO', 'AESI', 'AGNT', 'AGO', 'AGX', 'AGYS', 'AHCO', 'AIN', 'AIR',
+            'AKR', 'ALG', 'ALGT', 'ALHC', 'ALKS', 'ALRM', 'AMN', 'AMPH', 'AMR', 'AMRX',
+            'AMSF', 'AMTM', 'ANDE', 'ANIP', 'AORT', 'AOSL', 'APAM', 'APLE', 'APOG', 'ARCB',
+            'ARLO', 'AROC', 'ARR', 'ASO', 'ASTE', 'ASTH', 'ATEN', 'ATMU', 'AUB', 'AVA',
+            'AWI', 'AWR', 'AX', 'AZTA', 'AZZ', 'BANC', 'BANF', 'BANR', 'BBT', 'BCC',
+            'BCPC', 'BFAM', 'BFH', 'BFS', 'BGC', 'BHE', 'BJRI', 'BKE', 'BKU', 'BL',
+            'BLFS', 'BLKB', 'BMI', 'BNL', 'BOH', 'BOOT', 'BOX', 'BRC', 'BTU', 'BXMT',
+            'CACC', 'CAG', 'CAKE', 'CALM', 'CALX', 'CALY', 'CARG', 'CASH', 'CATY', 'CBRL',
+            'CBU', 'CC', 'CCOI', 'CCS', 'CE', 'CENT', 'CENTA', 'CENX', 'CERT', 'CFFN',
+            'CHCO', 'CHEF', 'CLSK', 'CNK', 'CNMD', 'CNR', 'CNS', 'CNXC', 'CNXN', 'COCO',
+            'COHU', 'COLL', 'CON', 'CORT', 'COTY', 'CPB', 'CPF', 'CPK', 'CRC', 'CRGY',
+            'CRI', 'CRK', 'CRSR', 'CRVL', 'CSR', 'CSW', 'CTS', 'CUBI', 'CURB', 'CVBF',
+            'CVCO', 'CVI', 'CVSA', 'CWEN', 'CWK', 'CWST', 'CWT', 'CXM', 'CXW', 'CZR',
+            'DAN', 'DAVE', 'DBD', 'DCH', 'DCOM', 'DEA', 'DEI', 'DFH', 'DFIN', 'DGII',
+            'DIOD', 'DLX', 'DMC', 'DNOW', 'DORM', 'DRH', 'DV', 'DXC', 'DXPE', 'EAT',
+            'EBC', 'ECG', 'ECPG', 'EFC', 'EFOR', 'EGBN', 'EIG', 'EMN', 'ENOV', 'ENPH',
+            'ENR', 'ENVA', 'EPAC', 'EPAM', 'EPC', 'EPRT', 'ESE', 'ESI', 'ETSY', 'EVTC',
+            'EXTR', 'EYE', 'EZPW', 'FA', 'FBK', 'FBNC', 'FBP', 'FBRT', 'FCF', 'FCPT',
+            'FELE', 'FFBC', 'FG', 'FHB', 'FIBK', 'FIVN', 'FIZZ', 'FLO', 'FMC', 'FORM',
+            'FOXF', 'FRPT', 'FSS', 'FTDR', 'FTRE', 'FUL', 'FULT', 'FUN', 'GBX', 'GEO',
+            'GFF', 'GIII', 'GKOS', 'GNL', 'GNW', 'GO', 'GOLF', 'GPI', 'GPOR', 'GRBK',
+            'GSHD', 'GT', 'GTES', 'GTM', 'GTY', 'GVA', 'HAFC', 'HASI', 'HAYW', 'HCC',
+            'HCI', 'HCSG', 'HE', 'HFWA', 'HIW', 'HLIT', 'HMN', 'HNI', 'HOPE', 'HOS',
+            'HP', 'HRMY', 'HSTM', 'HTH', 'HTLD', 'HTO', 'HUBG', 'HWKN', 'HZO', 'IART',
+            'IBP', 'ICHR', 'ICUI', 'IIPR', 'INDB', 'INDV', 'INSP', 'INSW', 'INVA', 'INVX',
+            'IOSP', 'IPAR', 'IRDM', 'ITGR', 'ITRI', 'IVT', 'JBGS', 'JBLU', 'JBSS', 'JBTM',
+            'JJSF', 'JOE', 'JXN', 'KAI', 'KALU', 'KFY', 'KGS', 'KLIC', 'KMPR', 'KMT',
+            'KMX', 'KN', 'KNTK', 'KOP', 'KRMN', 'KSS', 'KTB', 'KWR', 'LAUR', 'LAZ',
+            'LBRT', 'LCII', 'LEU', 'LFST', 'LGIH', 'LGND', 'LIF', 'LKFN', 'LKQ', 'LMAT',
+            'LNC', 'LNN', 'LPG', 'LQDA', 'LQDT', 'LRN', 'LTC', 'LTH', 'LUMN', 'LW',
+            'LXP', 'LYFT', 'LZ', 'LZB', 'MAC', 'MAN', 'MARA', 'MATW', 'MATX', 'MBC',
+            'MBGL', 'MBIN', 'MC', 'MCRI', 'MCY', 'MD', 'MDU', 'MFP', 'MGEE', 'MGY',
+            'MHK', 'MHO', 'MIR', 'MKTX', 'MLKN', 'MMI', 'MMSI', 'MPT', 'MRCY', 'MRP',
+            'MRTN', 'MSEX', 'MSGS', 'MTCH', 'MTH', 'MTRN', 'MTUS', 'MTX', 'MWA', 'MXL',
+            'MYRG', 'NABL', 'NATL', 'NAVI', 'NBHC', 'NBTB', 'NE', 'NEO', 'NEOG', 'NGVT',
+            'NHC', 'NHI', 'NIC', 'NMIH', 'NOG', 'NPK', 'NPO', 'NSIT', 'NSP', 'NSSC',
+            'NTCT', 'NTST', 'NWBI', 'NWL', 'NWN', 'NX', 'NXRT', 'OFG', 'OGN', 'OI',
+            'OII', 'OMCL', 'OPLN', 'OSIS', 'OSW', 'OTTR', 'OUT', 'PAHC', 'PARR', 'PATK',
+            'PAYC', 'PAYO', 'PBH', 'PBI', 'PCRX', 'PDFS', 'PEB', 'PECO', 'PENG', 'PENN',
+            'PFBC', 'PFS', 'PGNY', 'PHIN', 'PI', 'PIPR', 'PJT', 'PLAB', 'PLMR', 'PLUS',
+            'PLXS', 'PMT', 'POOL', 'POWI', 'POWL', 'PPLI', 'PRDO', 'PRG', 'PRGO', 'PRGS',
+            'PRIM', 'PRK', 'PRKS', 'PRLB', 'PRSU', 'PRVA', 'PSMT', 'PTCT', 'PTEN', 'PTGX',
+            'PTON', 'PZZA', 'QDEL', 'QNST', 'QRVO', 'QTWO', 'RAL', 'RAMP', 'RCUS', 'RDN',
+            'RDNT', 'RELY', 'RES', 'REX', 'REYN', 'REZI', 'RHI', 'RHP', 'RITM', 'RNG',
+            'RNST', 'ROAD', 'ROCK', 'ROG', 'RRR', 'RSI', 'RUN', 'RUSHA', 'RXO', 'SABR',
+            'SAFE', 'SAFT', 'SAH', 'SBCF', 'SBH', 'SBSI', 'SCHL', 'SCL', 'SCSC', 'SDGR',
+            'SEDG', 'SEI', 'SEZL', 'SFBS', 'SFNC', 'SHAK', 'SHEN', 'SHO', 'SHOO', 'SIG',
+            'SKT', 'SKY', 'SKYW', 'SLG', 'SLVM', 'SM', 'SMP', 'SMPL', 'SNDR', 'SNEX',
+            'SONO', 'SPHR', 'SPNT', 'SPSC', 'SRPT', 'STAA', 'STBA', 'STC', 'STEP', 'STRA',
+            'SUPN', 'SXI', 'SXT', 'TALO', 'TBBK', 'TDC', 'TDS', 'TDW', 'TENB', 'TFIN',
+            'TFX', 'TGTX', 'THRM', 'TILE', 'TMDX', 'TMP', 'TNC', 'TNDM', 'TPC', 'TR',
+            'TRIP', 'TRMK', 'TRN', 'TRNO', 'TRST', 'TRUP', 'UA', 'UAA', 'UCB', 'UCTT',
+            'UE', 'UFCS', 'UFPT', 'UNF', 'UNFI', 'UNIT', 'UPBD', 'UPWK', 'URBN', 'USLM',
+            'USPH', 'UTI', 'UTL', 'UVV', 'VAC', 'VCEL', 'VCTR', 'VCYT', 'VECO', 'VGNT',
+            'VIR', 'VIRT', 'VRRM', 'VRTS', 'VSAT', 'VSEC', 'VSH', 'VSNT', 'VSTS', 'VSXY',
+            'VTOL', 'VVX', 'VYX', 'WABC', 'WAFD', 'WAY', 'WD', 'WDFC', 'WEN', 'WERN',
+            'WGO', 'WHD', 'WINA', 'WKC', 'WLY', 'WOR', 'WRBY', 'WRLD', 'WS', 'WSBC',
+            'WSC', 'WSFS', 'WT', 'WU', 'WWW', 'XHR', 'XNCR', 'XPEL', 'YELP', 'YOU',
+            'ZD', 'ZWS',
+        ],
+    ],
     // Composicion completa verificada contra la revision oficial del comite
     // asesor tecnico del IBEX 35 (BME, revision num. 136 del 22/06/2026, sin
     // cambios desde la num. 130 del 22/07/2024 que incluyo PUIG y excluyo MEL).
