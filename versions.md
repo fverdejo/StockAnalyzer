@@ -7252,3 +7252,21 @@ Estado: implementado y verificado. Astra (Codex) dejo `AUDITORIA_BACKTESTING_AST
 **Pendiente, no hecho en esta entrada**: `Web\RiskLevelsBadge::GAP_RISK_NOTE` cita una cifra concreta ("15,77% de las salidas... abrieron por debajo del stop") medida explicitamente con `simulateManagedExit()` sobre 10 años/6 sectores (segun su propio docblock). Con el mecanismo corregido esa cifra puede haber cambiado -- se deja pendiente de remedir, no se toca el texto todavia sin la cifra real nueva. El resto de la auditoria de Astra (P1: CLI trunca universos a 60, calendario transversal dependiente del origen de cada historico, convencion de solape en `step=horizon`, intervalos/Welch que no respetan sus supuestos; P2: cache sin versionar, presentacion de `BacktestPage`) queda sin empezar, documentado en el propio fichero de Astra.
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **660 tests, 1.807 assertions, OK** (1 skip preexistente, sube desde 656), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-08 (tercera entrada) - P1 de la auditoria de Astra: `bin/backtest.php` tambien truncaba universos a 60 tickers
+
+Estado: implementado y verificado. Continuacion de la entrada anterior, siguiendo el orden de prioridad del propio documento de Astra (P0 ya cerrado).
+
+Mismo bug que `bin/analyze.php` tenia hasta el `2026-08-18` (`Utils\UniverseTickerResolver`, creado entonces): `bin/backtest.php` unia los tickers de `--universe`/`--tickers` en un texto y los pasaba por `TickerNormalizer::normalize()`, que trunca a `MAX_TICKERS` (60) -- un limite pensado para el buscador de texto libre del Home, no para una lista de config ya validada. Invisible mientras ningun universo individual superara 60, pero real desde que existen `sp400` (400), `sp500` (503), `sp600` (602) y `nasdaq100` (102): `bin/backtest.php --universe=sp400` analizaba en silencio solo 60/400 tickers, sin ningun aviso.
+
+**Correccion**: `bin/backtest.php` usa ahora `UniverseTickerResolver` (la misma clase que ya arreglo `bin/analyze.php`), en vez de su propia logica de union+normalizacion. `TickerNormalizer` sigue aplicandose, mismo criterio de siempre, cuando se pasa `--tickers="..."` explicito (texto libre); un `--universe=CLAVE` ya validado en `config/universes.php` no vuelve a pasar por ese limite.
+
+**Verificado**: `resolve('sp400', null)` devuelve 400/400, `sp500` 503/503, `sp600` 602/602, `nasdaq100` 102/102, `largecap60` 60/60 (caso limite, coincide con el propio `MAX_TICKERS` por diseño). No hacia falta un test nuevo dedicado: `UniverseTickerResolver` ya esta cubierto por `tests/Utils/UniverseTickerResolverTest.php` (incluida la aserción del `2372` total actualizada hoy mismo con `sp600`); `bin/backtest.php` queda como un consumidor mas, ya delgado, de una clase ya probada.
+
+**Matiz del propio documento de Astra, confirmado**: `storage/scratch/run_sp400_fundamental_backtest.php`/`run_sp600_fundamental_backtest.php` (las mediciones de ayer y hoy) leen la lista de `config/universes.php` directamente, sin pasar por `bin/backtest.php` ni por `TickerNormalizer` -- este bug NUNCA afecto a esas mediciones.
+
+**Sigue pendiente** el resto de la auditoria de Astra (P1: calendario transversal dependiente del origen de cada historico -- explicitamente marcado como "incluido el fundamental", pendiente de evaluar si afecta a `sp400`/`sp600`; convencion de solape en `step=horizon`; intervalos/Welch que no respetan sus supuestos; P2: cache sin versionar, presentacion de `BacktestPage`).
+
+Verificado: `ddev exec php -l` limpio, `ddev exec vendor/bin/phpunit` -- **660 tests, 1.807 assertions, OK** (sin cambios de cifras, `bin/` no se cubre con tests unitarios directos), `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.

@@ -21,7 +21,7 @@ use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 use StockAnalyzer\Services\BacktestingService;
 use StockAnalyzer\Services\DividendGrowthCalculator;
 use StockAnalyzer\Services\RiskLevelsCalculator;
-use StockAnalyzer\Utils\TickerNormalizer;
+use StockAnalyzer\Utils\UniverseTickerResolver;
 
 // Para validar hallazgos con muestras estadisticamente independientes
 // (no solapadas), ejecutar con --step=<valor igual a --horizon>: p.ej.
@@ -95,10 +95,16 @@ if ($persist && $historyRange !== '2y') {
 }
 
 $universes = new UniverseConfig();
-$rawTickers = is_string($options['tickers'] ?? null)
-    ? (string) $options['tickers']
-    : implode(' ', $universes->tickers($universeKey));
-$tickers = (new TickerNormalizer())->normalize($rawTickers);
+// P1 (auditoria Astra/Codex, 2026-09-08): antes se unian los tickers del
+// universo en un texto y se pasaban por TickerNormalizer, que trunca a
+// MAX_TICKERS (60) -- pensado para el buscador de texto libre del Home,
+// no para una lista de config ya validada. Mismo bug que ya corrigio
+// bin/analyze.php el 2026-08-18 (Utils\UniverseTickerResolver), aqui sin
+// corregir hasta ahora: cualquier --universe con mas de 60 tickers
+// (sp400, sp500, sp600, nasdaq100...) se analizaba truncado sin ningun
+// aviso.
+$explicitTickers = is_string($options['tickers'] ?? null) ? (string) $options['tickers'] : null;
+$tickers = (new UniverseTickerResolver($universes))->resolve($universeKey, $explicitTickers);
 
 $connection = new Connection();
 $weights = new ScoreWeights();
