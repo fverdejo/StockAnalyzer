@@ -161,12 +161,12 @@ HTML;
             . self::columnHeader('Benchmark', 'Retorno de comprar y mantener el ticker desde el primer hasta el último día del histórico disponible, sin usar ninguna señal. Es la referencia pasiva; cubre todo el histórico, no el horizonte, así que no se compara dato a dato con las columnas de retorno.', true)
             . self::columnHeader('Peor gestionado', 'Peor resultado de una sola operación entre las compras simuladas con gestión de riesgo (stop loss y objetivo activos): el golpe máximo que habría encajado la estrategia. Solo entran las señales Comprar con niveles de riesgo calculables.', true)
             . self::columnHeader('Alpha vs todos los días', 'Retorno medio de las compras de este ticker menos el retorno medio de todas sus muestras, con señal o sin ella. Positivo = filtrar por señal aporta algo frente a estar comprado cualquier día; cerca de cero = la señal no añade nada. Es alpha contra el propio ticker, no contra el universo: esa es la tarjeta "Alpha del universo" de arriba.', true)
-            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estándar (Welch), sin corregir por la posible dependencia entre muestras del mismo ticker. |t| mayor o igual que 1,96 es la aproximación habitual para decir que la diferencia no se explica fácilmente por azar; por debajo de ese valor, la alpha no se distingue del ruido.', true)
+            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estándar (fórmula de Welch para dos muestras independientes). Las compras son un SUBCONJUNTO de todos los días, no una muestra aparte, así que esa independencia no se cumple del todo: es una aproximación orientativa, no un contraste validado. |t| mayor o igual que 1,96 es la referencia habitual, no una frontera exacta entre señal y azar.', true)
             . '</tr></thead><tbody>'
             . implode('', $rows)
             . '</tbody></table></div>'
             . Layout::renderPagination($pageNum, $totalPages, $paginationBase)
-            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estándar (Welch), sin corregir por la posible dependencia entre muestras del mismo ticker. |t| &ge; 1,96 &rarr; aproximación habitual para decir que la diferencia entre las señales de compra y la media de todos los días no se explica fácilmente por azar; por debajo de ese valor, la alpha no se distingue del ruido.</p>'
+            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estándar (fórmula de Welch, pensada para dos muestras independientes). Las señales de compra son un subconjunto de todos los días, no una muestra aparte, así que esa independencia no se cumple del todo: es una aproximación orientativa, no un contraste validado. |t| &ge; 1,96 es la referencia habitual, no una frontera exacta entre señal y azar.</p>'
             . self::renderPointInTimeNote($allResults, $fundamentalWeightPercent)
             . '</section>';
     }

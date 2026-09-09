@@ -7543,3 +7543,17 @@ Incluye:
 - Tests nuevos: `tests/Integration/BacktestingServicePeerGroupTest.php` (4 tests). Test nuevo en `tests/Services/BacktestingServiceMomentumModeTest.php` (1 test).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **687 tests, 1.893 assertions, OK** (sube desde 682/1.853: 5 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca en ningun punto.
+
+---
+
+## 2026-09-09 (cuarta entrada) - Encargo minimo de precision estadistica del mismo seguimiento: se retira de la interfaz la deduccion automatica de "1,96 separa señal de azar"
+
+Estado: implementado el "encargo minimo" (etiquetar aproximaciones, retirar la deduccion automatica de la interfaz); el resto del punto 6 del seguimiento (definir el tratamiento de muestras pequeñas, revisar si Welch sigue siendo la formula correcta para `buy_alpha_t_stat`) queda pendiente a proposito, es una decision de metodologia mas grande que necesita mas que retocar un texto.
+
+Astra señala que `BacktestPage.php` usa Welch (formula para dos muestras INDEPENDIENTES) para `buy_alpha_t_stat`, pero las señales de compra son un SUBCONJUNTO de "todos los dias" (BUY esta incluido en ALL), no una muestra aparte -- la comparacion omite la covarianza entre ambos promedios. Ejemplo de Astra que lo hace inequivoco: los mismos datos `[1,3]` en los dos grupos (una diferencia identicamente CERO) devuelven un error estandar de Welch de ≈1,414, no cero. El texto de la interfaz, sin embargo, presentaba el umbral `|t| >= 1,96` como si fuera una frontera validada ("por debajo de ese valor, la alpha no se distingue del ruido").
+
+**Correccion (solo texto, ningun numero ni formula cambia)**: las dos notas de `BacktestPage.php` ("t de la alpha", cabecera de columna y nota al pie) se reescriben para decir que Welch asume independencia que aqui no se cumple del todo (BUY es subconjunto de ALL), que es una aproximacion orientativa y que `1,96` es "la referencia habitual", no "una frontera exacta entre señal y azar". Se retira la frase que afirmaba que por debajo del umbral "la alpha no se distingue del ruido".
+
+No se toca el intervalo normal de `runCrossSectional()` (`alpha_ci95_low`/`alpha_ci95_high`) ni el aviso de `step=horizon`: ninguno de los dos tiene presencia en ninguna pagina web (solo en la salida cruda de `bin/backtest.php --cross-sectional`/la API), y las limitaciones de ambos ya quedaron documentadas como "aceptadas para estas mediciones" el `2026-09-08` -- Astra confirma esto mismo en su propio seguimiento ("ya documentado como limitacion").
+
+Verificado: ningun test referenciaba el texto antiguo (`grep` antes de editar). `ddev exec vendor/bin/phpunit` -- **687 tests, 1.893 assertions, OK** (sin cambio, es un cambio de texto puro). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. Confirmado por HTTP real que `?page=backtest` sigue respondiendo 200. `config/weights.php` no se toca.
