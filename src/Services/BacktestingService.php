@@ -1150,29 +1150,25 @@ class BacktestingService
 
     /**
      * P3.4 (`REVISION_MOTOR_CODEX_2026-09-02.md`, seccion "3. Nuevo modo
-     * 'momentum'"): cualquier sector con menos de este numero de muestras
+     * 'momentum'"): cualquier sector con menos de este numero de
+     * SUPERVIVIENTES REALES (tras el filtro `market_cap_is_point_in_time`)
      * queda fuera de la neutralizacion ese dia (`rankByMomentumNeutral()`)
      * -- con pocos pares no hay con que neutralizar de forma fiable.
      *
-     * **Correccion documental (seguimiento de Astra, `2026-09-09`, caso
-     * 5): "muestras" aqui es el recuento BRUTO por sector (paso a, antes
-     * de descartar por `market_cap_is_point_in_time`), no el de
-     * SUPERVIVIENTES tras el filtro PIT (paso b).** Un sector con
-     * exactamente `MIN_SECTOR_SAMPLES_MOMENTUM` muestras brutas pero solo
-     * 2 con PIT real pasa el paso (a) igual que uno con 20 supervivientes
-     * de verdad -- el umbral NO garantiza cobertura utilizable, solo que
-     * habia bastante gente compitiendo antes de saber cuantos tenian dato
-     * fiable. Reproducido por Astra: tres sectores con 20 valores brutos
-     * cada uno pero solo 2 con PIT valido dan 0 descartes por sector
-     * pequeño y 54 (de 60) descartes por falta de PIT, dejando solo 6
-     * supervivientes reales -- visible ya hoy en
-     * `dropped_thin_sector`/`dropped_no_marketcap_pit`, el problema no era
-     * la falta de datos para diagnosticarlo, era la documentacion que
-     * afirmaba una garantia falsa (ver mas abajo). Decidir si el umbral
-     * debe aplicarse ANTES o DESPUES del filtro PIT es un cambio de regla
-     * de investigacion que necesita acuerdo explicito aparte (no se
-     * cambia aqui el orden ni el resultado de ninguna medicion ya
-     * publicada) -- ver roadmap.md, entrada del seguimiento de Astra.
+     * **Historial (seguimiento de Astra, `2026-09-09`, caso 5): hasta esta
+     * correccion, el umbral se comprobaba sobre el recuento BRUTO por
+     * sector, ANTES del filtro PIT -- un sector con 20 muestras brutas
+     * pero solo 2 con PIT real pasaba igual que uno con 20 supervivientes
+     * de verdad, y un comentario afirmaba una garantia falsa al respecto.
+     * Decidido en consenso de agentes (`auditor-estadistico`/
+     * `analista-mercado`, el usuario delega esta clase de decision de
+     * metodologia en el equipo): una mediana sectorial de 2-3 valores no
+     * neutraliza el momentum comun del sector, inyecta el movimiento
+     * idiosincratico de esos 2-3 nombres disfrazado de tendencia
+     * colectiva -- y esa cifra contamina ademas los terciles de tamaño
+     * transversales (paso d), no solo la mediana de su propio sector.
+     * Ningun veredicto ya publicado con este modo dependia de este caso
+     * limite (medido antes de decidir).**
      */
     private const MIN_SECTOR_SAMPLES_MOMENTUM = 20;
 
@@ -1183,15 +1179,14 @@ class BacktestingService
      * (informacion transversal del dia, no por ticker aislado), en cuatro
      * pasos:
      *
-     * a. Agrupa `$daySamples` por sector; cualquier sector con menos de
-     *    `MIN_SECTOR_SAMPLES_MOMENTUM` muestras BRUTAS ese dia (antes del
-     *    filtro PIT del paso siguiente, ver el docblock de esa constante)
-     *    queda excluido POR COMPLETO de la neutralizacion (no solo de su
-     *    propia mediana).
-     * b. De las restantes, cualquiera sin `market_cap_is_point_in_time`
-     *    real tambien se descarta: sin eso no se puede confiar en su bucket
-     *    de tamaño (tercil). Un sector puede pasar (a) con 20 muestras
-     *    brutas y aportar muy pocas o ninguna superviviente real aqui.
+     * a. De `$daySamples`, cualquiera sin `market_cap_is_point_in_time`
+     *    real se descarta primero: sin eso no se puede confiar en su
+     *    bucket de tamaño (tercil) ni en su aportacion a una mediana
+     *    sectorial fiable.
+     * b. Agrupa las supervivientes de (a) por sector; cualquier sector con
+     *    menos de `MIN_SECTOR_SAMPLES_MOMENTUM` SUPERVIVIENTES REALES ese
+     *    dia (ver el docblock de esa constante) queda excluido POR
+     *    COMPLETO de la neutralizacion (no solo de su propia mediana).
      * c. `momentum_sector_neutral` = `momentum12m1` menos la mediana del
      *    mismo sector, misma fecha, entre las supervivientes de (a)+(b).
      * d. Terciles de `market_cap` cross-sectional entre las supervivientes
@@ -1206,33 +1201,14 @@ class BacktestingService
      */
     private function rankByMomentumNeutral(array $daySamples, int $topN): array
     {
-        $bySector = [];
-
-        foreach ($daySamples as $sample) {
-            $bySector[$sample['sector']][] = $sample;
-        }
-
-        // a. Sectores demasiado pequeños ese dia, fuera por completo.
-        $eligible = [];
-        $droppedThinSector = 0;
-
-        foreach ($bySector as $sectorSamples) {
-            if (count($sectorSamples) < self::MIN_SECTOR_SAMPLES_MOMENTUM) {
-                $droppedThinSector += count($sectorSamples);
-
-                continue;
-            }
-
-            foreach ($sectorSamples as $sample) {
-                $eligible[] = $sample;
-            }
-        }
-
-        // b. Sin marketCap point-in-time no se puede confiar en su tercil.
-        $survivors = [];
+        // b (se aplica PRIMERO, antes de agrupar por sector -- consenso de
+        // `auditor-estadistico`/`analista-mercado` tras el seguimiento de
+        // Astra, `2026-09-09`, caso 5). Sin marketCap point-in-time no se
+        // puede confiar en su tercil.
+        $pitSurvivors = [];
         $droppedNoMarketCapPit = 0;
 
-        foreach ($eligible as $sample) {
+        foreach ($daySamples as $sample) {
             if ($sample['market_cap_is_point_in_time'] !== true || $sample['market_cap'] === null) {
                 $droppedNoMarketCapPit++;
 
@@ -1257,7 +1233,37 @@ class BacktestingService
             }
 
             $sample['momentum12m1'] = $momentum;
-            $survivors[] = $sample;
+            $pitSurvivors[] = $sample;
+        }
+
+        // a (se aplica DESPUES de (b), no antes). Sectores con menos de
+        // `MIN_SECTOR_SAMPLES_MOMENTUM` SUPERVIVIENTES REALES ese dia,
+        // fuera por completo -- no basta con 20 intentos brutos, ver el
+        // docblock de la constante. Con 2-3 supervivientes la "mediana"
+        // del paso (c) es casi el promedio de esos 2-3 valores, arbitraria
+        // y sensible a cualquiera de ellos, y esa cifra no solo neutraliza
+        // el momentum de esas pocas supervivientes: entra tambien en los
+        // terciles de tamaño transversales del paso (d), contaminando la
+        // clasificacion de tamaño de TODO el dia, no solo de su sector.
+        $bySector = [];
+
+        foreach ($pitSurvivors as $sample) {
+            $bySector[$sample['sector']][] = $sample;
+        }
+
+        $survivors = [];
+        $droppedThinSector = 0;
+
+        foreach ($bySector as $sectorSamples) {
+            if (count($sectorSamples) < self::MIN_SECTOR_SAMPLES_MOMENTUM) {
+                $droppedThinSector += count($sectorSamples);
+
+                continue;
+            }
+
+            foreach ($sectorSamples as $sample) {
+                $survivors[] = $sample;
+            }
         }
 
         if ($survivors === []) {
@@ -1338,14 +1344,12 @@ class BacktestingService
         // Con pocas supervivientes un tercil puede no recibir ninguna
         // muestra: 0,0 de relleno, nunca leido de verdad porque ningun
         // `size_tercile` apunta a el (`median()` con un array vacio no es
-        // un caso valido, ver su docblock). Esto NO es solo un caso raro
-        // de un unico sector elegible: `MIN_SECTOR_SAMPLES_MOMENTUM` exige
-        // 20 muestras BRUTAS por sector (paso a), antes del filtro PIT
-        // (paso b) -- un sector puede pasar el paso (a) con 20 brutas y
-        // llegar aqui con muy pocas o CERO supervivientes reales si casi
-        // ninguna tenia `market_cap_is_point_in_time` (ver el docblock de
-        // `MIN_SECTOR_SAMPLES_MOMENTUM`, correccion de una garantia falsa
-        // que decia lo contrario -- seguimiento de Astra, `2026-09-09`).
+        // un caso valido, ver su docblock). Desde que `MIN_SECTOR_SAMPLES_
+        // MOMENTUM` se aplica sobre supervivientes REALES (paso b, tras el
+        // filtro PIT del paso a -- seguimiento de Astra, `2026-09-09`),
+        // esto SI queda acotado a un caso raro: solo puede pasar con un
+        // unico sector elegible ese dia (menos de 3 terciles posibles con
+        // sus supervivientes, aunque el sector en si tenga >=20).
         $tercileMedians = [0 => 0.0, 1 => 0.0, 2 => 0.0];
 
         foreach ([0, 1, 2] as $tercile) {
@@ -2281,6 +2285,11 @@ class BacktestingService
 
         $buyReturns = $this->returnsFor($samples, ['BUY']);
         $sellReturns = $this->returnsFor($samples, ['SELL', 'STRONG SELL']);
+        // Consenso de agentes (`auditor-estadistico`/`analista-mercado`,
+        // seguimiento de Astra `2026-09-09`, punto 6): grupo DISJUNTO de
+        // BUY, para el contraste de significancia -- ver el porque junto a
+        // $alphaStdErr, mas abajo.
+        $nonBuyReturns = $this->returnsFor($samples, ['HOLD', 'SELL', 'STRONG SELL']);
         $managedSamples = $this->managedSamplesFor($samples, ['BUY']);
         $benchmark = $count > $horizonDays
             ? (($history[$count - 1]->getClose() / $history[0]->getClose()) - 1) * 100
@@ -2288,10 +2297,32 @@ class BacktestingService
         $allReturns = array_column($samples, 'forward_return');
         $avgAll = $this->average($allReturns);
         $avgBuy = $this->average($buyReturns);
+        $avgNonBuy = $this->average($nonBuyReturns);
+        // Descriptiva (Astra la llama "vs todos los dias"): compras contra
+        // TODO el historial, comparable a "seguir el precio sin filtrar por
+        // señal" -- la misma idea que ya cubre la columna Benchmark (comprar
+        // y mantener desde el primer dia). Sin contraste de significancia
+        // propio a proposito: BUY es un SUBCONJUNTO de "todos los dias", no
+        // una muestra aparte, asi que un t-stat aqui compararia un grupo
+        // contra si mismo mas otro grupo -- ver `buy_alpha_vs_non_buy_days`
+        // para la version que si es una particion disjunta.
         $alpha = ($avgBuy !== null && $avgAll !== null) ? round($avgBuy - $avgAll, 2) : null;
+        // Principal (la que lleva el t-stat): compras contra los dias SIN
+        // señal de compra (HOLD/SELL/STRONG SELL) -- particion disjunta de
+        // verdad, sin solapar datos entre los dos grupos. Antes se
+        // comparaba contra $allReturns (que INCLUYE las propias compras):
+        // con los mismos datos en ambos grupos (ejemplo de Astra, [1,3] vs
+        // [1,3], diferencia identicamente cero) esa version devolvia un
+        // error estandar de Welch de ~1,414 en vez de 0 -- fabricaba
+        // dispersion donde no la hay, precisamente por ignorar que ambos
+        // grupos compartian datos. Con el grupo disjunto, Welch es la
+        // formula correcta salvo por la dependencia serial DENTRO de cada
+        // grupo (ventanas de horizonte solapadas, ya conocida y expuesta
+        // via `effective_independent_samples`) -- eso no lo corrige esto.
+        $alphaVsNonBuy = ($avgBuy !== null && $avgNonBuy !== null) ? round($avgBuy - $avgNonBuy, 2) : null;
         $buyStdDev = $this->stdDev($buyReturns);
         $buyStdErr = $buyStdDev !== null ? $buyStdDev / sqrt(count($buyReturns)) : null;
-        $alphaStdErr = $this->welchStdErr($buyReturns, $allReturns);
+        $alphaStdErr = $this->welchStdErr($buyReturns, $nonBuyReturns);
 
         return [
             'ticker' => strtoupper($ticker),
@@ -2308,6 +2339,7 @@ class BacktestingService
             'avg_all_days_forward_return' => $avgAll,
             'win_rate_all_days' => $this->winRate($allReturns),
             'buy_alpha_vs_all_days' => $alpha,
+            'buy_alpha_vs_non_buy_days' => $alphaVsNonBuy,
             'buy_return_stddev' => $buyStdDev !== null ? round($buyStdDev, 2) : null,
             'buy_return_stderr' => $buyStdErr !== null ? round($buyStdErr, 2) : null,
             'buy_return_ci95_low' => ($avgBuy !== null && $buyStdErr !== null)
@@ -2317,8 +2349,8 @@ class BacktestingService
                 ? round($avgBuy + (1.96 * $buyStdErr), 2)
                 : null,
             'buy_alpha_stderr' => $alphaStdErr !== null ? round($alphaStdErr, 2) : null,
-            'buy_alpha_t_stat' => ($alpha !== null && $alphaStdErr !== null && $alphaStdErr > 0.0)
-                ? round($alpha / $alphaStdErr, 2)
+            'buy_alpha_t_stat' => ($alphaVsNonBuy !== null && $alphaStdErr !== null && $alphaStdErr > 0.0)
+                ? round($alphaVsNonBuy / $alphaStdErr, 2)
                 : null,
             'benchmark_return' => round($benchmark, 2),
             // Que porcentaje de las muestras uso fundamentales de su propia

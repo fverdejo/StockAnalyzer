@@ -202,6 +202,74 @@ final class BacktestingServiceMomentumModeTest extends TestCase
         }
     }
 
+    /**
+     * Seguimiento de Astra (`2026-09-09`, caso 5), decidido en consenso de
+     * agentes (`auditor-estadistico`/`analista-mercado`, ver versions.md):
+     * un sector con muestras BRUTAS suficientes pero con casi ninguna
+     * superviviente real (tras el filtro PIT) debe excluirse igual que un
+     * sector con pocas muestras brutas -- 20 intentos no son 20 datos
+     * fiables. Reproduccion analoga a la de Astra (tres sectores de 20
+     * brutos con solo 2 PIT validos cada uno): aqui un unico sector
+     * "tech" de 20 brutos con solo 2 PIT validos, junto a un sector
+     * "health" de 20 plenamente validos que sirve de control.
+     */
+    public function testSectorConMuestrasBrutasSuficientesPeroPocosSupervivientesRealesQuedaExcluido(): void
+    {
+        $stocksByTicker = [];
+        $historiesByTicker = [];
+        $fundamentalsHistory = new InMemoryFundamentalsHistoryRepository();
+        $tickers = [];
+
+        // "tech": 20 muestras brutas (>= MIN_SECTOR_SAMPLES_MOMENTUM), pero
+        // solo T00/T01 con snapshot real de marketCap -- las otras 18 caen
+        // al fallback de "hoy" (market_cap_is_point_in_time = false).
+        for ($i = 0; $i < 20; $i++) {
+            $ticker = sprintf('T%02d', $i);
+            $tickers[] = $ticker;
+            $stocksByTicker[$ticker] = $this->stockFor($ticker, 'tech');
+            // Momentum enorme: si "tech" no se excluyera del todo, sus
+            // supervivientes (T00/T01) dominarian el top-N sin discusion.
+            $historiesByTicker[$ticker] = $this->momentumTickerHistory(100.0, 500.0 + $i, 90.0);
+
+            if ($i < 2) {
+                $fundamentalsHistory->withMarketCapSnapshot($ticker, 1_000_000_000.0);
+            }
+        }
+
+        // "health": control, 20 muestras brutas, las 20 con PIT real y
+        // momentum modesto -- debe seguir contribuyendo con normalidad.
+        for ($i = 0; $i < 20; $i++) {
+            $ticker = sprintf('H%02d', $i);
+            $tickers[] = $ticker;
+            $stocksByTicker[$ticker] = $this->stockFor($ticker, 'health');
+            $historiesByTicker[$ticker] = $this->momentumTickerHistory(100.0, (float) $i, 1.0);
+            $fundamentalsHistory->withMarketCapSnapshot($ticker, 1_000_000_000.0);
+        }
+
+        $service = new BacktestingService(
+            new PerTickerStockAndHistoryProvider($stocksByTicker, $historiesByTicker),
+            new TechnicalAnalyzer(),
+            new ScoreCalculator(),
+            new RiskLevelsCalculator(new RiskLevelsConfig(2.5, 2.0)),
+            fundamentalsHistory: $fundamentalsHistory
+        );
+
+        $result = $service->runCrossSectional($tickers, self::HORIZON_DAYS, self::STEP, 3, 'momentum');
+
+        self::assertSame([], $result['errors']);
+        self::assertSame(1, $result['dates_evaluated']);
+        // 18 de "tech" caen por PIT; las 2 supervivientes reales (T00/T01)
+        // caen DESPUES por sector demasiado pequeño (2 < 20) -- ninguna de
+        // las dos cuenta como "elegible" para el top-N ni para la alpha.
+        self::assertSame(18, $result['samples_dropped_no_marketcap_pit']);
+        self::assertSame(2, $result['samples_dropped_thin_sector']);
+        self::assertSame(40, $result['dates'][0]['universe_size']);
+
+        foreach ($result['dates'][0]['top_tickers'] as $topTicker) {
+            self::assertStringStartsNotWith('T', $topTicker);
+        }
+    }
+
     public function testMuestraSinMarketCapPointInTimeQuedaExcluidaYElContadorLoRefleja(): void
     {
         $stocksByTicker = [];

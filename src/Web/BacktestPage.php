@@ -124,7 +124,7 @@ HTML;
 
             $ticker = (string) ($item['ticker'] ?? '');
             $rows[] = sprintf(
-                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%d</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td></tr>',
+                '<tr><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%d</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td class="num">%d</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td></tr>',
                 urlencode($ticker),
                 Layout::escape($ticker),
                 (int) ($item['samples'] ?? 0),
@@ -137,6 +137,7 @@ HTML;
                 self::nullablePercent($item['benchmark_return'] ?? null),
                 self::nullablePercent($item['max_drawdown_managed'] ?? null),
                 self::nullablePercent($item['buy_alpha_vs_all_days'] ?? null),
+                self::nullablePercent($item['buy_alpha_vs_non_buy_days'] ?? null),
                 self::nullableNumber($item['buy_alpha_t_stat'] ?? null)
             );
         }
@@ -160,13 +161,14 @@ HTML;
             . self::columnHeader('Win rate ventas', 'Porcentaje de señales Vender/Venta fuerte tras las que el precio subió. Al contrario que en compras, un valor alto es mala noticia: la señal recomendó salir de subidas.')
             . self::columnHeader('Benchmark', 'Retorno de comprar y mantener el ticker desde el primer hasta el último día del histórico disponible, sin usar ninguna señal. Es la referencia pasiva; cubre todo el histórico, no el horizonte, así que no se compara dato a dato con las columnas de retorno.', true)
             . self::columnHeader('Peor gestionado', 'Peor resultado de una sola operación entre las compras simuladas con gestión de riesgo (stop loss y objetivo activos): el golpe máximo que habría encajado la estrategia. Solo entran las señales Comprar con niveles de riesgo calculables.', true)
-            . self::columnHeader('Alpha vs todos los días', 'Retorno medio de las compras de este ticker menos el retorno medio de todas sus muestras, con señal o sin ella. Positivo = filtrar por señal aporta algo frente a estar comprado cualquier día; cerca de cero = la señal no añade nada. Es alpha contra el propio ticker, no contra el universo: esa es la tarjeta "Alpha del universo" de arriba.', true)
-            . self::columnHeader('t de la alpha', 'Alpha dividida entre su error estándar (fórmula de Welch para dos muestras independientes). Las compras son un SUBCONJUNTO de todos los días, no una muestra aparte, así que esa independencia no se cumple del todo: es una aproximación orientativa, no un contraste validado. |t| mayor o igual que 1,96 es la referencia habitual, no una frontera exacta entre señal y azar.', true)
+            . self::columnHeader('Alpha vs todos los días', 'Retorno medio de las compras de este ticker menos el retorno medio de TODOS sus días (con o sin señal) -- comparable a la columna Benchmark, comprar y mantener siempre. Cifra descriptiva, sin contraste de significancia propio: las compras son un subconjunto de "todos los días", no una muestra aparte, así que un t-stat aquí compararía un grupo contra sí mismo más otro grupo. Para saber si la señal distingue algo del resto del tiempo, ver "Alpha vs sin señal" y "t de la alpha".', true)
+            . self::columnHeader('Alpha vs sin señal', 'Retorno medio de las compras menos el retorno medio de los días SIN señal de Comprar (Mantener/Vender/Venta fuerte) -- los dos grupos no comparten ningún día, así que sí es una comparación entre muestras independientes de verdad. Esta es la que responde "¿comprar en la señal distingue algo real del resto del tiempo?", y la que sustenta la columna "t de la alpha".', true)
+            . self::columnHeader('t de la alpha', 'Alpha vs sin señal dividida entre su error estándar (fórmula de Welch, aplicable aquí porque los dos grupos no comparten datos). Sigue sin corregir la posible dependencia entre muestras del mismo ticker (ventanas de horizonte solapadas, ver "Muestras" y "muestras efectivas independientes" en el detalle de cada fila): |t| mayor o igual que 1,96 es la referencia habitual, no una frontera exacta entre señal y azar. Con un universo de N tickers, esta columna equivale a N pruebas simultáneas: unas pocas superarán el umbral por puro azar aunque no haya ninguna ventaja real (aproximadamente el 5% de N).', true)
             . '</tr></thead><tbody>'
             . implode('', $rows)
             . '</tbody></table></div>'
             . Layout::renderPagination($pageNum, $totalPages, $paginationBase)
-            . '<p class="muted panel-note">t de la alpha: alpha dividida entre su error estándar (fórmula de Welch, pensada para dos muestras independientes). Las señales de compra son un subconjunto de todos los días, no una muestra aparte, así que esa independencia no se cumple del todo: es una aproximación orientativa, no un contraste validado. |t| &ge; 1,96 es la referencia habitual, no una frontera exacta entre señal y azar.</p>'
+            . '<p class="muted panel-note">t de la alpha: alpha vs sin señal dividida entre su error estándar (fórmula de Welch, aplicable porque compras y no-compras no comparten ningún día). Sigue sin corregir la dependencia entre muestras del mismo ticker por ventanas de horizonte solapadas. |t| &ge; 1,96 es la referencia habitual, no una frontera exacta entre señal y azar -- y con un universo de N tickers, esperar que unos pocos la superen por puro azar (~5% de N) es lo normal, no un hallazgo por sí solo.</p>'
             . self::renderPointInTimeNote($allResults, $fundamentalWeightPercent)
             . '</section>';
     }

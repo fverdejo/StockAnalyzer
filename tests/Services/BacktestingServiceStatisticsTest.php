@@ -225,21 +225,33 @@ final class BacktestingServiceStatisticsTest extends TestCase
      * v2.58, caso principal. Con P0.1 (`versions.md`, 2026-09-02: la entrada
      * de cada señal es la apertura de la sesion SIGUIENTE, no su propio
      * cierre) las 4 muestras BUY de `riseThenCrashHistory()` pasan a ser
-     * +1,63 / +1,13 / -0,75 / -17,84 (media -3,96) y las 6 muestras totales
-     * dan una media de -7,11, de donde (valores recalculados EJECUTANDO el
-     * servicio real sobre el fixture con P0.1, no a mano):
+     * +1,63 / +1,13 / -0,75 / -17,84 (media -3,96) y las 2 muestras SIN
+     * señal de compra (SELL/STRONG SELL, no hay HOLD en este fixture) dan
+     * una media de -13,41, de donde (valores recalculados EJECUTANDO el
+     * servicio real sobre el fixture, no a mano):
      *
-     * - alpha: -3,96 - (-7,11) = 3,15
+     * - alpha vs sin señal: -3,96 - (-13,41) = 9,45
      * - sd muestral BUY (n-1 = 3): 9,31
      * - error estandar BUY: 9,31/sqrt(4) = 4,66
      * - IC 95%: -3,96 ± 1,96*4,66 = [-13,09 ; +5,17]
-     * - error estandar Welch (BUY vs todas): 5,90
-     * - t = alpha/stderr = 3,15/5,90 = 0,53
+     * - error estandar Welch (BUY vs SIN señal, particion disjunta -- ver
+     *   `buy_alpha_stderr`): 5,33
+     * - t = alpha/stderr = 9,45/5,33 = 1,77
      *
-     * |t| = 0,53 < 1,96: con estas 4 muestras la alpha positiva de este
-     * fixture sigue sin ser distinguible del azar, que es exactamente la
-     * lectura que esta version añade (el signo y la conclusion cualitativa
-     * no cambian con P0.1, solo las cifras exactas).
+     * |t| = 1,77 < 1,96: con estas 4 muestras la alpha positiva de este
+     * fixture sigue sin ser distinguible del azar.
+     *
+     * **Actualizado (consenso de agentes tras el seguimiento de Astra,
+     * `2026-09-09`, punto 6): `buy_alpha_stderr`/`buy_alpha_t_stat` ya NO
+     * comparan BUY contra TODOS los dias (`buy_alpha_vs_all_days`, que
+     * INCLUYE las propias compras -- BUY no es una muestra independiente
+     * de si misma), comparan BUY contra los dias SIN señal de compra
+     * (`buy_alpha_vs_non_buy_days`), una particion disjunta de verdad.**
+     * Con el fixture antiguo (vs todos los dias) salia alpha=3,15/
+     * stderr=5,90/t=0,53; con la particion disjunta la alpha es mayor
+     * (9,45, ya no diluida por las propias compras) pero tambien el
+     * error estandar cambia (5,33): la conclusion cualitativa (no
+     * distinguible del azar con esta muestra) no cambia, las cifras si.
      */
     public function testDispersionYTStatDeLaAlphaConMezclaDeSenalesBuyYNoBuy(): void
     {
@@ -250,13 +262,14 @@ final class BacktestingServiceStatisticsTest extends TestCase
         self::assertSame(-3.96, $ticker['avg_buy_forward_return']);
         self::assertSame(-7.11, $ticker['avg_all_days_forward_return']);
         self::assertSame(3.15, $ticker['buy_alpha_vs_all_days']);
+        self::assertSame(9.45, $ticker['buy_alpha_vs_non_buy_days']);
 
         self::assertSame(9.31, $ticker['buy_return_stddev']);
         self::assertSame(4.66, $ticker['buy_return_stderr']);
         self::assertSame(-13.09, $ticker['buy_return_ci95_low']);
         self::assertSame(5.17, $ticker['buy_return_ci95_high']);
-        self::assertSame(5.9, $ticker['buy_alpha_stderr']);
-        self::assertSame(0.53, $ticker['buy_alpha_t_stat']);
+        self::assertSame(5.33, $ticker['buy_alpha_stderr']);
+        self::assertSame(1.77, $ticker['buy_alpha_t_stat']);
     }
 
     /**
@@ -282,11 +295,22 @@ final class BacktestingServiceStatisticsTest extends TestCase
     }
 
     /**
-     * v2.58, caso limite de division por cero: con todas las muestras BUY e
-     * identicas (+0,24%), la desviacion tipica es exactamente 0 y el
-     * intervalo de confianza colapsa sobre la media. El error estandar de la
-     * alpha tambien es 0, asi que el t-stat debe ser null (no hay division
-     * por cero ni un t infinito), aunque la alpha si exista (0,0).
+     * v2.58, caso limite de division por cero: con todas las muestras BUY
+     * identicas (+0,24%), la desviacion tipica del grupo BUY es exactamente
+     * 0 y el intervalo de confianza (que solo depende de ese grupo) colapsa
+     * sobre la media, sin dividir por cero.
+     *
+     * **Actualizado (consenso de agentes, seguimiento de Astra `2026-09-09`
+     * punto 6): `buy_alpha_stderr`/`buy_alpha_t_stat` ya comparan BUY contra
+     * los dias SIN señal de compra, no contra "todos los dias" -- ver el
+     * test anterior para el porque.** Con este fixture el grupo "sin señal"
+     * tiene una UNICA muestra (el HOLD de abajo), y `welchStdErr()` exige al
+     * menos 2 muestras por grupo para poder calcular su varianza (mismo
+     * criterio de resiliencia que `stdDev()`): con n=1 no hay division por
+     * cero, hay ausencia de dato, asi que el resultado correcto es `null`,
+     * no `0.0` -- un caso limite distinto al de "varianza cero", que sigue
+     * cubierto por `buy_return_stddev`/`buy_return_stderr` mas abajo (que
+     * solo dependen del grupo BUY, sin cambios en este commit).
      */
     public function testConDesviacionTipicaCeroNoHayDivisionPorCeroEnElTStat(): void
     {
@@ -294,25 +318,24 @@ final class BacktestingServiceStatisticsTest extends TestCase
 
         // 4 BUY y no 5 desde feature/solo-tecnico: el ultimo punto muestreado
         // (indice local 100, el quinto y ultimo que visita el bucle con
-        // este fixture) queda en HOLD por puntuacion. Es un limite
-        // estructural, no un ajuste pendiente: este fixture exige que las 5
-        // ventanas de 5 dias tengan el MISMO forward_return (para forzar
-        // desviacion tipica cero tanto en el grupo BUY como en "todos los
-        // dias"), asi que el precio en los indices locales 80/85/90/95/100
-        // (mas la vela de P0.1 que sigue la misma progresion, ver
-        // `history()`) no se puede tocar sin romper esa igualdad, y el
-        // volumen (la unica palanca que no toca el precio) ya esta al
-        // maximo que puntua. Lo que este test comprueba —que la desviacion
-        // tipica de un conjunto de valores identicos es 0 y no revienta por
-        // division por cero— se demuestra igual de bien con 4 valores
-        // identicos que con 5.
+        // este fixture) queda en HOLD por puntuacion -- es esa UNICA
+        // muestra HOLD la que hace de grupo "sin señal de compra" aqui. Es
+        // un limite estructural, no un ajuste pendiente: este fixture exige
+        // que las 5 ventanas de 5 dias tengan el MISMO forward_return (para
+        // forzar desviacion tipica cero en el grupo BUY), asi que el precio
+        // en los indices locales 80/85/90/95/100 (mas la vela de P0.1 que
+        // sigue la misma progresion, ver `history()`) no se puede tocar sin
+        // romper esa igualdad, y el volumen (la unica palanca que no toca
+        // el precio) ya esta al maximo que puntua.
         self::assertSame(4, $ticker['buy_signals']);
         self::assertSame(0.24, $ticker['avg_buy_forward_return']);
         self::assertSame(0.0, $ticker['buy_return_stddev']);
         self::assertSame(0.0, $ticker['buy_return_stderr']);
         self::assertSame(0.24, $ticker['buy_return_ci95_low']);
         self::assertSame(0.24, $ticker['buy_return_ci95_high']);
-        self::assertSame(0.0, $ticker['buy_alpha_stderr']);
+        // Grupo "sin señal" con una unica muestra (n=1): welchStdErr()
+        // no puede calcular su varianza, null en vez de 0,0 o un error.
+        self::assertNull($ticker['buy_alpha_stderr']);
         self::assertNull($ticker['buy_alpha_t_stat']);
     }
 
