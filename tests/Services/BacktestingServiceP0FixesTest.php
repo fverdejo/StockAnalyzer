@@ -193,28 +193,35 @@ final class BacktestingServiceP0FixesTest extends TestCase
     }
 
     /**
-     * P0.2 (`versions.md`, 2026-09-02): dos fechas evaluadas en
-     * `runCrossSectional()` deben estar separadas por al menos
-     * `$horizonDays` SESIONES bursatiles reales, no dias naturales.
+     * P0.2 (`versions.md`, 2026-09-02) originalmente comparaba dias
+     * naturales, corregido para comparar SESIONES bursatiles reales.
      *
-     * Universo de 4 tickers en dos parejas (AAA/BBB y CCC/DDD, dos tickers
-     * por fecha para que ninguna de las dos caiga por "amplitud
-     * insuficiente" con top-1). Los historicos de AAA/BBB y de CCC/DDD son
-     * IDENTICOS en construccion (mismo prefijo, mismo patron, mismo horizon
-     * days=5) pero con el calendario de CCC/DDD desplazado exactamente 4
-     * DIAS HABILES (fin de semana excluido) respecto al de AAA/BBB: su
-     * señal cae 4 sesiones bursatiles reales despues de la de AAA/BBB, pero
-     * como ese tramo de 4 dias habiles cruza un fin de semana, la distancia
-     * en DIAS NATURALES es de 6 (>= horizonDays=5).
+     * **Actualizado (seguimiento de Astra, `2026-09-09`, casos 1 y 2):**
+     * desde `sampleOnCalendar()`, TODOS los tickers muestrean sobre UNA
+     * unica rejilla de calendario compartida, anclada a un solo punto de
+     * partida y espaciada exactamente `$step` sesiones -- nunca dos
+     * tickers por separado, cada uno con su propia rejilla local que
+     * pudiera desalinearse. Como `runCrossSectional()` ya exige `$step >=
+     * $horizonDays` (comprobado al entrar), dos fechas EVALUADAS
+     * cualquiera de esa rejilla estan SIEMPRE separadas por un multiplo de
+     * `$step` sesiones -- nunca menos. El escenario que este test
+     * reproducia (dos tickers con cadencias propias desalineadas, una
+     * "solapada" con la otra) ya no puede darse: `dates_dropped_
+     * overlapping` queda estructuralmente inalcanzable con el diseño
+     * nuevo, no por casualidad de este fixture en concreto.
      *
-     * Ese es justo el caso que P0.2 corrige: comparando dias naturales
-     * (like antes de esta version), 6 >= 5 habria contado como
-     * independiente y ambas fechas se habrian evaluado. Comparando sesiones
-     * reales (P0.2), 4 < 5, asi que la segunda fecha se descarta como
-     * solapada, `dates_evaluated` se queda en 1 y
-     * `dates_dropped_overlapping` sube a 1.
+     * Universo de 4 tickers en dos parejas (AAA/BBB y CCC/DDD, historicos
+     * IDENTICOS en construccion pero con el calendario de CCC/DDD
+     * desplazado 4 dias HABILES respecto al de AAA/BBB -- el mismo fixture
+     * de antes, para conservar la cobertura de "dias habiles distintos de
+     * dias naturales"). Con la rejilla anclada al inicio de AAA/BBB
+     * (el ticker mas temprano), el punto de rejilla que coincide con el
+     * momento calibrado de CCC/DDD NUNCA se visita (cae 4 sesiones antes
+     * del siguiente punto de la rejilla, que esta a $step=5): CCC/DDD
+     * simplemente no aporta ninguna muestra, sin generar una fecha propia
+     * que solape ni que haya que descartar.
      */
-    public function testDosFechasConMenosSesionesQueElHorizonteSeDescartanAunqueHayaMasDiasNaturales(): void
+    public function testDosTickersConCadenciaPropiaDesalineadaYaNoGeneranFechasSolapadasQueDescartar(): void
     {
         $horizonDays = 5;
         $ab = $this->calibratedBusinessDaySignal(new DateTimeImmutable('2024-01-02'), $horizonDays);
@@ -253,11 +260,15 @@ final class BacktestingServiceP0FixesTest extends TestCase
         self::assertSame(1, $result['dates_evaluated']);
         self::assertSame(0, $result['dates_dropped_low_breadth']);
         self::assertSame(
-            1,
+            0,
             $result['dates_dropped_overlapping'],
-            'La segunda fecha esta a solo 4 sesiones reales de la primera (horizonte 5): debe descartarse por solape aunque haya 6 dias naturales de por medio.'
+            'La rejilla compartida ya garantiza por construccion que dos fechas evaluadas nunca estan a menos de $step sesiones -- no queda nada que descartar por solape.'
         );
         self::assertSame($ab['signalDate']->format('Y-m-d'), $result['dates'][0]['date']);
+        // CCC/DDD nunca llegan a aportar una muestra: su momento calibrado
+        // cae entre dos puntos de la rejilla compartida (a 4 sesiones del
+        // primero, que necesita 5 para el siguiente paso).
+        self::assertSame(2, $result['dates'][0]['universe_size']);
     }
 
     private function nextBusinessDay(DateTimeImmutable $date): DateTimeImmutable

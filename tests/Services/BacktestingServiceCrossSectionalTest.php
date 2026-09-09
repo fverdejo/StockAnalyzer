@@ -315,10 +315,15 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
 
     /**
      * Un ticker con historico desplazado en el tiempo (empieza un mes mas
-     * tarde) genera fechas de señal propias en las que es el unico presente:
-     * ahi no hay universo con el que comparar y el "top-2" seria el propio
-     * universo, asi que esas fechas se descartan y no cambian ni una cifra
-     * del resultado respecto al universo alineado.
+     * tarde) todavia no tiene los 80 dias de lookback propios que exige la
+     * rejilla de muestreo COMPARTIDA (`sampleOnCalendar()`, seguimiento de
+     * Astra `2026-09-09`, casos 1 y 2) en ninguna de las dos fechas reales
+     * de señal de AAA-DDD: no aporta ninguna muestra ahi, y el resultado
+     * (fechas, alpha) es IDENTICO al universo sin EEE. `dates_dropped_low_
+     * breadth` baja de 2 (version anterior, EEE generaba SUS PROPIAS fechas
+     * de señal desalineadas, descartadas por amplitud insuficiente) a 1 con
+     * el diseño nuevo: EEE ya no genera una rejilla propia separada, asi que
+     * ya no hay una segunda fecha suya que descartar por el mismo motivo.
      */
     public function testFechasSinSuficienteAmplitudNoSeEvaluan(): void
     {
@@ -328,65 +333,82 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
 
         self::assertSame([], $result['errors']);
         self::assertSame(2, $result['dates_evaluated']);
-        self::assertSame(2, $result['dates_dropped_low_breadth']);
+        self::assertSame(1, $result['dates_dropped_low_breadth']);
         self::assertSame(0, $result['dates_dropped_overlapping']);
         self::assertSame(['2024-03-21', '2024-03-26'], array_column($result['dates'], 'date'));
+        // EEE nunca aporta muestra en ninguna de las dos fechas reales
+        // (no llega a 80 sesiones propias de lookback en ninguna): el
+        // resultado es EXACTAMENTE el mismo que sin EEE.
+        self::assertSame(4, $result['dates'][0]['universe_size']);
+        self::assertSame(4, $result['dates'][1]['universe_size']);
         self::assertSame(4.0, $result['avg_alpha']);
         self::assertSame(4.0, $result['alpha_t_stat']);
     }
 
     /**
-     * Auditoria Astra/Codex (`2026-09-08`): un ticker con un HUECO interno
-     * (una fecha en la que sus pares cotizaron y el no, dentro de su propio
-     * rango activo -- distinto de "empezo mas tarde", que es el caso
-     * legitimo del test anterior) desplaza su indice local frente al resto
-     * sin ningun aviso. Se quita una vela intermedia del prefijo plano de
-     * DDD (fecha muy anterior a cualquier señal real, para que el hueco no
-     * se confunda con "no habia arrancado todavia": DDD sigue teniendo
-     * velas antes Y despues de la fecha quitada).
-     *
-     * DDD debe excluirse ENTERO (sus muestras nunca llegan a
-     * `$samplesByDate`) en vez de sumarse desalineado: el resultado debe
-     * ser IDENTICO al universo de 3 tickers limpios (AAA/BBB/CCC), no una
-     * version corrompida por DDD.
+     * Seguimiento de Astra (`2026-09-09`), caso 2: un hueco MUY POSTERIOR a
+     * que ambas señales de DDD ya se hayan resuelto por completo no debe
+     * invalidar ninguna de las dos -- solo un hueco DENTRO de la ventana que
+     * una muestra concreta necesita (lookback de 80 sesiones, o entre su
+     * entrada y su horizonte) debe descartar ESA muestra, nunca las ya
+     * resueltas antes o despues de el (`sampleOnCalendar()`/
+     * `hasContiguousOwnWindow()`). Reproduccion directa de la de Astra:
+     * se añaden 10 velas planas a DDD bien despues de que su segunda señal
+     * (2024-03-26) se resuelva, y se compara quitar SOLO la ultima de esas
+     * 10 contra conservarlas todas -- el resultado debe ser IDENTICO en los
+     * dos casos, porque ninguna de las dos fechas reales necesita esa vela.
      */
-    public function testUnTickerConUnHuecoInternoSeExcluyeEnteroEnVezDeDesalinear(): void
+    public function testUnHuecoPosteriorALaResolucionNoInvalidaOperacionesYaCompletadas(): void
     {
         $clean = $this->universeWhereTopIsBest();
         $ddd = $clean['DDD'];
-        // Indice 85: dentro del prefijo plano (170 velas), muy anterior a
-        // cualquier señal real -- DDD conserva velas antes y despues, asi
-        // que esto es un HUECO, no un arranque tardio (ver el test
-        // anterior para ese otro caso, ya cubierto y ya benigno).
-        self::assertLessThan(self::MOMENTUM_PREFIX_LENGTH, 85, 'Fixture de test mal construido: el indice debe caer dentro del prefijo plano.');
-        unset($ddd[85]);
-        $dddWithGap = array_values($ddd);
+        $lastQuote = end($ddd);
+        $extra = [];
+        $date = $lastQuote->getDate();
 
-        $withGap = $this->service(array_merge($clean, ['DDD' => $dddWithGap]))
+        for ($i = 0; $i < 10; $i++) {
+            $date = $date->modify('+1 day');
+            $extra[] = new HistoricalQuote(
+                $date,
+                $lastQuote->getClose(),
+                $lastQuote->getClose() + 0.5,
+                $lastQuote->getClose() - 0.5,
+                $lastQuote->getClose(),
+                1_000_000
+            );
+        }
+
+        $dddExtended = array_merge($ddd, $extra);
+        $dddWithFutureGap = $dddExtended;
+        array_pop($dddWithFutureGap); // Quita SOLO la ultima vela, muy posterior a las dos señales.
+
+        $withoutGap = $this->service(array_merge($clean, ['DDD' => $dddExtended]))
             ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
-        $threeTickerBaseline = $this->service($clean)
-            ->runCrossSectional(['AAA', 'BBB', 'CCC'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
+        $withFutureGap = $this->service(array_merge($clean, ['DDD' => $dddWithFutureGap]))
+            ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
 
-        self::assertSame([], $withGap['errors']);
-        self::assertSame(['DDD'], $withGap['tickers_dropped_calendar_gap']);
-        self::assertGreaterThan(0, $withGap['samples_dropped_calendar_gap']);
-
-        // El resultado con DDD (con hueco, excluido entero) debe coincidir
-        // EXACTO con el universo de 3 tickers limpios: ni rastro de DDD.
-        self::assertSame($threeTickerBaseline['avg_alpha'], $withGap['avg_alpha']);
-        self::assertSame($threeTickerBaseline['dates'], $withGap['dates']);
-        self::assertSame($threeTickerBaseline['dates_evaluated'], $withGap['dates_evaluated']);
+        self::assertSame([], $withFutureGap['errors']);
+        self::assertSame($withoutGap['dates'], $withFutureGap['dates']);
+        self::assertSame($withoutGap['dates_evaluated'], $withFutureGap['dates_evaluated']);
+        self::assertSame($withoutGap['avg_alpha'], $withFutureGap['avg_alpha']);
     }
 
     /**
-     * Tres tickers desplazados un solo dia generan fechas con amplitud
-     * suficiente (3 > top-2) pero solapadas con las ya evaluadas: su ventana
-     * de retorno futuro comparte 4 de sus 5 dias con la anterior, asi que
-     * contarlas como muestras independientes inflaria el t-stat sin aportar
-     * informacion nueva. Deben descartarse por solape, dejando el resultado
-     * identico al del universo alineado.
+     * Seguimiento de Astra (`2026-09-09`), caso 1: tres tickers que arrancan
+     * un solo dia mas tarde ya NO generan una rejilla de muestreo propia
+     * desalineada (version anterior: se descartaban por "solape" al no
+     * coincidir sus fechas con las de AAA-DDD). Con la rejilla anclada al
+     * calendario compartido, en cuanto tienen suficiente lookback propio se
+     * suman a las MISMAS dos fechas reales que AAA-DDD -- aqui solo a la
+     * segunda (2024-03-26): en la primera (2024-03-21) todavia no llegan a
+     * las >250 velas que exige Momentum 12-1 (arrancaron un dia despues, asi
+     * que llegan a ese umbral un dia mas tarde que AAA-DDD). universe_size
+     * pasa de 4 a 7 en esa fecha, y XXX/YYY (mismo patron alcista que
+     * AAA/BBB, con un cierre ligeramente distinto) desplazan a AAA/BBB del
+     * top-2 ese dia -- prueba de que se estan comparando de verdad, no solo
+     * conviviendo sin interactuar.
      */
-    public function testFechasSolapadasSeDescartanParaQueElTStatSignifiqueAlgo(): void
+    public function testTickersDesplazadosUnDiaSeSumanAlMismoCalendarioEnVezDeGenerarFechasSolapadas(): void
     {
         $result = $this->service($this->universeWhereTopIsBest() + [
             'XXX' => $this->winnerHistory('2024-01-02'),
@@ -401,11 +423,17 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
 
         self::assertSame([], $result['errors']);
         self::assertSame(2, $result['dates_evaluated']);
-        self::assertSame(2, $result['dates_dropped_overlapping']);
+        self::assertSame(0, $result['dates_dropped_overlapping']);
         self::assertSame(0, $result['dates_dropped_low_breadth']);
         self::assertSame(['2024-03-21', '2024-03-26'], array_column($result['dates'], 'date'));
-        self::assertSame(4.0, $result['avg_alpha']);
-        self::assertSame(4.0, $result['alpha_t_stat']);
+        self::assertSame(4, $result['dates'][0]['universe_size']);
+        self::assertSame(['AAA', 'BBB'], $result['dates'][0]['top_tickers']);
+        self::assertSame(5.0, $result['dates'][0]['alpha']);
+        self::assertSame(7, $result['dates'][1]['universe_size']);
+        self::assertSame(['XXX', 'YYY'], $result['dates'][1]['top_tickers']);
+        self::assertSame(2.9, $result['dates'][1]['alpha']);
+        self::assertSame(3.95, $result['avg_alpha']);
+        self::assertSame(3.77, $result['alpha_t_stat']);
     }
 
     /**

@@ -131,6 +131,15 @@ class BacktestingService
     private int $momentumNullDropped = 0;
 
     /**
+     * Seguimiento de Astra (`2026-09-09`), casos 1 y 2: cuantas fechas del
+     * calendario compartido se descartaron para ESTE ticker porque su
+     * ventana de lookback o de entrada/horizonte tenia un hueco propio.
+     * Se reinicia al EMPEZAR cada llamada a `sampleOnCalendar()` (una
+     * llamada = un ticker), mismo criterio que `$momentumNullDropped`.
+     */
+    private int $windowGapDropped = 0;
+
+    /**
      * Si el `marketCap` que acaba de devolver `fundamentalsAt()` vino de un
      * snapshot historico real point-in-time o del fallback a los
      * fundamentales de HOY (P3.4, `REVISION_MOTOR_CODEX_2026-09-02.md`,
@@ -310,9 +319,7 @@ class BacktestingService
      *   muestras consecutivas no comparten dias de retorno futuro.
      * - Una fecha necesita mas de $topN tickers para evaluarse: con
      *   exactamente $topN, el top-N ES el universo y la alpha valdria 0 por
-     *   construccion. Este filtro tambien descarta las fechas sueltas que
-     *   aportan los tickers con historico corto, cuya rejilla de muestreo no
-     *   coincide con la del resto del universo.
+     *   construccion.
      * - Entre dos fechas evaluadas deben pasar al menos $horizonDays SESIONES
      *   bursatiles reales (P0.2, `versions.md` 2026-09-02, no dias naturales:
      *   antes de esta version se comparaban dias naturales contra
@@ -322,12 +329,21 @@ class BacktestingService
      *   separadas 20-27 dias naturales se contaban como independientes sin
      *   que sus ventanas de forward_return dejaran de solaparse. El
      *   calendario bursatil real se construye con la UNION de las fechas de
-     *   `$history` de TODOS los tickers recorridos (ya se pide una vez por
-     *   ticker para las muestras, ver `collectSamplesWithHistory()`): dos
-     *   fechas cuentan como independientes solo si hay al menos
-     *   $horizonDays sesiones reales -- vistas por al menos un ticker del
-     *   universo -- entre ellas, no un numero de dias naturales que varia
-     *   por festivos/fines de semana.
+     *   `$history` de TODOS los tickers recorridos: dos fechas cuentan como
+     *   independientes solo si hay al menos $horizonDays sesiones reales --
+     *   vistas por al menos un ticker del universo -- entre ellas, no un
+     *   numero de dias naturales que varia por festivos/fines de semana.
+     * - Cada fecha de señal es una fecha de ESE MISMO calendario compartido
+     *   (seguimiento de Astra, `2026-09-09`, casos 1 y 2, `sampleOnCalendar()`):
+     *   antes de esta version cada ticker muestreaba por su propio indice
+     *   local (cada $step velas desde la 80), asi que dos tickers sin
+     *   huecos pero con primera fecha distinta (una salida a bolsa mas
+     *   tardia) generaban secuencias de fechas muestreadas DIFERENTES para
+     *   "la misma" señal -- silencioso, no un error, pero rompia la premisa
+     *   de "comparar el mismo dia" en la que se apoya todo lo de arriba.
+     *   Medido con datos reales (sp400/sp600, sin red): ~28% de los tickers
+     *   de un universo tipico caen fuera de la fase de muestreo mayoritaria
+     *   por esta sola razon, pese a no tener ningun hueco interno.
      *
      * @param list<string> $tickers Universo candidato. Si $indexCode va
      *        acompañado de un `IndexMembershipCheckerInterface` conectado
@@ -402,59 +418,71 @@ class BacktestingService
         $droppedNotMember = 0;
         $samplesKept = 0;
         $momentumNullDropped = 0;
-        $droppedCalendarGap = 0;
-        $tickersDroppedCalendarGap = [];
+        $droppedWindowGap = 0;
+        $tickersAffectedByWindowGap = [];
         // P0.2: calendario bursatil real, union de las fechas de $history de
         // TODOS los tickers recorridos (ver el docblock de este metodo).
         $tradingCalendar = [];
-        // Auditoria Astra/Codex (`2026-09-08`): dos pasadas, no una. La
-        // primera solo recoge fechas propias (no las velas completas, para
-        // no duplicar en memoria el historico de cada ticker) y muestras;
-        // el calendario compartido no esta completo hasta que TODOS los
-        // tickers han pasado. La segunda valida cada ticker CONTRA ese
-        // calendario ya completo antes de sumarlo a $samplesByDate -- ver
-        // hasCalendarGap().
+        // Dos pasadas, no una. La primera solo recoge fechas propias (no
+        // las velas completas, para no duplicar en memoria el historico de
+        // cada ticker): el calendario compartido no esta completo hasta que
+        // TODOS los tickers han pasado, y el muestreo de la segunda pasada
+        // (`sampleOnCalendar()`) necesita ese calendario YA completo para
+        // anclar la fecha de señal de cada ticker a la misma rejilla
+        // compartida -- ver su docblock (seguimiento de Astra, `2026-09-09`,
+        // casos 1 y 2) para el motivo exacto de por que no basta con
+        // detectar huecos internos (`hasCalendarGap()`, retirada de aqui).
         $perTicker = [];
 
         foreach ($tickers as $ticker) {
             try {
-                $collected = $this->collectSamplesWithHistory($ticker, $horizonDays, $step, $mode);
-                $momentumNullDropped += $this->momentumNullDropped;
-
+                $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
                 $ownDates = [];
 
-                foreach ($collected['history'] as $quote) {
+                foreach ($history as $quote) {
                     $isoDate = $quote->getDate()->format('Y-m-d');
                     $tradingCalendar[$isoDate] = true;
                     $ownDates[$isoDate] = true;
                 }
 
-                $perTicker[$ticker] = ['dates' => $ownDates, 'samples' => $collected['samples']];
+                $perTicker[$ticker] = true;
             } catch (\Throwable $exception) {
                 $errors[$ticker] = $exception->getMessage();
             }
         }
 
         ksort($tradingCalendar);
+        $calendarDates = array_keys($tradingCalendar);
 
-        foreach ($perTicker as $ticker => $collected) {
-            if ($this->hasCalendarGap($collected['dates'], $tradingCalendar)) {
-                // Historico con huecos internos (fechas en las que OTROS
-                // tickers cotizaron y este no, dentro de su propio rango
-                // activo): sus muestras se descartan enteras en vez de
-                // sumarse desalineadas al resto del universo -- un ticker
-                // asi desplaza sus fechas muestreadas frente a sus pares sin
-                // ningun aviso (reproducido de forma sintetica por Astra;
-                // medido el mismo dia sobre datos reales de sp400+sp600,
-                // 1.002 tickers, 0 casos -- guarda de seguridad para cuando
-                // si ocurra, no una correccion de un problema ya observado).
-                $droppedCalendarGap += count($collected['samples']);
-                $tickersDroppedCalendarGap[] = $ticker;
+        foreach ($perTicker as $ticker => $true) {
+            try {
+                $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
+                // Cache-hit: ya se pidio en la primera pasada. Se vuelve a
+                // pedir aqui (en vez de conservar el historico completo de
+                // cada ticker entre pasadas) para no duplicar en memoria
+                // los historicos de un universo entero -- mismo criterio ya
+                // establecido para la primera pasada.
+                $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+                $ownIndexByDate = [];
+
+                foreach ($history as $localIndex => $quote) {
+                    $ownIndexByDate[$quote->getDate()->format('Y-m-d')] = $localIndex;
+                }
+
+                $samples = $this->sampleOnCalendar($stock, $history, $ownIndexByDate, $calendarDates, $horizonDays, $step, $mode);
+                $momentumNullDropped += $this->momentumNullDropped;
+
+                if ($this->windowGapDropped > 0) {
+                    $droppedWindowGap += $this->windowGapDropped;
+                    $tickersAffectedByWindowGap[] = $ticker;
+                }
+            } catch (\Throwable $exception) {
+                $errors[$ticker] = $exception->getMessage();
 
                 continue;
             }
 
-            foreach ($collected['samples'] as $sample) {
+            foreach ($samples as $sample) {
                 if ($membershipActive) {
                     $sampleDate = new \DateTimeImmutable((string) $sample['date']);
 
@@ -673,14 +701,15 @@ class BacktestingService
                 'index_code' => $membershipActive ? strtoupper((string) $indexCode) : null,
                 'samples_kept' => $samplesKept,
                 'samples_dropped_not_member' => $droppedNotMember,
-                // Auditoria Astra/Codex (`2026-09-08`): tickers con huecos
-                // internos frente al calendario compartido, excluidos
-                // ENTEROS (ver hasCalendarGap()). 0/[] en la practica con
-                // los datos ya medidos hoy -- publicado igual que el resto
-                // de contadores de merma para que, si algun dia deja de
-                // ser 0, sea visible y no silencioso.
-                'samples_dropped_calendar_gap' => $droppedCalendarGap,
-                'tickers_dropped_calendar_gap' => $tickersDroppedCalendarGap,
+                // Seguimiento de Astra (`2026-09-09`, casos 1 y 2): fechas
+                // del calendario compartido descartadas PARA UN TICKER
+                // CONCRETO porque su ventana de lookback o de
+                // entrada/horizonte tenia un hueco propio -- ya no todo el
+                // ticker de golpe (ver `sampleOnCalendar()`). Publicado
+                // igual que el resto de contadores de merma para que, si
+                // aparece, sea visible y no silencioso.
+                'samples_dropped_window_gap' => $droppedWindowGap,
+                'tickers_affected_by_window_gap' => $tickersAffectedByWindowGap,
             ],
             $this->crossSectionalStatistics($alphas, $topAverages, $universeAverages, $topReturns, $universeReturns),
             [
@@ -1785,10 +1814,23 @@ class BacktestingService
      * recorrido para la segunda habria significado dos definiciones de
      * "muestra" que podrian divergir con el tiempo.
      *
-     * Devuelve tambien `$history` (P0.2, ver el docblock de
-     * `runCrossSectional()`): esa fecha de la caller construye el calendario
-     * bursatil real del universo con el mismo historico que ya pedia, sin
-     * una segunda llamada al proveedor de mercado por ticker.
+     * Devuelve tambien `$history`: la caller construye con el su propio
+     * calendario bursatil, sin una segunda llamada al proveedor de mercado
+     * por ticker.
+     *
+     * **Limitacion conocida, sin corregir aqui a proposito (seguimiento de
+     * Astra, `2026-09-09`, casos 1 y 2):** las muestras de este metodo
+     * siguen usando el indice LOCAL de cada ticker (`sampleHistory()`), no
+     * el calendario compartido anclado que ya usa `runCrossSectional()`
+     * desde esa fecha (`sampleOnCalendar()`) -- dos tickers sin huecos
+     * pero con primera fecha distinta pueden muestrear fechas de calendario
+     * ligeramente distintas para "la misma" señal. Unico consumidor
+     * restante: `runDeteriorationRiskAnalysis()` (E1), medido y cerrado con
+     * veredicto nulo muy lejos de cualquier umbral (t=-1,67/-1,27, ver
+     * roadmap.md "Bloque E, E1") -- migrarlo exigiria reestructurar esa
+     * funcion a dos pasadas igual que `runCrossSectional()`, coste no
+     * justificado hoy para un resultado ya tan lejos de significar nada.
+     * Si E1 se retoma alguna vez con una formula distinta, migrar primero.
      *
      * @return array{samples: list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>, history: list<HistoricalQuote>}
      */
@@ -1803,58 +1845,6 @@ class BacktestingService
             'samples' => $this->sampleHistory($stock, $history, $horizonDays, $step, $mode),
             'history' => $history,
         ];
-    }
-
-    /**
-     * Detecta si un ticker tiene HUECOS internos frente al calendario
-     * compartido: fechas en las que otros tickers del mismo recorrido
-     * cotizaron pero este no, DENTRO de su propio rango activo (primera a
-     * ultima cotizacion propia -- antes de existir o despues de delistar
-     * nunca cuenta como hueco, es normal no tener precio ahi).
-     *
-     * Por que importa (auditoria Astra/Codex, `2026-09-08`):
-     * `sampleHistory()` muestrea por INDICE LOCAL de cada ticker (cada
-     * `$step` velas desde el 80), no por fecha compartida. Un ticker con un
-     * hueco desplaza TODAS sus fechas muestreadas posteriores frente a sus
-     * pares, sin que `runCrossSectional()` lo note: sus muestras siguen
-     * cayendo en $samplesByDate, solo que en fechas ligeramente distintas a
-     * las que "deberian" -- el efecto es silencioso, no un error.
-     * Reproducido de forma sintetica por Astra quitando una unica vela
-     * antigua de un ticker; medido el mismo dia con datos reales de
-     * `sp400`+`sp600` (1.002 tickers, precios de Yahoo ya cacheados): CERO
-     * huecos. Esta comprobacion es una guarda para si el caso real
-     * apareciera alguna vez (una recaptura con un hueco de proveedor, un
-     * universo futuro con datos menos limpios), no la correccion de un
-     * problema ya observado -- ver versions.md para la medicion completa.
-     *
-     * @param array<string,true> $ownDates fechas propias del ticker, ya en formato Y-m-d
-     * @param array<string,true> $tradingCalendar calendario compartido, YA ordenado (ksort)
-     */
-    private function hasCalendarGap(array $ownDates, array $tradingCalendar): bool
-    {
-        if ($ownDates === []) {
-            return false;
-        }
-
-        $ownKeys = array_keys($ownDates);
-        $first = min($ownKeys);
-        $last = max($ownKeys);
-
-        foreach ($tradingCalendar as $date => $true) {
-            if ($date < $first) {
-                continue;
-            }
-
-            if ($date > $last) {
-                break;
-            }
-
-            if (!isset($ownDates[$date])) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -1885,13 +1875,55 @@ class BacktestingService
         $this->momentumNullDropped = 0;
 
         for ($index = $minimumLookback; $index < $count - $horizonDays - 1; $index += $step) {
-            $past = array_slice($history, 0, $index + 1);
-            $current = $history[$index];
-            $entryIndex = $index + 1;
-            $entry = $history[$entryIndex];
-            $entryPrice = $entry->getOpen();
-            $future = $history[$entryIndex + $horizonDays];
-            $synthetic = $this->stockAt($stock, $current);
+            $sample = $this->buildSampleAt($stock, $history, $index, $index + 1, $index + 1 + $horizonDays, $mode);
+
+            if ($sample !== null) {
+                $samples[] = $sample;
+            }
+        }
+
+        return $samples;
+    }
+
+    /**
+     * Nucleo compartido por `sampleHistory()` (indice local, un solo
+     * ticker sin pares) y `sampleOnCalendar()` (indice anclado al
+     * calendario compartido, ver su docblock) -- misma logica de
+     * puntuacion/simulacion de salida para las dos, para que una
+     * correccion futura no tenga que aplicarse dos veces. Devuelve
+     * `null` cuando la muestra se descarta por falta de Momentum 12-1
+     * (ver P0.3 mas abajo), incrementando `$this->momentumNullDropped`.
+     *
+     * @param list<HistoricalQuote> $history
+     * @return array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}|null
+     */
+    private function buildSampleAt(
+        Stock $stock,
+        array $history,
+        int $index,
+        int $entryIndex,
+        int $futureIndex,
+        string $mode
+    ): ?array {
+        // P0.1 (`versions.md`, 2026-09-02): la recomendacion se genera con
+        // el cierre de $current (el ultimo dato conocido al analizar), pero
+        // el cron real corre despues del cierre de EEUU -- ese precio no es
+        // operable. La entrada mas pronto ejecutable es la APERTURA de la
+        // sesion siguiente ($history[$entryIndex]), y forward_return/el
+        // horizonte de simulateManagedExit() se miden desde ESA ENTRADA, no
+        // desde la señal.
+        // $horizonDays se deriva de la distancia entre entrada y salida,
+        // en vez de recibirse como parametro aparte: ambos llamadores
+        // (sampleHistory()/sampleOnCalendar()) ya garantizan que ese tramo
+        // esta libre de huecos antes de llegar aqui, asi que la distancia
+        // de indices SIEMPRE coincide con el horizonte pedido.
+        $horizonDays = $futureIndex - $entryIndex;
+        $past = array_slice($history, 0, $index + 1);
+        $current = $history[$index];
+        $entry = $history[$entryIndex];
+        $entryPrice = $entry->getOpen();
+        $future = $history[$futureIndex];
+        $synthetic = $this->stockAt($stock, $current);
             // P3.4 (`REVISION_MOTOR_CODEX_2026-09-02.md`): `stockAt()` (via
             // `fundamentalsAt()`) acaba de decidir si el marketCap de ESTA
             // muestra vino de un snapshot historico real o del fallback a
@@ -1933,7 +1965,7 @@ class BacktestingService
             if ($momentum12m1 === null && $mode !== 'fundamental') {
                 ++$this->momentumNullDropped;
 
-                continue;
+                return null;
             }
 
             $score = $this->scoreCalculator->calculate($synthetic, $technical)->getScore();
@@ -1974,7 +2006,7 @@ class BacktestingService
                 }
             }
 
-            $samples[] = [
+        return [
                 'date' => $current->getDate()->format('Y-m-d'),
                 'recommendation' => $recommendation,
                 'percentage' => $percentage,
@@ -2018,10 +2050,135 @@ class BacktestingService
                 // `rankByFundamentalNeutral()` no dependa de un nombre
                 // pensado originalmente solo para marketCap.
                 'fundamentals_is_point_in_time' => $marketCapIsPointInTime,
-            ];
+        ];
+    }
+
+    /**
+     * Version de `sampleHistory()` anclada al calendario COMPARTIDO del
+     * cruce entero, para `runCrossSectional()` -- no al indice local de
+     * cada ticker.
+     *
+     * Por que hace falta (seguimiento de Astra, `2026-09-09`, casos 1 y
+     * 2): `sampleHistory()` recorre el HISTORICO PROPIO de un ticker con
+     * `for ($index = 80; ...; $index += $step)`. Dos tickers sin ningun
+     * hueco interno pero con PRIMERA FECHA distinta (una salida a bolsa
+     * mas tardia, tan normal como que dos empresas no debuten el mismo
+     * dia) generan secuencias de fechas muestreadas DISTINTAS para "el
+     * mismo" indice n -- `hasCalendarGap()` (ya retirada de aqui, se
+     * conserva su historia en versions.md) solo comprobaba huecos DENTRO
+     * del rango propio de un ticker, nunca si su rejilla de muestreo
+     * coincidia con la de sus pares. Medido con datos reales cacheados
+     * (sin red) el 2026-09-09: en `sp400`/`sp600`, aproximadamente 28% de
+     * los tickers (112/400 y 171/602 a paso 20) tenian una fecha de
+     * arranque distinta a la fase mayoritaria del universo, pese a
+     * carecer de huecos internos -- "cero huecos" y "rejillas de muestreo
+     * distintas" coexisten sin contradiccion. Reproducido de forma
+     * sintetica por Astra: retirar solo la vela mas antigua de un ticker
+     * cambia la alpha calculada (4,00 -> 2,67 pp) sin que cambie ningun
+     * precio real, solo el punto de arranque del muestreo.
+     *
+     * Aqui la fecha de señal SIEMPRE es una fecha de `$calendarDates`
+     * (calendario compartido, ya completo y ordenado); si este ticker no
+     * cotizo exactamente ese dia (no habia salido a bolsa, ya deslisto, o
+     * un hueco puntual de proveedor), simplemente no aporta muestra esa
+     * fecha -- nunca se aproxima a la vela mas cercana ni se inventa un
+     * precio. El lookback/entrada/horizonte de CADA muestra se comprueban
+     * sin huecos SOLO en su propia ventana necesaria
+     * (`hasContiguousOwnWindow()`), no en todo el rango activo del ticker
+     * (caso 2 del mismo seguimiento): un hueco fuera de esa ventana no
+     * invalida una operacion ya resuelta antes o despues de el.
+     *
+     * @param list<HistoricalQuote> $history
+     * @param array<string,int> $ownIndexByDate fecha Y-m-d => indice local en $history
+     * @param list<string> $calendarDates calendario compartido, ya ordenado
+     * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>
+     */
+    private function sampleOnCalendar(
+        Stock $stock,
+        array $history,
+        array $ownIndexByDate,
+        array $calendarDates,
+        int $horizonDays,
+        int $step,
+        string $mode
+    ): array {
+        $samples = [];
+        $minimumLookback = 80;
+        $calendarCount = count($calendarDates);
+        // P0.3: se reinicia al EMPEZAR el recorrido de ESTE ticker, mismo
+        // criterio que sampleHistory().
+        $this->momentumNullDropped = 0;
+        $this->windowGapDropped = 0;
+
+        for ($calIndex = $minimumLookback; $calIndex < $calendarCount - $horizonDays - 1; $calIndex += $step) {
+            $signalDate = $calendarDates[$calIndex];
+
+            if (!isset($ownIndexByDate[$signalDate])) {
+                // Este ticker no cotizo exactamente ese dia del calendario
+                // compartido (todavia no habia salido a bolsa, ya
+                // deslisto, o un hueco puntual): no es un error, no aporta
+                // muestra esa fecha.
+                continue;
+            }
+
+            $entryCalIndex = $calIndex + 1;
+            $exitCalIndex = $entryCalIndex + $horizonDays;
+
+            if (!$this->hasContiguousOwnWindow($ownIndexByDate, $calendarDates, $calIndex - $minimumLookback, $calIndex)) {
+                // Hueco propio DENTRO de la ventana de lookback que esta
+                // muestra concreta necesita -- no en todo el rango activo
+                // del ticker.
+                $this->windowGapDropped++;
+
+                continue;
+            }
+
+            if (!$this->hasContiguousOwnWindow($ownIndexByDate, $calendarDates, $entryCalIndex, $exitCalIndex)) {
+                // Hueco propio entre la entrada y la salida de ESTA
+                // muestra -- una operacion anterior ya resuelta con datos
+                // intactos no se ve afectada (caso 2 del seguimiento de
+                // Astra).
+                $this->windowGapDropped++;
+
+                continue;
+            }
+
+            $sample = $this->buildSampleAt(
+                $stock,
+                $history,
+                $ownIndexByDate[$signalDate],
+                $ownIndexByDate[$calendarDates[$entryCalIndex]],
+                $ownIndexByDate[$calendarDates[$exitCalIndex]],
+                $mode
+            );
+
+            if ($sample !== null) {
+                $samples[] = $sample;
+            }
         }
 
         return $samples;
+    }
+
+    /**
+     * Comprueba que este ticker tiene cotizacion propia en TODAS las
+     * fechas del calendario compartido entre los indices
+     * [$fromCalIndex, $toCalIndex] (ambos inclusive) -- una ventana LOCAL
+     * a una muestra concreta, no todo el rango activo del ticker (ver el
+     * docblock de `sampleOnCalendar()`).
+     *
+     * @param array<string,int> $ownIndexByDate
+     * @param list<string> $calendarDates
+     */
+    private function hasContiguousOwnWindow(array $ownIndexByDate, array $calendarDates, int $fromCalIndex, int $toCalIndex): bool
+    {
+        for ($i = $fromCalIndex; $i <= $toCalIndex; $i++) {
+            if (!isset($ownIndexByDate[$calendarDates[$i]])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function assertValidMode(string $mode): void
