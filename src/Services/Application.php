@@ -1333,11 +1333,17 @@ class Application
                 $peerTickers = $this->universeConfig->tickers($sectorKey);
                 $peerResult = $service->runForPeerGroup($peerTickers, $backtestCache, 20);
 
-                if ($peerResult !== null && $peerResult['buy_managed_samples'] >= 5) {
+                if ($peerResult['buy_managed_samples'] >= 5) {
                     $peerGroup = [
                         'sector_label' => $this->universeConfig->label($sectorKey),
                         'buy_managed_samples' => $peerResult['buy_managed_samples'],
                         'avg_buy_managed_return' => $peerResult['avg_buy_managed_return'],
+                        // Seguimiento de Astra (`2026-09-09`, caso 3): cobertura
+                        // real del grupo, para que la ficha pueda avisar de un
+                        // resultado parcial en vez de presentarlo como "todo el
+                        // grupo sectorial" sin más.
+                        'tickers_total' => $peerResult['tickers_total'],
+                        'tickers_pending' => $peerResult['tickers_pending'],
                     ];
                 }
             }

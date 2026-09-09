@@ -1151,9 +1151,28 @@ class BacktestingService
     /**
      * P3.4 (`REVISION_MOTOR_CODEX_2026-09-02.md`, seccion "3. Nuevo modo
      * 'momentum'"): cualquier sector con menos de este numero de muestras
-     * elegibles en una fecha queda fuera de la neutralizacion ese dia
-     * (`rankByMomentumNeutral()`) -- con pocos pares no hay con que
-     * neutralizar de forma fiable.
+     * queda fuera de la neutralizacion ese dia (`rankByMomentumNeutral()`)
+     * -- con pocos pares no hay con que neutralizar de forma fiable.
+     *
+     * **Correccion documental (seguimiento de Astra, `2026-09-09`, caso
+     * 5): "muestras" aqui es el recuento BRUTO por sector (paso a, antes
+     * de descartar por `market_cap_is_point_in_time`), no el de
+     * SUPERVIVIENTES tras el filtro PIT (paso b).** Un sector con
+     * exactamente `MIN_SECTOR_SAMPLES_MOMENTUM` muestras brutas pero solo
+     * 2 con PIT real pasa el paso (a) igual que uno con 20 supervivientes
+     * de verdad -- el umbral NO garantiza cobertura utilizable, solo que
+     * habia bastante gente compitiendo antes de saber cuantos tenian dato
+     * fiable. Reproducido por Astra: tres sectores con 20 valores brutos
+     * cada uno pero solo 2 con PIT valido dan 0 descartes por sector
+     * pequeño y 54 (de 60) descartes por falta de PIT, dejando solo 6
+     * supervivientes reales -- visible ya hoy en
+     * `dropped_thin_sector`/`dropped_no_marketcap_pit`, el problema no era
+     * la falta de datos para diagnosticarlo, era la documentacion que
+     * afirmaba una garantia falsa (ver mas abajo). Decidir si el umbral
+     * debe aplicarse ANTES o DESPUES del filtro PIT es un cambio de regla
+     * de investigacion que necesita acuerdo explicito aparte (no se
+     * cambia aqui el orden ni el resultado de ninguna medicion ya
+     * publicada) -- ver roadmap.md, entrada del seguimiento de Astra.
      */
     private const MIN_SECTOR_SAMPLES_MOMENTUM = 20;
 
@@ -1165,11 +1184,14 @@ class BacktestingService
      * pasos:
      *
      * a. Agrupa `$daySamples` por sector; cualquier sector con menos de
-     *    `MIN_SECTOR_SAMPLES_MOMENTUM` muestras ese dia queda excluido POR
-     *    COMPLETO de la neutralizacion (no solo de su propia mediana).
+     *    `MIN_SECTOR_SAMPLES_MOMENTUM` muestras BRUTAS ese dia (antes del
+     *    filtro PIT del paso siguiente, ver el docblock de esa constante)
+     *    queda excluido POR COMPLETO de la neutralizacion (no solo de su
+     *    propia mediana).
      * b. De las restantes, cualquiera sin `market_cap_is_point_in_time`
      *    real tambien se descarta: sin eso no se puede confiar en su bucket
-     *    de tamaño (tercil).
+     *    de tamaño (tercil). Un sector puede pasar (a) con 20 muestras
+     *    brutas y aportar muy pocas o ninguna superviviente real aqui.
      * c. `momentum_sector_neutral` = `momentum12m1` menos la mediana del
      *    mismo sector, misma fecha, entre las supervivientes de (a)+(b).
      * d. Terciles de `market_cap` cross-sectional entre las supervivientes
@@ -1283,10 +1305,24 @@ class BacktestingService
         // d. Terciles de tamaño cross-sectional entre las supervivientes
         // (ordenadas por marketCap ascendente, bucket = posicion relativa
         // dentro del dia, no un umbral de valor fijo).
+        //
+        // Seguimiento de Astra (`2026-09-09`, caso 4): un empate de
+        // `market_cap` (frecuente, viene de un unico snapshot compartido
+        // por fecha, no de un valor continuo por ticker) se resolvia antes
+        // por el ORDEN DE ENTRADA de `$tickers` en `runCrossSectional()` --
+        // el mismo universo, pedido en otro orden, podia repartir un
+        // empate entre terciles distintos y cambiar el top-N/alpha sin que
+        // cambiara ningun dato economico. Desempate por ticker (mismo
+        // criterio ya usado en `rankByPercentage()`) para que el resultado
+        // sea invariante a la permutacion de entrada. Deliberadamente NO
+        // se agrupan los empates en un unico bloque/tercil -- eso cambia la
+        // definicion economica del tercil (Astra: "debe decidirse/
+        // versionarse por separado"), esto solo fija el ORDEN.
         $byMarketCap = $survivors;
         usort(
             $byMarketCap,
-            static fn (array $left, array $right): int => $left['market_cap'] <=> $right['market_cap']
+            static fn (array $left, array $right): int
+                => [$left['market_cap'], $left['ticker']] <=> [$right['market_cap'], $right['ticker']]
         );
         $survivorCount = count($byMarketCap);
         /** @var array<int,list<float>> $tercileMomentums Sin pre-sembrar con [] por indice: PHPStan infiere despues (erroneamente) que toda entrada acumulada en el bucle de abajo es non-empty-list, y marca como codigo muerto la comprobacion de vacio que sigue -- ver el comentario de mas abajo, un tercil SI puede quedar sin ninguna muestra. */
@@ -1299,12 +1335,17 @@ class BacktestingService
 
         unset($sample);
 
-        // Con muy pocas supervivientes (self::MIN_SECTOR_SAMPLES_MOMENTUM ya
-        // garantiza >=20 por sector superviviente, pero un dia con un unico
-        // sector elegible podria dejar algun tercil vacio) un tercil puede
-        // no recibir ninguna muestra: 0,0 de relleno, nunca leido de verdad
-        // porque ningun `size_tercile` apunta a el (`median()` con un array
-        // vacio no es un caso valido, ver su docblock).
+        // Con pocas supervivientes un tercil puede no recibir ninguna
+        // muestra: 0,0 de relleno, nunca leido de verdad porque ningun
+        // `size_tercile` apunta a el (`median()` con un array vacio no es
+        // un caso valido, ver su docblock). Esto NO es solo un caso raro
+        // de un unico sector elegible: `MIN_SECTOR_SAMPLES_MOMENTUM` exige
+        // 20 muestras BRUTAS por sector (paso a), antes del filtro PIT
+        // (paso b) -- un sector puede pasar el paso (a) con 20 brutas y
+        // llegar aqui con muy pocas o CERO supervivientes reales si casi
+        // ninguna tenia `market_cap_is_point_in_time` (ver el docblock de
+        // `MIN_SECTOR_SAMPLES_MOMENTUM`, correccion de una garantia falsa
+        // que decia lo contrario -- seguimiento de Astra, `2026-09-09`).
         $tercileMedians = [0 => 0.0, 1 => 0.0, 2 => 0.0];
 
         foreach ([0, 1, 2] as $tercile) {
@@ -1752,8 +1793,30 @@ class BacktestingService
      * concreta para no bloquear la peticion esperando calcular un grupo
      * entero (hasta ~50 tickers).
      *
+     * **Cobertura expuesta (seguimiento de Astra, `2026-09-09`, caso 3):**
+     * antes, la cifra agregada no distinguia "ya se compraron todos los
+     * datos" de "solo hay cache para una parte del grupo" -- la misma
+     * peticion, con la cache calentandose de fondo, podia devolver numeros
+     * distintos sin ningun aviso (reproducido por Astra: pasar de 6/7 a
+     * 7/7 tickers cacheados cambio el retorno medio de +1,00% a -7,71% sin
+     * que cambiara ningun dato de entrada). Se devuelve SIEMPRE (nunca
+     * `null`) un desglose de cobertura para que el llamador pueda mostrar
+     * "solo parcial" cuando corresponda:
+     * - `tickers_pending`: cache-miss y ya se agoto `$maxLiveComputations`
+     *   -- nunca se llego a intentar calcularlo en esta respuesta.
+     * - `tickers_failed`: se intento (cache o calculo en vivo) y no hubo
+     *   resultado (sin datos de mercado, error del proveedor...).
+     * - `tickers_no_buy_signals`: se calculo con exito pero no tuvo NINGUNA
+     *   señal BUY con niveles de riesgo calculables en el horizonte -- un
+     *   resultado real, no un fallo.
+     * - `tickers_contributed`: los que de verdad entran en el agregado.
+     * `tickers_total - tickers_pending` es "analizados" (Astra: "6 de 7
+     * valores analizados"). `avg_buy_managed_return` sale `null` cuando
+     * `buy_managed_samples` es 0 (ninguno contribuyo), pero el desglose de
+     * cobertura sigue siendo util incluso entonces.
+     *
      * @param list<string> $tickers
-     * @return array{buy_managed_samples: int, avg_buy_managed_return: ?float}|null
+     * @return array{buy_managed_samples: int, avg_buy_managed_return: ?float, tickers_total: int, tickers_contributed: int, tickers_pending: int, tickers_failed: int, tickers_no_buy_signals: int}
      */
     public function runForPeerGroup(
         array $tickers,
@@ -1761,18 +1824,24 @@ class BacktestingService
         int $horizonDays = 20,
         int $step = 5,
         int $maxLiveComputations = 5
-    ): ?array {
+    ): array {
         $totalSamples = 0;
         $weightedReturnSum = 0.0;
         $liveComputations = 0;
         $ttl = new DateInterval('P1D');
         $configSignature = $this->cacheConfigSignature();
+        $tickersPending = 0;
+        $tickersFailed = 0;
+        $tickersNoBuySignals = 0;
+        $tickersContributed = 0;
 
         foreach ($tickers as $ticker) {
             $cached = $cache->find($ticker, $horizonDays, $step, $ttl, $configSignature);
 
             if ($cached === null) {
                 if ($liveComputations >= $maxLiveComputations) {
+                    $tickersPending++;
+
                     continue;
                 }
 
@@ -1781,6 +1850,8 @@ class BacktestingService
             }
 
             if ($cached === null) {
+                $tickersFailed++;
+
                 continue;
             }
 
@@ -1789,16 +1860,20 @@ class BacktestingService
             if ($samples > 0 && $cached['avg_buy_managed_return'] !== null) {
                 $totalSamples += $samples;
                 $weightedReturnSum += $cached['avg_buy_managed_return'] * $samples;
+                $tickersContributed++;
+            } else {
+                $tickersNoBuySignals++;
             }
-        }
-
-        if ($totalSamples === 0) {
-            return null;
         }
 
         return [
             'buy_managed_samples' => $totalSamples,
-            'avg_buy_managed_return' => round($weightedReturnSum / $totalSamples, 2),
+            'avg_buy_managed_return' => $totalSamples > 0 ? round($weightedReturnSum / $totalSamples, 2) : null,
+            'tickers_total' => count($tickers),
+            'tickers_contributed' => $tickersContributed,
+            'tickers_pending' => $tickersPending,
+            'tickers_failed' => $tickersFailed,
+            'tickers_no_buy_signals' => $tickersNoBuySignals,
         ];
     }
 

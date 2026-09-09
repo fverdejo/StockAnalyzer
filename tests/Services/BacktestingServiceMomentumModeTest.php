@@ -396,4 +396,68 @@ final class BacktestingServiceMomentumModeTest extends TestCase
             0.01
         );
     }
+
+    /**
+     * Seguimiento de Astra (`2026-09-09`, caso 4): reproduccion literal de
+     * su hallazgo. 20 tickers, un unico sector (>= MIN_SECTOR_SAMPLES_
+     * MOMENTUM), TODOS con la misma capitalizacion (empate exacto en la
+     * clave por la que `rankByMomentumNeutral()` ordena para formar
+     * terciles) y momentum creciente por indice (T00=0% ... T19=19%, para
+     * que el tercil de cada ticker dependa de su POSICION tras el
+     * desempate, no de un valor de momentum unico). `forward_return` fijo:
+     * T13=+30%, T12=-30%, el resto 0% -- para que el signo de la alpha
+     * delate sin ambiguedad cual de los dos termino en el top-3.
+     *
+     * Antes del desempate por ticker, pedir el MISMO universo en dos
+     * ordenes de entrada distintos daba dos resultados distintos con signo
+     * OPUESTO (reproducido y verificado con el codigo anterior a este
+     * commit: ascendente -> top=[T06,T13,T19]/alpha=+10pp; descendente ->
+     * top=[T12,T19,T05]/alpha=-10pp, sin cambiar ningun dato economico).
+     * Con el desempate por ticker, las dos ordenes deben dar EXACTAMENTE
+     * el mismo resultado.
+     */
+    public function testElOrdenDeEntradaNoCambiaElResultadoConCapitalizacionesEmpatadas(): void
+    {
+        $stocksByTicker = [];
+        $historiesByTicker = [];
+        $fundamentalsHistory = new InMemoryFundamentalsHistoryRepository();
+        $ascending = [];
+
+        for ($i = 0; $i < 20; $i++) {
+            $ticker = sprintf('T%02d', $i);
+            $ascending[] = $ticker;
+            $forwardMove = match ($i) {
+                13 => 30.0,
+                12 => -30.0,
+                default => 0.0,
+            };
+            $stocksByTicker[$ticker] = $this->stockFor($ticker, 'tech');
+            $historiesByTicker[$ticker] = $this->momentumTickerHistory(100.0, (float) $i, $forwardMove);
+            // Misma capitalizacion para los 20: empate exacto a proposito.
+            $fundamentalsHistory->withMarketCapSnapshot($ticker, 1_000_000_000.0);
+        }
+
+        $descending = array_reverse($ascending);
+
+        $service = new BacktestingService(
+            new PerTickerStockAndHistoryProvider($stocksByTicker, $historiesByTicker),
+            new TechnicalAnalyzer(),
+            new ScoreCalculator(),
+            new RiskLevelsCalculator(new RiskLevelsConfig(2.5, 2.0)),
+            fundamentalsHistory: $fundamentalsHistory
+        );
+
+        $ascendingResult = $service->runCrossSectional($ascending, self::HORIZON_DAYS, self::STEP, 3, 'momentum');
+        $descendingResult = $service->runCrossSectional($descending, self::HORIZON_DAYS, self::STEP, 3, 'momentum');
+
+        self::assertSame([], $ascendingResult['errors']);
+        self::assertSame(['T06', 'T13', 'T19'], $ascendingResult['dates'][0]['top_tickers']);
+        self::assertSame(10.0, $ascendingResult['dates'][0]['alpha']);
+
+        // El hallazgo en si: mismo universo, orden de entrada invertido,
+        // resultado IDENTICO -- no solo la misma alpha, la misma seleccion.
+        self::assertSame($ascendingResult['dates'][0]['top_tickers'], $descendingResult['dates'][0]['top_tickers']);
+        self::assertSame($ascendingResult['dates'][0]['alpha'], $descendingResult['dates'][0]['alpha']);
+        self::assertSame($ascendingResult['dates'], $descendingResult['dates']);
+    }
 }

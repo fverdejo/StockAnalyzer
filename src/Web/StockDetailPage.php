@@ -747,10 +747,20 @@ class StockDetailPage
                                 var peerRet = data.peer_group.avg_buy_managed_return;
                                 var peerRetClass = peerRet === null ? '' : (peerRet >= 0 ? 'positive' : 'negative');
                                 var peerRetText = peerRet === null ? '-' : (peerRet >= 0 ? '+' : '') + peerRet.toFixed(2) + '%';
+                                var peerTotal = data.peer_group.tickers_total;
+                                var peerPending = data.peer_group.tickers_pending;
+                                var peerAnalyzed = peerTotal - peerPending;
+                                // Seguimiento de Astra (2026-09-09, caso 3): si
+                                // todavia falta cache por calentar en parte del
+                                // grupo, avisar de que es un resultado parcial
+                                // en vez de presentarlo como "todo el grupo".
+                                var peerCoverageNote = peerPending > 0
+                                    ? (' (' + peerAnalyzed + ' de ' + peerTotal + ' valores del grupo analizados; resultado parcial, el resto sigue calentando cache)')
+                                    : '';
 
                                 body.innerHTML +=
                                     '<p class="signal-history-return ' + peerRetClass + '">Retorno medio gestionado del grupo sectorial (' + data.peer_group.sector_label + '): ' + peerRetText + '</p>' +
-                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' señales históricas de todo el grupo sectorial. Cifra ampliada a todo el grupo sectorial de esta acción (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta acción en particular.</p>';
+                                    '<p class="muted panel-note">Basado en ' + data.peer_group.buy_managed_samples + ' señales históricas de todo el grupo sectorial' + peerCoverageNote + '. Cifra ampliada a todo el grupo sectorial de esta acción (no solo su propio historial); mezcla el comportamiento de varias empresas distintas y puede no representar a esta acción en particular.</p>';
                             }
                         }
 

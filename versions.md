@@ -7504,3 +7504,42 @@ Incluye:
 - Tests: `tests/Services/BacktestingServiceCrossSectionalTest.php` (tres tests reescritos, ver arriba); `tests/Services/BacktestingServiceP0FixesTest.php` (un test reescrito, ver arriba).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **682 tests, 1.853 assertions, OK** (mismo numero de tests: los reescritos sustituyen a los antiguos uno a uno, sin tests nuevos añadidos ni quitados). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-09 (tercera entrada) - Casos 3, 4 y 5 del seguimiento de Astra: desempate estable en momentum, documentacion falsa del minimo sectorial, y cobertura expuesta en el grupo sectorial
+
+Estado: los tres implementados y verificados. El usuario pide continuar; Astra revisara el trabajo de hoy en su siguiente pasada.
+
+### Caso 4 -- empates de capitalizacion en modo `momentum` dependian del orden de entrada
+
+Verificado leyendo el codigo antes de aceptar el hallazgo: `rankByMomentumNeutral()` ordena las supervivientes por `market_cap` (`usort` con `<=>`) para formar terciles de tamaño. `market_cap` viene de UN UNICO snapshot compartido por fecha (no un valor continuo por ticker), asi que un empate exacto es el caso NORMAL, no raro. Desde PHP 8.0 `usort()` es estable, asi que un empate se resolvia por el ORDEN DE ENTRADA de `$tickers` en `runCrossSectional()` -- el mismo universo, pedido en otro orden, podia repartir el empate entre terciles distintos y cambiar el top-N/la alpha sin que cambiara ningun dato economico.
+
+Reproduccion de Astra, reconstruida a mano antes de escribir el test (numeros verificados, coinciden exactos con los suyos): 20 tickers, mismo sector, misma capitalizacion, momentum = indice (0%-19%), `forward_return` fijo (T13=+30%, T12=-30%, resto 0%). Orden ascendente (T00..T19) -> top-3 `[T06,T13,T19]`, alpha +10pp. Orden descendente (T19..T00) -> top-3 `[T12,T19,T05]`, alpha -10pp. Mismo universo, mismos datos, signo OPUESTO.
+
+**Correccion**: desempate por ticker en el mismo `usort` (`[$left['market_cap'],$left['ticker']] <=> [...]`), mismo criterio ya usado en `rankByPercentage()`/el paso (e) del propio metodo. Deliberadamente NO se agrupan los empates en un unico bloque -- eso cambiaria la definicion economica del tercil, decision aparte segun la propia Astra. Verificado que el test nuevo FALLA con el comparador antiguo (revertido temporalmente, confirmado que sale `[T19,T12,T05]` en descendente en vez de `[T06,T13,T19]`) antes de darlo por bueno.
+
+### Caso 5 -- la documentacion afirmaba una garantia falsa sobre el minimo de 20 por sector
+
+`MIN_SECTOR_SAMPLES_MOMENTUM=20` se comprueba en el paso (a) de `rankByMomentumNeutral()` sobre el recuento BRUTO por sector, ANTES del filtro de `market_cap_is_point_in_time` del paso (b). Un comentario en el paso (d) afirmaba que ese minimo "ya garantiza >=20 por sector superviviente" -- **esa garantia es falsa**: un sector puede tener exactamente 20 muestras brutas y solo 2 con PIT real, pasando el paso (a) igual que uno con 20 supervivientes de verdad. Reproduccion de Astra (no remedida aqui, ya la trae el propio seguimiento): tres sectores con 20 brutas cada uno pero solo 2 PIT validas dan 0 descartes por sector pequeño y 54 (de 60) descartes por falta de PIT -- 6 supervivientes reales de 60 brutas.
+
+**Correccion**: solo documental, sin cambiar ningun filtro ni el orden en que se aplican (decidir si el umbral deberia aplicarse antes o despues del PIT es un cambio de regla de investigacion que Astra pide "acordar" aparte, no algo para decidir unilateralmente hoy -- documentado como pendiente en `roadmap.md`). Se corrige el comentario falso, se aclara en el docblock de la constante y en el paso (a) que el recuento es BRUTO, y se explica por que un tercil puede quedar sin ninguna superviviente real pese a que el paso (a) ya se supero. Los contadores para diagnosticar exactamente este caso (`samples_dropped_thin_sector`/`samples_dropped_no_marketcap_pit`) YA existian y ya eran correctos -- el problema nunca fue falta de datos para verlo, era la documentacion que decia lo contrario de lo que el codigo hace.
+
+### Caso 3 -- `runForPeerGroup()` podia mostrar "todo el grupo sectorial" cubriendo solo una parte
+
+`runForPeerGroup()` (usado por la ficha de detalle cuando un ticker individual tiene menos de 5 muestras BUY propias, para dar una cifra de grupo sectorial con mas soporte) calcula como mucho `$maxLiveComputations` (5) tickers sin cache por peticion; el resto sin cache se excluia en silencio del agregado. Reproduccion de Astra: la misma peticion, con la cache calentandose de fondo entre una llamada y la siguiente, pasaba de 6/7 a 7/7 tickers cacheados y el retorno medio cambiaba de +1,00% a -7,71% sin ningun aviso de que el numero anterior era parcial.
+
+**Correccion**: `runForPeerGroup()` deja de poder devolver `null` (antes lo hacia cuando nada contribuia) y devuelve SIEMPRE un desglose de cobertura junto al agregado: `tickers_total`, `tickers_contributed`, `tickers_pending` (cache-miss, presupuesto de calculo en vivo ya agotado, nunca se intento), `tickers_failed` (se intento y no hubo resultado -- sin datos de mercado) y `tickers_no_buy_signals` (se calculo con exito pero cero señales BUY en el horizonte, un resultado real, no un fallo). `avg_buy_managed_return` sale `null` cuando nadie contribuyo, en vez de descartarse el resultado entero. `Application.php` propaga `tickers_total`/`tickers_pending` al JSON de la ficha; `StockDetailPage.php` (JS del historial de señal) muestra "X de Y valores del grupo analizados; resultado parcial" cuando `tickers_pending > 0`, en vez de presentar la cifra como si cubriera "todo el grupo" sin matiz.
+
+**Sin test previo, ninguno de los tres casos** (verificado con `grep` antes de escribir nada): `tests/Integration/BacktestingServicePeerGroupTest.php` (nuevo, necesita `TickerBacktestCacheRepository` real) cubre las cuatro categorias con fixtures de historico real (patron calibrado alcista/bajista, mismo criterio que `BacktestingServiceP0FixesTest`): un ticker que contribuye, uno que se calcula bien pero nunca tuvo BUY, uno sin datos de mercado (fallido) y el caso de Astra en si -- con presupuesto de calculo agotado queda 1 pendiente/1 contribuye, y al repetir la llamada con presupuesto de sobra el pendiente pasa a contribuir y la cifra agregada sube, EXPUESTO en vez de oculto. `tests/Services/BacktestingServiceMomentumModeTest.php` gana `testElOrdenDeEntradaNoCambiaElResultadoConCapitalizacionesEmpatadas` (caso 4, con el test fallando confirmado contra el comparador antiguo).
+
+**Verificacion de la ficha de detalle real, parcial**: confirmado por HTTP real (`?page=signal-history&ticker=...`) que el endpoint sigue devolviendo JSON valido para varios tickers reales (`AAPL`, `NVDA`, `GEV`, `CEG`...) sin errores tras el cambio. **No se encontro en produccion un ticker cuyo grupo sectorial este realmente a medio calentar la cache en este momento** (los candidatos probados o no tenian grupo sectorial aplicable o ya estaban completos/vacios) para ver el aviso "resultado parcial" renderizado de verdad en el navegador -- verificado por lectura de codigo y por los tests de integracion que fijan el contrato de `runForPeerGroup()`, no por una captura visual del caso parcial exacto.
+
+Incluye:
+
+- `src/Services/BacktestingService.php`: `rankByMomentumNeutral()` (desempate por ticker en el `usort` de terciles; docblock del paso (a) y comentario del paso (d) corregidos); `MIN_SECTOR_SAMPLES_MOMENTUM` (docblock corregido, sin cambiar el valor ni el orden de los filtros); `runForPeerGroup()` (ya no devuelve `?array`, siempre `array`; nuevos campos `tickers_total`/`tickers_contributed`/`tickers_pending`/`tickers_failed`/`tickers_no_buy_signals`).
+- `src/Services/Application.php`: `renderSignalHistory()` (nombre real del metodo que construye el JSON) propaga `tickers_total`/`tickers_pending` en `peer_group`; quitado el chequeo `!== null` ya redundante.
+- `src/Web/StockDetailPage.php`: JS del historial de señal, nota de cobertura parcial del grupo sectorial.
+- Tests nuevos: `tests/Integration/BacktestingServicePeerGroupTest.php` (4 tests). Test nuevo en `tests/Services/BacktestingServiceMomentumModeTest.php` (1 test).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **687 tests, 1.893 assertions, OK** (sube desde 682/1.853: 5 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca en ningun punto.
