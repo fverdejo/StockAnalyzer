@@ -120,6 +120,26 @@ class BacktestingService
     private int $pointInTimeMisses = 0;
 
     /**
+     * `TechnicalAnalyzer::momentumSkippingRecent($closes, 250, 21)`: exige
+     * `count($closes) > 250` para no devolver `null` -- son 250 sesiones
+     * PREVIAS a la señal (la señal misma cuenta como la sesion 0), no 250
+     * mas los 21 de salto: el salto solo decide CUAL de esas 251 velas ya
+     * garantizadas se usa como referencia "reciente", no exige ninguna
+     * vela mas alla de esas 250 previas. Usado por `sampleOnCalendar()`
+     * (auditoria adicional de Astra, `2026-09-10`, caso 2) para exigir una
+     * ventana sin huecos de ESTA profundidad -- no solo las 80 sesiones de
+     * `$minimumLookback` -- en cualquier modo que consuma Momentum 12-1
+     * (todos salvo `fundamental`, ver P0.3 mas abajo). Sin esto, un hueco
+     * propio entre la sesion 81 y la 250 antes de la señal no se
+     * detectaba: el momentum seguia saliendo NO NULO pero referenciando
+     * silenciosamente una fecha de calendario distinta como "hace 250
+     * sesiones" -- reproducido por Astra, un momentum que pasaba de 97,05%
+     * a -1,475% al quitar una sola vela 210 sesiones antes de la señal,
+     * sin ningun descarte registrado.
+     */
+    private const MOMENTUM_LOOKBACK_SESSIONS = 250;
+
+    /**
      * P0.3 (`versions.md`, 2026-09-02): cuantas muestras de `sampleHistory()`
      * se descartaron por no tener suficiente historico para Momentum 12-1
      * (`TechnicalAnalyzer::momentumSkippingRecent()`, necesita mas de 250
@@ -2164,8 +2184,49 @@ class BacktestingService
      * precio. El lookback/entrada/horizonte de CADA muestra se comprueban
      * sin huecos SOLO en su propia ventana necesaria
      * (`hasContiguousOwnWindow()`), no en todo el rango activo del ticker
-     * (caso 2 del mismo seguimiento): un hueco fuera de esa ventana no
-     * invalida una operacion ya resuelta antes o despues de el.
+     * (caso 2 del seguimiento de Astra del `2026-09-09`): un hueco fuera
+     * de esa ventana no invalida una operacion ya resuelta antes o
+     * despues de el.
+     *
+     * **Ancla del calendario, ANCLADA AL FINAL, no al principio (auditoria
+     * adicional de Astra, `2026-09-10`, caso 1).** La rejilla recorre
+     * `$calendarDates` HACIA ATRAS desde la fecha mas reciente compartida,
+     * no hacia adelante desde la mas antigua: anclar al principio hacia
+     * adelante (version anterior a esta correccion) hacia que la rejilla
+     * entera se desplazara con solo AÑADIR un ticker con una unica vela
+     * MAS ANTIGUA que todas las demas -- ese ticker nunca llegaba a
+     * aportar ninguna muestra (su propio historico seguia siendo
+     * insuficiente), pero desplazaba el indice 0 del calendario compartido
+     * y con el la fecha de CADA punto de la rejilla para TODOS los demas
+     * tickers, rompiendo la reproducibilidad (mismo universo, mismo
+     * resultado, no deberia depender de que mas se pida en la misma
+     * llamada). Anclar al final es estable frente a eso: añadir historia
+     * MAS ANTIGUA en cualquier ticker nunca mueve la fecha mas reciente
+     * compartida, asi que tampoco mueve ninguna posicion de la rejilla
+     * (verificado algebraicamente: `count($calendarDates)` crece en
+     * exactamente lo mismo que se desplazan los indices posteriores a la
+     * insercion, y ambos efectos se cancelan). No basta con cambiar el
+     * indice de arranque (80 -> otro numero): cualquier ancla FIJA relativa
+     * al PRINCIPIO del calendario sigue siendo inestable frente a añadir
+     * datos mas antiguos, solo cambia cuanto se desplaza.
+     *
+     * **Ventana de lookback ampliada segun lo que el modo realmente
+     * necesita (mismo caso 1, y caso 2: la comprobacion de huecos cubria
+     * 80 sesiones, pero Momentum 12-1 -- que exige toda la clase de modos
+     * salvo `fundamental`, ver P0.3 en `buildSampleAt()` -- necesita 250
+     * sesiones previas, ver el docblock de `MOMENTUM_LOOKBACK_SESSIONS`).**
+     * Antes, un hueco propio ENTRE la sesion 81 y la 250 antes de la señal
+     * no lo detectaba `hasContiguousOwnWindow()` (acotada a 80), asi que
+     * `TechnicalAnalyzer::momentumSkippingRecent()` seguia calculando un
+     * valor NO NULO pero incorrecto -- referenciaba silenciosamente una
+     * fecha de calendario distinta como "hace 250 sesiones", sin ningun
+     * aviso (reproducido por Astra: el momentum de un ticker paso de
+     * 97,05% a -1,475% al quitar una sola vela 210 sesiones antes de la
+     * señal, sin que la alpha de esa fecha registrara ningun descarte).
+     * `$requiredLookback` es 80 para `mode='fundamental'` (nunca lee
+     * momentum) y `MOMENTUM_LOOKBACK_SESSIONS` (250) para el resto -- se
+     * usa tanto para decidir hasta donde retrocede la rejilla como para la
+     * ventana que `hasContiguousOwnWindow()` exige sin huecos.
      *
      * @param list<HistoricalQuote> $history
      * @param array<string,int> $ownIndexByDate fecha Y-m-d => indice local en $history
@@ -2183,13 +2244,31 @@ class BacktestingService
     ): array {
         $samples = [];
         $minimumLookback = 80;
+        $requiredLookback = $mode === 'fundamental'
+            ? $minimumLookback
+            : max($minimumLookback, self::MOMENTUM_LOOKBACK_SESSIONS);
         $calendarCount = count($calendarDates);
         // P0.3: se reinicia al EMPEZAR el recorrido de ESTE ticker, mismo
         // criterio que sampleHistory().
         $this->momentumNullDropped = 0;
         $this->windowGapDropped = 0;
 
-        for ($calIndex = $minimumLookback; $calIndex < $calendarCount - $horizonDays - 1; $calIndex += $step) {
+        // Recorrido HACIA ATRAS desde la fecha mas reciente compartida
+        // (ver el docblock de arriba); se guardan los calIndex primero y
+        // se procesan luego en orden cronologico ascendente, para que
+        // $samples/las fechas publicadas salgan en el mismo orden de
+        // siempre.
+        $calIndexes = [];
+
+        for (
+            $calIndex = $calendarCount - $horizonDays - 2;
+            $calIndex - $requiredLookback >= 0;
+            $calIndex -= $step
+        ) {
+            $calIndexes[] = $calIndex;
+        }
+
+        foreach (array_reverse($calIndexes) as $calIndex) {
             $signalDate = $calendarDates[$calIndex];
 
             if (!isset($ownIndexByDate[$signalDate])) {
@@ -2203,7 +2282,7 @@ class BacktestingService
             $entryCalIndex = $calIndex + 1;
             $exitCalIndex = $entryCalIndex + $horizonDays;
 
-            if (!$this->hasContiguousOwnWindow($ownIndexByDate, $calendarDates, $calIndex - $minimumLookback, $calIndex)) {
+            if (!$this->hasContiguousOwnWindow($ownIndexByDate, $calendarDates, $calIndex - $requiredLookback, $calIndex)) {
                 // Hueco propio DENTRO de la ventana de lookback que esta
                 // muestra concreta necesita -- no en todo el rango activo
                 // del ticker.
@@ -2308,17 +2387,32 @@ class BacktestingService
         // para la version que si es una particion disjunta.
         $alpha = ($avgBuy !== null && $avgAll !== null) ? round($avgBuy - $avgAll, 2) : null;
         // Principal (la que lleva el t-stat): compras contra los dias SIN
-        // señal de compra (HOLD/SELL/STRONG SELL) -- particion disjunta de
-        // verdad, sin solapar datos entre los dos grupos. Antes se
-        // comparaba contra $allReturns (que INCLUYE las propias compras):
-        // con los mismos datos en ambos grupos (ejemplo de Astra, [1,3] vs
-        // [1,3], diferencia identicamente cero) esa version devolvia un
-        // error estandar de Welch de ~1,414 en vez de 0 -- fabricaba
-        // dispersion donde no la hay, precisamente por ignorar que ambos
-        // grupos compartian datos. Con el grupo disjunto, Welch es la
-        // formula correcta salvo por la dependencia serial DENTRO de cada
-        // grupo (ventanas de horizonte solapadas, ya conocida y expuesta
-        // via `effective_independent_samples`) -- eso no lo corrige esto.
+        // señal de compra (HOLD/SELL/STRONG SELL) -- particion disjunta por
+        // FECHA DE SEÑAL, sin solapar esas fechas entre los dos grupos.
+        // Antes se comparaba contra $allReturns (que INCLUYE las propias
+        // compras): con los mismos datos en ambos grupos (ejemplo de Astra,
+        // [1,3] vs [1,3], diferencia identicamente cero) esa version
+        // devolvia un error estandar de Welch de ~1,414 en vez de 0 --
+        // fabricaba dispersion donde no la hay, precisamente por ignorar
+        // que ambos grupos compartian datos.
+        //
+        // **Matiz (auditoria adicional de Astra, `2026-09-10`, caso 5): que
+        // las FECHAS DE SEÑAL no se solapen NO demuestra independencia de
+        // los RETORNOS.** Una señal BUY del dia D tiene ventana de retorno
+        // [D+1, D+1+horizonte]; una señal SELL de un dia cercano puede tener
+        // una ventana que SI comparte alguna vela con esa (reproducido por
+        // Astra: BUY del 05/04 con ventana 06-11/04 y SELL del 10/04 con
+        // ventana 11-16/04 comparten la vela del 11/04). Welch sigue siendo
+        // una APROXIMACION razonable (mejor que comparar contra un grupo que
+        // literalmente contiene los mismos datos), no un contraste con
+        // independencia garantizada -- ademas de la dependencia serial ya
+        // conocida DENTRO de cada grupo (ventanas de horizonte solapadas
+        // entre muestras del mismo lado, expuesta via
+        // `effective_independent_samples`), tambien puede haberla ENTRE
+        // BUY y no-BUY por este motivo. Si se necesita una inferencia
+        // realmente validada, hace falta un metodo que respete la
+        // estructura temporal completa (tipo HAC/Newey-West sobre la
+        // serie, no una formula de dos muestras); no implementado aqui.
         $alphaVsNonBuy = ($avgBuy !== null && $avgNonBuy !== null) ? round($avgBuy - $avgNonBuy, 2) : null;
         $buyStdDev = $this->stdDev($buyReturns);
         $buyStdErr = $buyStdDev !== null ? $buyStdDev / sqrt(count($buyReturns)) : null;

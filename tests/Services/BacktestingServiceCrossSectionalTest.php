@@ -315,30 +315,49 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
 
     /**
      * Un ticker con historico desplazado en el tiempo (empieza un mes mas
-     * tarde) todavia no tiene los 80 dias de lookback propios que exige la
-     * rejilla de muestreo COMPARTIDA (`sampleOnCalendar()`, seguimiento de
-     * Astra `2026-09-09`, casos 1 y 2) en ninguna de las dos fechas reales
-     * de señal de AAA-DDD: no aporta ninguna muestra ahi, y el resultado
-     * (fechas, alpha) es IDENTICO al universo sin EEE. `dates_dropped_low_
-     * breadth` baja de 2 (version anterior, EEE generaba SUS PROPIAS fechas
-     * de señal desalineadas, descartadas por amplitud insuficiente) a 1 con
-     * el diseño nuevo: EEE ya no genera una rejilla propia separada, asi que
-     * ya no hay una segunda fecha suya que descartar por el mismo motivo.
+     * tarde) todavia no tiene los 250 dias de lookback propios que exige
+     * Momentum 12-1 dentro de la rejilla de muestreo COMPARTIDA
+     * (`sampleOnCalendar()`, seguimiento de Astra `2026-09-09`, casos 1 y
+     * 2; profundidad ampliada de 80 a 250 el `2026-09-10`, caso 2 de la
+     * auditoria adicional) en ninguna de las dos fechas reales de señal de
+     * AAA-DDD: no aporta ninguna muestra ahi, y el resultado (fechas,
+     * alpha) es IDENTICO al universo sin EEE.
+     *
+     * **EEE se recorta para no extender el calendario compartido mas alla
+     * de AAA-DDD (auditoria adicional de Astra, `2026-09-10`, caso 1): la
+     * rejilla ancla al FINAL del calendario, asi que un ticker cuyo
+     * historico termina MAS TARDE que los demas (como pasaba con la
+     * version sin recortar de este fixture, `winnerHistory()` genera la
+     * misma longitud fija sea cual sea la fecha de arranque) desplazaria
+     * el ancla y cambiaria que fecha exacta se muestrea para TODOS,
+     * incluidos AAA-DDD -- justo el problema de fondo que corrige ese
+     * caso, no algo que este test deba demostrar por accidente.** Recortar
+     * EEE a las velas que no superen la ultima fecha de AAA dejafo el
+     * final del calendario compartido definido por AAA-DDD, como pretendia
+     * el test original.
      */
     public function testFechasSinSuficienteAmplitudNoSeEvaluan(): void
     {
-        $result = $this->service($this->universeWhereTopIsBest() + [
-            'EEE' => $this->winnerHistory('2024-02-01'),
-        ])->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD', 'EEE'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
+        $aaa = $this->universeWhereTopIsBest();
+        $lastSharedDate = end($aaa['AAA'])->getDate();
+
+        $eee = array_values(array_filter(
+            $this->winnerHistory('2024-02-01'),
+            static fn (HistoricalQuote $quote): bool => $quote->getDate() <= $lastSharedDate
+        ));
+
+        $result = $this->service($aaa + ['EEE' => $eee])
+            ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD', 'EEE'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
 
         self::assertSame([], $result['errors']);
         self::assertSame(2, $result['dates_evaluated']);
-        self::assertSame(1, $result['dates_dropped_low_breadth']);
+        self::assertSame(0, $result['dates_dropped_low_breadth']);
         self::assertSame(0, $result['dates_dropped_overlapping']);
         self::assertSame(['2024-03-21', '2024-03-26'], array_column($result['dates'], 'date'));
         // EEE nunca aporta muestra en ninguna de las dos fechas reales
-        // (no llega a 80 sesiones propias de lookback en ninguna): el
-        // resultado es EXACTAMENTE el mismo que sin EEE.
+        // (no llega a las 250 sesiones propias de lookback que Momentum
+        // 12-1 exige en ninguna de las dos): el resultado es EXACTAMENTE
+        // el mismo que sin EEE.
         self::assertSame(4, $result['dates'][0]['universe_size']);
         self::assertSame(4, $result['dates'][1]['universe_size']);
         self::assertSame(4.0, $result['avg_alpha']);
@@ -353,44 +372,69 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
      * entrada y su horizonte) debe descartar ESA muestra, nunca las ya
      * resueltas antes o despues de el (`sampleOnCalendar()`/
      * `hasContiguousOwnWindow()`). Reproduccion directa de la de Astra:
-     * se añaden 10 velas planas a DDD bien despues de que su segunda señal
-     * (2024-03-26) se resuelva, y se compara quitar SOLO la ultima de esas
-     * 10 contra conservarlas todas -- el resultado debe ser IDENTICO en los
-     * dos casos, porque ninguna de las dos fechas reales necesita esa vela.
+     * se añaden 10 velas planas bien despues de que la segunda señal
+     * (2024-03-26) se resuelva, y se compara quitar SOLO la ultima vela de
+     * DDD contra conservarla -- el resultado debe ser IDENTICO en los dos
+     * casos, porque ninguna de las dos fechas reales necesita esa vela.
+     *
+     * **Las 10 velas de cola se añaden a los CUATRO tickers por igual, no
+     * solo a DDD (auditoria adicional de Astra, `2026-09-10`, caso 1): la
+     * rejilla ancla ahora al FINAL del calendario compartido (ver
+     * `sampleOnCalendar()`), asi que extender SOLO a DDD haria que DDD, no
+     * AAA-CCC, definiera ese final, desplazando el ancla y confundiendo el
+     * propio caso que este test quiere aislar.** Con los cuatro extendidos
+     * por igual, el final del calendario sigue definido por los tres que
+     * NO pierden ninguna vela (AAA-CCC).
+     *
+     * Con el calendario mas largo, la rejilla ANCLADA AL FINAL alcanza
+     * ahora dos fechas mas dentro de la propia cola plana (2024-03-31 y
+     * 2024-04-05) ademas de las dos señales reales -- esperado y correcto,
+     * no lo que este test aisla. La ultima vela quitada (2024-04-11) cae
+     * DENTRO de la ventana de entrada-horizonte de esa cuarta fecha
+     * (2024-04-05), asi que ESA fecha si pierde a DDD (`universe_size`
+     * 4->3): tambien correcto, un hueco dentro de la ventana que una
+     * muestra necesita SI debe descartar esa muestra. Lo que se comprueba
+     * aqui es que las DOS fechas reales (2024-03-21, 2024-03-26), cuyas
+     * ventanas no llegan ni de lejos hasta la cola, quedan bit a bit
+     * IDENTICAS entre quitar esa vela y conservarla.
      */
     public function testUnHuecoPosteriorALaResolucionNoInvalidaOperacionesYaCompletadas(): void
     {
         $clean = $this->universeWhereTopIsBest();
-        $ddd = $clean['DDD'];
-        $lastQuote = end($ddd);
+        $lastDate = end($clean['DDD'])->getDate();
         $extra = [];
-        $date = $lastQuote->getDate();
+        $date = $lastDate;
 
         for ($i = 0; $i < 10; $i++) {
             $date = $date->modify('+1 day');
-            $extra[] = new HistoricalQuote(
-                $date,
-                $lastQuote->getClose(),
-                $lastQuote->getClose() + 0.5,
-                $lastQuote->getClose() - 0.5,
-                $lastQuote->getClose(),
-                1_000_000
-            );
+            $extra[] = new HistoricalQuote($date, 100.0, 100.5, 99.5, 100.0, 1_000_000);
         }
 
-        $dddExtended = array_merge($ddd, $extra);
-        $dddWithFutureGap = $dddExtended;
+        $extended = [];
+
+        foreach ($clean as $ticker => $quotes) {
+            $extended[$ticker] = array_merge($quotes, $extra);
+        }
+
+        $dddWithFutureGap = $extended['DDD'];
         array_pop($dddWithFutureGap); // Quita SOLO la ultima vela, muy posterior a las dos señales.
 
-        $withoutGap = $this->service(array_merge($clean, ['DDD' => $dddExtended]))
+        $withoutGap = $this->service($extended)
             ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
-        $withFutureGap = $this->service(array_merge($clean, ['DDD' => $dddWithFutureGap]))
+        $withFutureGap = $this->service(array_merge($extended, ['DDD' => $dddWithFutureGap]))
             ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
 
         self::assertSame([], $withFutureGap['errors']);
-        self::assertSame($withoutGap['dates'], $withFutureGap['dates']);
-        self::assertSame($withoutGap['dates_evaluated'], $withFutureGap['dates_evaluated']);
-        self::assertSame($withoutGap['avg_alpha'], $withFutureGap['avg_alpha']);
+        // Las dos señales reales, intactas byte a byte en las dos corridas.
+        self::assertSame(
+            array_slice($withoutGap['dates'], 0, 2),
+            array_slice($withFutureGap['dates'], 0, 2)
+        );
+        self::assertSame(['2024-03-21', '2024-03-26'], array_column(array_slice($withFutureGap['dates'], 0, 2), 'date'));
+        // La cuarta fecha (dentro de la cola plana) SI pierde a DDD: la
+        // vela quitada cae dentro de SU ventana de entrada-horizonte.
+        self::assertSame(4, $withoutGap['dates'][3]['universe_size']);
+        self::assertSame(3, $withFutureGap['dates'][3]['universe_size']);
     }
 
     /**
@@ -407,13 +451,31 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
      * AAA/BBB, con un cierre ligeramente distinto) desplazan a AAA/BBB del
      * top-2 ese dia -- prueba de que se estan comparando de verdad, no solo
      * conviviendo sin interactuar.
+     *
+     * **XXX/YYY/ZZZ se recortan para no extender el calendario compartido
+     * mas alla de AAA-DDD (auditoria adicional de Astra, `2026-09-10`, caso
+     * 1): al arrancar un dia mas tarde con la misma longitud fija que
+     * `winnerHistory()`/`loserHistory()` generan siempre, tambien
+     * TERMINABAN un dia mas tarde -- serian ellos, no AAA-DDD, quienes
+     * definieran el final del calendario compartido con la rejilla ya
+     * anclada ahi, desplazando la fecha exacta de AAA-DDD por 1 dia en vez
+     * de dejarla intacta. Recortados a la ultima fecha de AAA, el final del
+     * calendario vuelve a estar definido por AAA-DDD, como pretendia el
+     * test original.**
      */
     public function testTickersDesplazadosUnDiaSeSumanAlMismoCalendarioEnVezDeGenerarFechasSolapadas(): void
     {
-        $result = $this->service($this->universeWhereTopIsBest() + [
-            'XXX' => $this->winnerHistory('2024-01-02'),
-            'YYY' => $this->winnerHistory('2024-01-02'),
-            'ZZZ' => $this->loserHistory('2024-01-02'),
+        $universe = $this->universeWhereTopIsBest();
+        $lastSharedDate = end($universe['AAA'])->getDate();
+        $truncate = fn (array $quotes): array => array_values(array_filter(
+            $quotes,
+            static fn (HistoricalQuote $quote): bool => $quote->getDate() <= $lastSharedDate
+        ));
+
+        $result = $this->service($universe + [
+            'XXX' => $truncate($this->winnerHistory('2024-01-02')),
+            'YYY' => $truncate($this->winnerHistory('2024-01-02')),
+            'ZZZ' => $truncate($this->loserHistory('2024-01-02')),
         ])->runCrossSectional(
             ['AAA', 'BBB', 'CCC', 'DDD', 'XXX', 'YYY', 'ZZZ'],
             self::HORIZON_DAYS,

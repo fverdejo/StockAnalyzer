@@ -1338,12 +1338,18 @@ class Application
                         'sector_label' => $this->universeConfig->label($sectorKey),
                         'buy_managed_samples' => $peerResult['buy_managed_samples'],
                         'avg_buy_managed_return' => $peerResult['avg_buy_managed_return'],
-                        // Seguimiento de Astra (`2026-09-09`, caso 3): cobertura
-                        // real del grupo, para que la ficha pueda avisar de un
-                        // resultado parcial en vez de presentarlo como "todo el
-                        // grupo sectorial" sin más.
+                        // Seguimiento de Astra (`2026-09-09`, caso 3; cobertura
+                        // de fallidos completada en la auditoria adicional del
+                        // `2026-09-10`, caso 4): cobertura real del grupo, para
+                        // que la ficha pueda avisar de un resultado parcial en
+                        // vez de presentarlo como "todo el grupo sectorial" sin
+                        // más -- un ticker que se INTENTO calcular y fallo (sin
+                        // datos de mercado, por ejemplo) es tan "no analizado"
+                        // como uno todavia pendiente, asi que cuenta igual para
+                        // decidir si avisar de cobertura parcial.
                         'tickers_total' => $peerResult['tickers_total'],
                         'tickers_pending' => $peerResult['tickers_pending'],
+                        'tickers_failed' => $peerResult['tickers_failed'],
                     ];
                 }
             }

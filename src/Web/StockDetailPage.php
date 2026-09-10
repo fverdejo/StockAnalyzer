@@ -749,13 +749,27 @@ class StockDetailPage
                                 var peerRetText = peerRet === null ? '-' : (peerRet >= 0 ? '+' : '') + peerRet.toFixed(2) + '%';
                                 var peerTotal = data.peer_group.tickers_total;
                                 var peerPending = data.peer_group.tickers_pending;
+                                var peerFailed = data.peer_group.tickers_failed || 0;
                                 var peerAnalyzed = peerTotal - peerPending;
-                                // Seguimiento de Astra (2026-09-09, caso 3): si
-                                // todavia falta cache por calentar en parte del
-                                // grupo, avisar de que es un resultado parcial
-                                // en vez de presentarlo como "todo el grupo".
-                                var peerCoverageNote = peerPending > 0
-                                    ? (' (' + peerAnalyzed + ' de ' + peerTotal + ' valores del grupo analizados; resultado parcial, el resto sigue calentando cache)')
+                                // Seguimiento de Astra (2026-09-09, caso 3; cobertura
+                                // de fallidos completada en la auditoria adicional del
+                                // 2026-09-10, caso 4): un ticker FALLIDO (se intento
+                                // calcular y no hubo resultado) es tan "no analizado"
+                                // como uno pendiente -- haberlo intentado no equivale
+                                // a tener un dato valido, asi que tambien dispara el
+                                // aviso de cobertura parcial, no solo los pendientes.
+                                var peerCoverageParts = [];
+                                if (peerPending > 0 || peerFailed > 0) {
+                                    peerCoverageParts.push(peerAnalyzed + ' de ' + peerTotal + ' valores del grupo analizados');
+                                }
+                                if (peerFailed > 0) {
+                                    peerCoverageParts.push(peerFailed + (peerFailed === 1 ? ' no pudo calcularse' : ' no pudieron calcularse'));
+                                }
+                                if (peerPending > 0) {
+                                    peerCoverageParts.push('el resto sigue calentando cache');
+                                }
+                                var peerCoverageNote = peerCoverageParts.length > 0
+                                    ? (' (' + peerCoverageParts.join('; ') + ')')
                                     : '';
 
                                 body.innerHTML +=

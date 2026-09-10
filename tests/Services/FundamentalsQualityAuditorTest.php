@@ -171,6 +171,41 @@ final class FundamentalsQualityAuditorTest extends TestCase
         self::assertSame([], array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_date_placeholder')));
     }
 
+    /**
+     * Auditoria adicional de Astra (`2026-09-10`, caso 3), reproduccion
+     * analoga a la de WMT con datos reales: resultados, balance y flujo de
+     * caja del MISMO trimestre publicados en fechas distintas.
+     */
+    public function testDetectaFechasDePublicacionDiscordantesEntreSecciones(): void
+    {
+        $payload = $this->payload(
+            [$this->income('2025-03-31', '2025-02-21')],
+            [$this->balance('2025-03-31', '2025-03-17')],
+            [$this->cashFlow('2025-03-31', '2025-03-15')]
+        );
+
+        $issues = $this->auditor()->auditRawPayload($payload, 'WMT');
+
+        $types = array_map(static fn ($i) => $i->type, $issues);
+        self::assertContains('filing_date_discordant', $types);
+
+        $issue = array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_date_discordant'))[0];
+        self::assertSame('warning', $issue->severity);
+    }
+
+    public function testNoMarcaComoDiscordanteCuandoLasTresSeccionesCoinciden(): void
+    {
+        $payload = $this->payload(
+            [$this->income('2025-03-31', '2025-05-02')],
+            [$this->balance('2025-03-31', '2025-05-02')],
+            [$this->cashFlow('2025-03-31', '2025-05-02')]
+        );
+
+        $issues = $this->auditor()->auditRawPayload($payload, 'ACME');
+
+        self::assertSame([], array_values(array_filter($issues, static fn ($i) => $i->type === 'filing_date_discordant')));
+    }
+
     public function testDetectaPeriodoDuplicadoConValoresDistintos(): void
     {
         $payload = $this->payload(

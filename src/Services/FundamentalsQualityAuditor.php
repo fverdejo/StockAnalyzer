@@ -114,12 +114,24 @@ final class FundamentalsQualityAuditor
 
         $issues = [...$issues, ...$this->checkNegativeShares($ticker, $payload['outstandingShares'] ?? null)];
         $issues = [...$issues, ...$this->checkNegativeDebt($ticker, $this->rawQuarterlyRows($financials['Balance_Sheet'] ?? null))];
-        // Solo Income_Statement: es la unica seccion cuyo filing_date lee
-        // EodhdFiscalPeriodProvider::parse() para construir FiscalPeriod
-        // (Balance_Sheet/Cash_Flow tienen su propio filing_date en el JSON,
-        // pero el codigo no lo usa; repetir el chequeo ahi triplicaria el
-        // mismo hallazgo sin aportar nada nuevo).
+        // Solo Income_Statement para el placeholder: es donde se detecto
+        // originalmente (`versions.md`, hallazgo del `2026-09-07`).
         $issues = [...$issues, ...$this->checkFilingDatePlaceholder($ticker, $this->rawQuarterlyRows($financials['Income_Statement'] ?? null))];
+        // Las tres secciones para la discordancia (auditoria adicional de
+        // Astra, `2026-09-10`, caso 3): `EodhdFiscalPeriodProvider::parse()`
+        // ahora SI lee el `filing_date` de las tres (antes solo el de
+        // Income_Statement, ver su docblock) -- este chequeo es la
+        // contrapartida de auditoria, para que una discordancia real quede
+        // visible en vez de disuelta silenciosamente en el maximo.
+        $issues = [
+            ...$issues,
+            ...$this->checkFilingDateDiscordant(
+                $ticker,
+                $this->rawQuarterlyRows($financials['Income_Statement'] ?? null),
+                $this->rawQuarterlyRows($financials['Balance_Sheet'] ?? null),
+                $this->rawQuarterlyRows($financials['Cash_Flow'] ?? null)
+            ),
+        ];
 
         return $issues;
     }
@@ -338,6 +350,77 @@ final class FundamentalsQualityAuditor
                     )
                 );
             }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Auditoria adicional de Astra (`2026-09-10`, caso 3): resultados,
+     * balance y flujo de caja de un MISMO trimestre pueden publicarse en
+     * fechas DISTINTAS -- medido en produccion sobre los 2.184 tickers
+     * archivados: 1.237 de 210.277 trimestres comunes (0,59%), 417 tickers
+     * afectados (19%), con un caso extremo real de 216 dias de diferencia
+     * (SMCI, cierre `2019-03-31`). `EodhdFiscalPeriodProvider::parse()` ya
+     * usa la fecha MAS TARDIA de las tres para el `FiscalPeriod` completo
+     * (politica conservadora); este chequeo deja la discordancia VISIBLE
+     * en vez de disuelta silenciosamente en ese maximo -- una discordancia
+     * grande (como el caso de 216 dias) merece revisarse aunque el motor
+     * ya la trate de forma segura por defecto.
+     *
+     * @param list<array<string,mixed>> $incomeRows
+     * @param list<array<string,mixed>> $balanceRows
+     * @param list<array<string,mixed>> $cashFlowRows
+     * @return list<FundamentalsQualityIssue>
+     */
+    private function checkFilingDateDiscordant(string $ticker, array $incomeRows, array $balanceRows, array $cashFlowRows): array
+    {
+        $filingDateByPeriod = static function (array $rows): array {
+            $byDate = [];
+
+            foreach ($rows as $row) {
+                $periodEnd = is_string($row['date'] ?? null) ? $row['date'] : null;
+                $filingDate = is_string($row['filing_date'] ?? null) && $row['filing_date'] !== ''
+                    ? $row['filing_date']
+                    : null;
+
+                if ($periodEnd !== null && $filingDate !== null) {
+                    $byDate[$periodEnd] = $filingDate;
+                }
+            }
+
+            return $byDate;
+        };
+
+        $income = $filingDateByPeriod($incomeRows);
+        $balance = $filingDateByPeriod($balanceRows);
+        $cashFlow = $filingDateByPeriod($cashFlowRows);
+        $issues = [];
+
+        foreach ($income as $periodEnd => $incomeFilingDate) {
+            if (!isset($balance[$periodEnd], $cashFlow[$periodEnd])) {
+                continue;
+            }
+
+            $dates = [$incomeFilingDate, $balance[$periodEnd], $cashFlow[$periodEnd]];
+
+            if (min($dates) === max($dates)) {
+                continue;
+            }
+
+            $issues[] = new FundamentalsQualityIssue(
+                $ticker,
+                'filing_date_discordant',
+                'warning',
+                sprintf(
+                    'Trimestre %s: fecha de publicacion distinta entre secciones (resultados %s, balance %s, flujo de caja %s). Se usa la mas tardia (%s) para todo el periodo.',
+                    $periodEnd,
+                    $incomeFilingDate,
+                    $balance[$periodEnd],
+                    $cashFlow[$periodEnd],
+                    max($dates)
+                )
+            );
         }
 
         return $issues;

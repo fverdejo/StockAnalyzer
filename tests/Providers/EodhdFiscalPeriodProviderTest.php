@@ -215,7 +215,33 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
      * Sin fecha de publicacion no se puede saber cuando fue publico ese
      * trimestre, que es la unica razon de ser de todo esto.
      */
-    public function testUnTrimestreSinFechaDePublicacionSeDescarta(): void
+    /**
+     * Actualizado (auditoria adicional de Astra, `2026-09-10`, caso 3):
+     * desde que `parse()` toma la fecha de publicacion MAS TARDIA de las
+     * tres secciones (no solo la de resultados, ver el docblock del bucle
+     * principal), que a resultados le falte NO descarta el trimestre si
+     * balance o flujo de caja SI tienen la suya -- se recupera de ahi.
+     * Solo se descarta cuando NINGUNA de las tres secciones tiene fecha.
+     */
+    public function testUnTrimestreSinFechaDePublicacionEnNingunaSeccionSeDescarta(): void
+    {
+        $sinFecha = $this->income('2025-03-31', '2025-05-02');
+        unset($sinFecha['filing_date']);
+        $balanceSinFecha = $this->balance('2025-03-31', '2025-05-02');
+        unset($balanceSinFecha['filing_date']);
+        $cashFlowSinFecha = $this->cashFlow('2025-03-31', '2025-05-02');
+        unset($cashFlowSinFecha['filing_date']);
+
+        $periods = $this->provider(
+            ['2025-03-31' => $sinFecha],
+            ['2025-03-31' => $balanceSinFecha],
+            ['2025-03-31' => $cashFlowSinFecha]
+        )->fetch('AAPL');
+
+        self::assertSame([], $periods);
+    }
+
+    public function testUnTrimestreSinFechaSoloEnResultadosSeRecuperaDeBalanceOFlujoDeCaja(): void
     {
         $sinFecha = $this->income('2025-03-31', '2025-05-02');
         unset($sinFecha['filing_date']);
@@ -226,7 +252,56 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
             ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-05-02')]
         )->fetch('AAPL');
 
-        self::assertSame([], $periods);
+        self::assertCount(1, $periods);
+        self::assertSame('2025-05-02', $periods[0]->filingDate->format('Y-m-d'));
+    }
+
+    /**
+     * Auditoria adicional de Astra (`2026-09-10`, caso 3), reproduccion con
+     * datos reales: WMT (`ticker` real, `eodhd_raw_fundamentals` archivado)
+     * tiene trimestres donde balance/flujo de caja se publican SEMANAS
+     * despues que resultados (verificado en produccion: 1.237 de 210.277
+     * trimestres, 417 de 2.184 tickers archivados, con un caso extremo de
+     * 216 dias -- SMCI, cierre `2019-03-31`). Antes, `filingDate` del
+     * `FiscalPeriod` completo usaba SOLO la fecha de resultados: un
+     * backtest que filtrara por `filingDate <= D` podia admitir datos de
+     * balance que en `D` todavia no se habian publicado. Ahora usa la fecha
+     * MAS TARDIA de las tres.
+     */
+    public function testLaFechaDePublicacionDelPeriodoEsLaMasTardiaDeLasTresSecciones(): void
+    {
+        $periods = $this->provider(
+            ['2025-03-31' => $this->income('2025-03-31', '2025-02-21')],
+            ['2025-03-31' => $this->balance('2025-03-31', '2025-03-17')],
+            ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-03-15')]
+        )->fetch('AAPL');
+
+        self::assertCount(1, $periods);
+        self::assertSame(
+            '2025-03-17',
+            $periods[0]->filingDate->format('Y-m-d'),
+            'La fecha de balance (17/03) es la mas tardia de las tres (resultados 21/02, flujo de caja 15/03) -- un backtest en cualquier fecha entre el 21/02 y el 17/03 no deberia ver todavia este trimestre.'
+        );
+    }
+
+    /**
+     * Un `filing_date` de placeholder (igual al cierre del propio
+     * trimestre, ver `FundamentalsQualityAuditor::checkFilingDatePlaceholder()`)
+     * en una seccion nunca puede ganar el maximo por accidente: el cierre
+     * de un trimestre es siempre anterior o igual a su publicacion real.
+     */
+    public function testUnaFechaDePlaceholderEnUnaSeccionNuncaGanaElMaximo(): void
+    {
+        $balanceConPlaceholder = $this->balance('2025-03-31', '2025-03-31');
+
+        $periods = $this->provider(
+            ['2025-03-31' => $this->income('2025-03-31', '2025-05-02')],
+            ['2025-03-31' => $balanceConPlaceholder],
+            ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-05-02')]
+        )->fetch('AAPL');
+
+        self::assertCount(1, $periods);
+        self::assertSame('2025-05-02', $periods[0]->filingDate->format('Y-m-d'));
     }
 
     /**

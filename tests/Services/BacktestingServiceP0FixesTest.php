@@ -214,12 +214,22 @@ final class BacktestingServiceP0FixesTest extends TestCase
      * IDENTICOS en construccion pero con el calendario de CCC/DDD
      * desplazado 4 dias HABILES respecto al de AAA/BBB -- el mismo fixture
      * de antes, para conservar la cobertura de "dias habiles distintos de
-     * dias naturales"). Con la rejilla anclada al inicio de AAA/BBB
-     * (el ticker mas temprano), el punto de rejilla que coincide con el
-     * momento calibrado de CCC/DDD NUNCA se visita (cae 4 sesiones antes
-     * del siguiente punto de la rejilla, que esta a $step=5): CCC/DDD
-     * simplemente no aporta ninguna muestra, sin generar una fecha propia
-     * que solape ni que haya que descartar.
+     * dias naturales"). Con la misma longitud pero un arranque 4 dias mas
+     * tarde, CCC/DDD tambien TERMINAN 4 dias habiles mas tarde que AAA/BBB
+     * -- son ellos, no AAA/BBB, quienes definen el extremo mas reciente
+     * del calendario compartido.
+     *
+     * **Actualizado (auditoria adicional de Astra, `2026-09-10`, caso 1):
+     * la rejilla ahora ancla al FINAL del calendario compartido, no al
+     * principio (ver el docblock de `sampleOnCalendar()`) -- asi que el
+     * punto de rejilla mas cercano al final es el momento calibrado de
+     * CCC/DDD, no el de AAA/BBB.** AAA/BBB, pese a tener MAS historia
+     * propia, no aportan muestra en esa fecha exacta (su propia secuencia
+     * de dias habiles, desplazada 4 dias respecto a la de CCC/DDD, no pasa
+     * por ese calendario exacto). El punto que importa para este test
+     * sigue siendo el mismo: ninguna fecha se genera "solapada" y luego se
+     * descarta -- simplemente CCC/DDD contribuyen y AAA/BBB no, sin que
+     * `dates_dropped_overlapping` tenga nada que hacer.
      */
     public function testDosTickersConCadenciaPropiaDesalineadaYaNoGeneranFechasSolapadasQueDescartar(): void
     {
@@ -264,10 +274,11 @@ final class BacktestingServiceP0FixesTest extends TestCase
             $result['dates_dropped_overlapping'],
             'La rejilla compartida ya garantiza por construccion que dos fechas evaluadas nunca estan a menos de $step sesiones -- no queda nada que descartar por solape.'
         );
-        self::assertSame($ab['signalDate']->format('Y-m-d'), $result['dates'][0]['date']);
-        // CCC/DDD nunca llegan a aportar una muestra: su momento calibrado
-        // cae entre dos puntos de la rejilla compartida (a 4 sesiones del
-        // primero, que necesita 5 para el siguiente paso).
+        self::assertSame($cd['signalDate']->format('Y-m-d'), $result['dates'][0]['date']);
+        // AAA/BBB no llegan a aportar una muestra en esta fecha exacta:
+        // con la rejilla anclada al final del calendario (CCC/DDD, que
+        // termina mas tarde), su propia secuencia de dias habiles no pasa
+        // por este dia concreto.
         self::assertSame(2, $result['dates'][0]['universe_size']);
     }
 
@@ -334,16 +345,26 @@ final class BacktestingServiceP0FixesTest extends TestCase
      * de historial se EXCLUYE por completo (no compite con un momentum
      * neutral silencioso, como pasaba antes de esta version). 90 velas
      * (muy por debajo de las 251 que exige Momentum 12-1) con una tendencia
-     * alcista limpia que antes de P0.3 habria dado BUY: con P0.3 la unica
-     * candidata que visita el bucle (indice 80, la unica con margen
-     * suficiente para horizonte 5) se descarta, y ni `run()` ni
-     * `runCrossSectional()` producen ninguna muestra real.
+     * alcista limpia que antes de P0.3 habria dado BUY: con P0.3 ni `run()`
+     * ni `runCrossSectional()` producen ninguna muestra real.
      *
-     * `samples_dropped_momentum_null` (el contador que
-     * `runCrossSectional()` publica, ver el docblock de
-     * `BacktestingService::$momentumNullDropped`) tiene que reflejar
-     * exactamente ese descarte: 1, ni 0 (que ocultaria la merma) ni un
-     * numero mayor (que contaria de mas).
+     * **Actualizado (auditoria adicional de Astra, `2026-09-10`, caso 2):
+     * `runCrossSectional()` (via `sampleOnCalendar()`) exige ahora 250
+     * sesiones de calendario SIN HUECOS antes de intentar siquiera
+     * construir una muestra en modos que leen Momentum 12-1 -- no solo
+     * las 80 de `$minimumLookback` -- ver `MOMENTUM_LOOKBACK_SESSIONS`.**
+     * Con un unico ticker de 90 velas, el calendario compartido (su propio
+     * historial, sin nadie mas con quien completarlo) nunca llega a esas
+     * 250 sesiones de profundidad: la rejilla no genera NINGUN indice
+     * candidato, asi que `buildSampleAt()` nunca llega a ejecutarse y
+     * `samples_dropped_momentum_null` (el contador que dispara ESE
+     * metodo) se queda en 0 -- no porque la merma este oculta, sino porque
+     * la comprobacion de profundidad de calendario, mas temprana y mas
+     * barata, ya descarta el intento antes de necesitar calcular nada.
+     * `run()` (via `sampleHistory()`, indice local sin este cambio) si
+     * sigue produciendo la muestra momentum-null tal como documentaba
+     * `P0.3` originalmente -- por eso el primer bloque de aserciones de
+     * este test no cambia.
      */
     public function testUnaMuestraConMenosDe251BarrasSeExcluyeYElContadorLoRefleja(): void
     {
@@ -373,9 +394,14 @@ final class BacktestingServiceP0FixesTest extends TestCase
         self::assertSame([], $crossSectional['errors']);
         self::assertSame(0, $crossSectional['dates_evaluated']);
         self::assertSame(
-            1,
+            0,
             $crossSectional['samples_dropped_momentum_null'],
-            'La unica candidata que visita el bucle (indice 80) debe contarse como descartada por momentum nulo.'
+            'Con un unico ticker de 90 velas, el calendario nunca llega a las 250 sesiones que exige momentum: la rejilla no genera ningun candidato, asi que nunca se llega a intentar (y por tanto a descartar) ninguna muestra.'
+        );
+        self::assertSame(
+            0,
+            $crossSectional['samples_dropped_window_gap'],
+            'Tampoco es un hueco: sencillamente no hay suficiente calendario compartido para intentarlo siquiera.'
         );
     }
 }

@@ -256,16 +256,49 @@ class EodhdFiscalPeriodProvider
                 continue;
             }
 
+            $bal = $balance[$endDate];
+            $cf = $cashFlow[$endDate];
+
+            // Auditoria adicional de Astra (`2026-09-10`, caso 3): EODHD
+            // publica resultados, balance y flujo de caja de un MISMO
+            // trimestre en fechas DISTINTAS (verificado con datos reales
+            // archivados, no solo el fixture sintetico de Astra: 1.237 de
+            // 210.277 trimestres, 417 de 2.184 tickers, con un caso extremo
+            // real de 216 dias de diferencia -- SMCI, cierre 2019-03-31).
+            // Antes se usaba UNICAMENTE `inc['filing_date']` para todo el
+            // objeto `FiscalPeriod`: un backtest que filtraba por
+            // `filingDate <= D` podia admitir datos de balance/flujo de
+            // caja que en la fecha D todavia NO se habian publicado de
+            // verdad, aunque `filingDate <= D` diera `true`.
+            //
+            // Politica CONSERVADORA (la mas simple de las dos que ofrece el
+            // encargo de Astra, dado que el modelo actual sigue siendo un
+            // unico `FiscalPeriod` por trimestre, no disponibilidad por
+            // campo): la fecha de publicacion del periodo COMPLETO es la
+            // MAS TARDIA de las tres secciones, nunca solo la de
+            // resultados. Un trimestre no esta "publicado" de verdad hasta
+            // que TODAS sus partes lo estan. Un `filing_date` de placeholder
+            // (igual a la fecha de cierre del propio trimestre, ver
+            // `FundamentalsQualityAuditor::checkFilingDatePlaceholder()`)
+            // nunca puede ganar este maximo por accidente: el cierre de un
+            // trimestre es siempre anterior o igual a su publicacion real,
+            // asi que un placeholder jamas supera a una fecha de
+            // publicacion genuina de otra seccion.
             $filingDate = $this->date($inc['filing_date'] ?? null);
+            $balanceFilingDate = $this->date($bal['filing_date'] ?? null);
+            $cashFlowFilingDate = $this->date($cf['filing_date'] ?? null);
+
+            foreach ([$balanceFilingDate, $cashFlowFilingDate] as $candidate) {
+                if ($candidate !== null && ($filingDate === null || $candidate > $filingDate)) {
+                    $filingDate = $candidate;
+                }
+            }
 
             // Sin fecha de publicacion no se puede saber cuando fue publico
             // este trimestre, que es la unica razon de ser de todo esto.
             if ($filingDate === null) {
                 continue;
             }
-
-            $bal = $balance[$endDate];
-            $cf = $cashFlow[$endDate];
 
             $periods[] = new FiscalPeriod(
                 ticker: $rawTicker,
