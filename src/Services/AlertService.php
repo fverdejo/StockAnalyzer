@@ -7,6 +7,8 @@ namespace StockAnalyzer\Services;
 use DateTimeImmutable;
 use StockAnalyzer\DTO\CorporateEvents;
 use StockAnalyzer\DTO\RiskLevels;
+use StockAnalyzer\DTO\StopLossCheck;
+use StockAnalyzer\Enums\StopLossCheckState;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Repository\AlertRepository;
 use StockAnalyzer\Repository\TickerAlertStateRepository;
@@ -173,6 +175,32 @@ class AlertService
      * nueva en cada visita a la cartera, pero si recupera el nivel y
      * vuelve a perderlo se avisa otra vez, que es un evento nuevo y
      * legitimo.
+     *
+     * **Correccion del 2026-09-10** (hallazgo real de Astra,
+     * `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, Entrega 1): la version
+     * anterior abandonaba sin hacer nada en cuanto `$levels` era `null`
+     * (indicadores tecnicos insuficientes ese dia), ANTES de mirar si ya
+     * habia un stop adoptado para esta racha. Quien necesitaba el estado
+     * (`Services\PositionDecisionAdvisor`, via el ya retirado
+     * `isBelowActiveStop()`) releia entonces el ULTIMO estado guardado
+     * como si fuera el de HOY, lo que podia quedar desactualizado en
+     * cualquier direccion: un precio que de verdad habia perdido el stop
+     * seguia leyendose "por encima" (sin alerta, `MANTENER` afirmando
+     * proteccion vigente), o un precio ya recuperado seguia leyendose
+     * "por debajo" (`SALIR` con una alerta obsoleta). Reproducido con el
+     * caso 85/90 del propio encargo de Astra: mismo precio y stop
+     * guardado, la decision cambiaba solo segun si ese dia llegaban
+     * `RiskLevels` nuevos o no.
+     *
+     * Comparar el precio contra un stop YA ADOPTADO no necesita ningun
+     * indicador nuevo -- el stop de esta racha esta fijo por construccion
+     * (ver mas arriba). Los niveles nuevos solo hacen falta para ADOPTAR
+     * un stop por primera vez. Ahora el metodo devuelve explicitamente un
+     * `DTO\StopLossCheck` con el resultado de ESTA comprobacion (dentro,
+     * cruzado, o no evaluable), separado del ultimo estado persistido que
+     * solo sirve para deduplicar alertas -- quien lo consume ya no vuelve
+     * a leer ese estado por separado, evitando la clase entera de
+     * desactualizacion que causaba el bug.
      */
     public function checkStopLossBreach(
         User $user,
@@ -181,59 +209,55 @@ class AlertService
         ?float $currentPrice,
         ?DateTimeImmutable $positionOpenedAt,
         string $currency = ''
-    ): void {
-        if ($levels === null || $currentPrice === null || $positionOpenedAt === null) {
-            return;
+    ): StopLossCheck {
+        if ($currentPrice === null || $positionOpenedAt === null) {
+            return new StopLossCheck(StopLossCheckState::SIN_EVALUAR);
         }
 
         $activeStop = $this->stopLossState->getActiveStop($user, $ticker);
 
         // Sin stop adoptado todavia, o el guardado pertenece a una racha
         // anterior ya cerrada (se vendio del todo y se volvio a comprar):
-        // se adopta el nivel recien calculado como base de comparacion.
-        // No es una transicion, no alerta.
+        // hay que adoptar uno nuevo, para lo que SI hacen falta niveles
+        // recien calculados -- sin ellos no se puede saber si el precio
+        // esta o no por debajo de ningun stop, no evaluable.
         if ($activeStop === null || $activeStop->positionOpenedAt != $positionOpenedAt) {
-            $this->stopLossState->setActiveStop($user, $ticker, $levels->getStopLoss(), $positionOpenedAt);
+            if ($levels === null) {
+                return new StopLossCheck(StopLossCheckState::SIN_EVALUAR);
+            }
 
-            return;
+            $stopLoss = $levels->getStopLoss();
+            $this->stopLossState->setActiveStop($user, $ticker, $stopLoss, $positionOpenedAt);
+
+            // La adopcion es la base de comparacion, no una transicion: no
+            // alerta.
+            return new StopLossCheck(StopLossCheckState::DENTRO, $stopLoss);
         }
 
+        // Ya hay un stop adoptado para ESTA racha: compararlo contra el
+        // precio disponible no necesita RiskLevels nuevos.
         $stopLoss = $activeStop->price;
         $currentState = $currentPrice > $stopLoss ? self::STOP_LOSS_STATE_ABOVE : self::STOP_LOSS_STATE_BELOW;
         $previousState = $this->stopLossState->getLastState($user, $ticker);
         $this->stopLossState->setLastState($user, $ticker, $currentState);
 
-        if ($currentState === self::STOP_LOSS_STATE_ABOVE || $previousState !== self::STOP_LOSS_STATE_ABOVE) {
-            return;
+        if ($currentState === self::STOP_LOSS_STATE_BELOW && $previousState === self::STOP_LOSS_STATE_ABOVE) {
+            $this->alerts->create(
+                $user,
+                $ticker,
+                sprintf(
+                    '%s ha perdido el stop-loss sugerido (precio %s, stop %s). Revisa si cierras la posicion.',
+                    strtoupper($ticker),
+                    Layout::formatMoney($currentPrice, $currency),
+                    Layout::formatMoney($stopLoss, $currency)
+                )
+            );
         }
 
-        $this->alerts->create(
-            $user,
-            $ticker,
-            sprintf(
-                '%s ha perdido el stop-loss sugerido (precio %s, stop %s). Revisa si cierras la posicion.',
-                strtoupper($ticker),
-                Layout::formatMoney($currentPrice, $currency),
-                Layout::formatMoney($stopLoss, $currency)
-            )
+        return new StopLossCheck(
+            $currentState === self::STOP_LOSS_STATE_ABOVE ? StopLossCheckState::DENTRO : StopLossCheckState::CRUZADO,
+            $stopLoss
         );
-    }
-
-    /**
-     * `true` si el ULTIMO estado guardado por `checkStopLossBreach()` para
-     * este usuario/ticker es "por debajo" del stop-loss activo -- para
-     * `Services\PositionDecisionAdvisor` (P2 de
-     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`, 2026-09-06), que necesita saber
-     * si la condicion de salida esta activada AHORA, no solo si se envio
-     * una alerta alguna vez (una posicion puede llevar dias por debajo del
-     * stop sin generar una alerta nueva, ver docblock de
-     * `checkStopLossBreach()`). Llamar DESPUES de `checkStopLossBreach()`
-     * en la misma peticion para que el estado leido sea el de HOY, no el
-     * de la ultima vez que se visito "Mi cartera".
-     */
-    public function isBelowActiveStop(User $user, string $ticker): bool
-    {
-        return $this->stopLossState->getLastState($user, $ticker) === self::STOP_LOSS_STATE_BELOW;
     }
 
     /**

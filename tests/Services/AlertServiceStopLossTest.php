@@ -7,6 +7,8 @@ namespace StockAnalyzer\Tests\Services;
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 use StockAnalyzer\DTO\RiskLevels;
+use StockAnalyzer\DTO\StopLossCheck;
+use StockAnalyzer\Enums\StopLossCheckState;
 use StockAnalyzer\Models\User;
 use StockAnalyzer\Services\AlertService;
 
@@ -62,16 +64,27 @@ final class AlertServiceStopLossTest extends TestCase
         return RiskLevels::compute($price, 4.0, 2.5, 2.0);
     }
 
-    private function check(?float $price, ?DateTimeImmutable $positionOpenedAt): void
+    private function check(?float $price, ?DateTimeImmutable $positionOpenedAt, string $ticker = 'ADBE'): StopLossCheck
     {
-        $this->service->checkStopLossBreach(
+        return $this->service->checkStopLossBreach(
             $this->user(),
-            'ADBE',
+            $ticker,
             $price === null ? null : $this->levels($price),
             $price,
             $positionOpenedAt,
             'USD'
         );
+    }
+
+    /**
+     * Igual que check(), pero sin `RiskLevels` nuevos -- el caso que motivo
+     * la correccion del 2026-09-10 (Astra,
+     * `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, Entrega 1): un dia sin
+     * indicadores tecnicos suficientes para calcularlos.
+     */
+    private function checkWithoutLevels(?float $price, ?DateTimeImmutable $positionOpenedAt, string $ticker = 'ADBE'): StopLossCheck
+    {
+        return $this->service->checkStopLossBreach($this->user(), $ticker, null, $price, $positionOpenedAt, 'USD');
     }
 
     private function openedAt(string $date = '2026-01-01'): DateTimeImmutable
@@ -81,18 +94,21 @@ final class AlertServiceStopLossTest extends TestCase
 
     public function testLaPrimeraObservacionAdoptaElStopYNuncaAlerta(): void
     {
-        $this->check(100.0, $this->openedAt());
+        $result = $this->check(100.0, $this->openedAt());
 
         self::assertSame(0, $this->alerts->countCreated());
         self::assertSame('above', $this->stopLossState->getLastState($this->user(), 'ADBE'));
         self::assertSame(90.0, $this->stopLossState->getActiveStop($this->user(), 'ADBE')?->price);
+        self::assertSame(StopLossCheckState::DENTRO, $result->state);
+        self::assertSame(90.0, $result->stopLoss);
     }
 
     public function testUnaCaidaPorDebajoDelStopAdoptadoGeneraUnaSolaAlerta(): void
     {
         $this->check(100.0, $this->openedAt()); // adopta stop=90
-        $this->check(85.0, $this->openedAt());  // el stop recalculado hoy seria 75, pero compara contra 90
+        $result = $this->check(85.0, $this->openedAt());  // el stop recalculado hoy seria 75, pero compara contra 90
 
+        self::assertSame(StopLossCheckState::CRUZADO, $result->state);
         self::assertSame(1, $this->alerts->countCreated());
         self::assertSame('ADBE', $this->alerts->created()[0]['ticker']);
         self::assertSame(
@@ -166,18 +182,27 @@ final class AlertServiceStopLossTest extends TestCase
         self::assertSame(2, $this->alerts->countCreated());
     }
 
-    public function testSinNivelesDeRiesgoNoHaceNada(): void
+    /**
+     * Sin ningun stop adoptado todavia y sin `RiskLevels` nuevos no hay con
+     * que adoptar uno: no evaluable, no "dentro" por defecto (a diferencia
+     * del bug corregido el 2026-09-10, esto nunca tuvo un stop guardado que
+     * comparar).
+     */
+    public function testSinNivelesDeRiesgoNiStopPrevioNoEsEvaluable(): void
     {
-        $this->service->checkStopLossBreach($this->user(), 'ADBE', null, 85.0, $this->openedAt(), 'USD');
+        $result = $this->checkWithoutLevels(85.0, $this->openedAt());
 
+        self::assertSame(StopLossCheckState::SIN_EVALUAR, $result->state);
+        self::assertNull($result->stopLoss);
         self::assertSame(0, $this->alerts->countCreated());
         self::assertNull($this->stopLossState->getLastState($this->user(), 'ADBE'));
     }
 
-    public function testSinPrecioActualNoHaceNada(): void
+    public function testSinPrecioActualNoEsEvaluable(): void
     {
-        $this->check(null, $this->openedAt());
+        $result = $this->check(null, $this->openedAt());
 
+        self::assertSame(StopLossCheckState::SIN_EVALUAR, $result->state);
         self::assertSame(0, $this->alerts->countCreated());
         self::assertNull($this->stopLossState->getLastState($this->user(), 'ADBE'));
     }
@@ -187,37 +212,54 @@ final class AlertServiceStopLossTest extends TestCase
      * adoptado sigue perteneciendo a la misma racha: "dato no disponible"
      * tampoco aqui se convierte en "el stop se ha perdido".
      */
-    public function testSinFechaDeAperturaDePosicionNoHaceNada(): void
+    public function testSinFechaDeAperturaDePosicionNoEsEvaluable(): void
     {
         $this->check(100.0, $this->openedAt());
-        $this->check(85.0, null);
+        $result = $this->check(85.0, null);
 
+        self::assertSame(StopLossCheckState::SIN_EVALUAR, $result->state);
         self::assertSame(0, $this->alerts->countCreated());
     }
 
     /**
-     * `isBelowActiveStop()` (2026-09-06, P2 de
-     * `MEJORAS_MOTOR_ASTRA_2026-09-06.md`): lee el ULTIMO estado guardado,
-     * no si se envio una alerta -- una posicion puede llevar dias por
-     * debajo del stop sin generar una alerta nueva (ver
-     * `testMientrasSigaPorDebajoNoRepiteLaAlerta`), pero
-     * `PositionDecisionAdvisor` necesita saber que la condicion de salida
-     * SIGUE activa, no solo que se disparo una vez.
+     * Reproduccion exacta de Astra (`PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`,
+     * Entrega 1, primeras dos filas de la tabla): con un stop YA ADOPTADO
+     * (90), el mismo precio (85, por debajo) debe evaluarse igual tanto si
+     * ese dia llegan `RiskLevels` nuevos como si no -- antes del arreglo,
+     * la version sin niveles nuevos abandonaba sin comparar nada y
+     * conservaba el estado "por encima" de la adopcion, afirmando
+     * proteccion vigente que ya no era cierta.
      */
-    public function testIsBelowActiveStopReflejaElUltimoEstado(): void
+    public function testConStopYaAdoptadoLaComprobacionNoDependeDeNivelesNuevos(): void
     {
-        self::assertFalse($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Sin ninguna observacion todavia.');
+        $this->check(100.0, $this->openedAt(), 'ADBE'); // adopta stop=90 (con RiskLevels)
+        $conNiveles = $this->check(85.0, $this->openedAt(), 'ADBE');
 
-        $this->check(100.0, $this->openedAt());
-        self::assertFalse($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Adopcion: por encima por construccion.');
+        // Mismo escenario de partida en un ticker distinto, para no
+        // reutilizar el estado ya guardado de ADBE.
+        $this->check(100.0, $this->openedAt(), 'MSFT'); // adopta stop=90 tambien
+        $sinNiveles = $this->checkWithoutLevels(85.0, $this->openedAt(), 'MSFT');
 
-        $this->check(85.0, $this->openedAt());
-        self::assertTrue($this->service->isBelowActiveStop($this->user(), 'ADBE'));
+        self::assertSame(StopLossCheckState::CRUZADO, $conNiveles->state);
+        self::assertSame(StopLossCheckState::CRUZADO, $sinNiveles->state);
+        self::assertSame($conNiveles->stopLoss, $sinNiveles->stopLoss);
+        self::assertSame(2, $this->alerts->countCreated(), 'Una alerta por ticker: ambos escenarios cruzan el stop.');
+    }
 
-        $this->check(84.0, $this->openedAt());
-        self::assertTrue($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Sigue por debajo, aunque no genere una alerta nueva.');
+    /**
+     * Cuarta fila de la tabla de Astra: un precio que ya se recupero por
+     * encima del stop adoptado no puede seguir apareciendo como "cruzado"
+     * solo porque ese dia falten `RiskLevels` nuevos -- el estado guardado
+     * de la vez anterior (por debajo) ya no describe el precio de hoy.
+     */
+    public function testUnPrecioRecuperadoDejaDeAparecerComoCruzadoAunqueFaltenNivelesNuevos(): void
+    {
+        $this->check(100.0, $this->openedAt()); // adopta stop=90
+        $this->check(85.0, $this->openedAt());  // cruza, 1 alerta, estado guardado "below"
 
-        $this->check(96.0, $this->openedAt());
-        self::assertFalse($this->service->isBelowActiveStop($this->user(), 'ADBE'), 'Recupero el nivel.');
+        $result = $this->checkWithoutLevels(95.0, $this->openedAt()); // recuperado, sin niveles nuevos
+
+        self::assertSame(StopLossCheckState::DENTRO, $result->state);
+        self::assertSame('above', $this->stopLossState->getLastState($this->user(), 'ADBE'));
     }
 }

@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use StockAnalyzer\DTO\FundamentalChangeAssessment;
 use StockAnalyzer\Enums\FundamentalChangeVerdict;
 use StockAnalyzer\Enums\PositionDecisionAction;
+use StockAnalyzer\Enums\StopLossCheckState;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Services\PositionDecisionAdvisor;
 
@@ -44,7 +45,7 @@ final class PositionDecisionAdvisorTest extends TestCase
     public function testSinPosicionYSinBuyEspera(): void
     {
         foreach (['HOLD', 'SELL', 'STRONG SELL', 'DATOS_INSUFICIENTES'] as $recommendation) {
-            $decision = $this->advisor->decide($recommendation, null, false, null);
+            $decision = $this->advisor->decide($recommendation, null, StopLossCheckState::SIN_EVALUAR, null);
 
             self::assertSame(PositionDecisionAction::ESPERAR, $decision->action, "recomendacion: {$recommendation}");
             self::assertFalse($decision->isManagementRule);
@@ -58,7 +59,7 @@ final class PositionDecisionAdvisorTest extends TestCase
      */
     public function testSinPosicionYBuyEsCandidata(): void
     {
-        $decision = $this->advisor->decide('BUY', null, false, null);
+        $decision = $this->advisor->decide('BUY', null, StopLossCheckState::SIN_EVALUAR, null);
 
         self::assertSame(PositionDecisionAction::CANDIDATA, $decision->action);
         self::assertFalse($decision->isManagementRule);
@@ -75,12 +76,51 @@ final class PositionDecisionAdvisorTest extends TestCase
         $decision = $this->advisor->decide(
             'HOLD',
             $this->position(),
-            true,
+            StopLossCheckState::CRUZADO,
             $this->changeWithVerdict(FundamentalChangeVerdict::DETERIORANDO)
         );
 
         self::assertSame(PositionDecisionAction::SALIR, $decision->action);
         self::assertTrue($decision->isManagementRule);
+    }
+
+    /**
+     * Hallazgo real de Astra (`PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`,
+     * Entrega 1): sin poder confirmar el estado del stop (falta precio o
+     * `RiskLevels`), la decision no puede ser `MANTENER` con el texto
+     * "dentro de su stop-loss adoptado" -- eso afirmaria una proteccion que
+     * no esta confirmada. Tampoco es una orden automatica de vender: es una
+     * condicion no evaluable, con su propia accion.
+     */
+    public function testConPosicionYStopNoEvaluableEsRevisarStop(): void
+    {
+        $decision = $this->advisor->decide(
+            'HOLD',
+            $this->position(),
+            StopLossCheckState::SIN_EVALUAR,
+            null
+        );
+
+        self::assertSame(PositionDecisionAction::REVISAR_STOP, $decision->action);
+        self::assertFalse($decision->isManagementRule);
+        self::assertStringNotContainsString('dentro de su stop-loss', $decision->reason);
+    }
+
+    /**
+     * El stop no evaluable tiene prioridad sobre el deterioro fundamental,
+     * igual que el stop cruzado: no evaluar un mecanismo de seguridad de
+     * precio no debe quedar oculto detras de una alarma mas lenta.
+     */
+    public function testStopNoEvaluableTienePrioridadSobreDeterioroFundamental(): void
+    {
+        $decision = $this->advisor->decide(
+            'HOLD',
+            $this->position(),
+            StopLossCheckState::SIN_EVALUAR,
+            $this->changeWithVerdict(FundamentalChangeVerdict::DETERIORANDO)
+        );
+
+        self::assertSame(PositionDecisionAction::REVISAR_STOP, $decision->action);
     }
 
     /**
@@ -92,7 +132,7 @@ final class PositionDecisionAdvisorTest extends TestCase
         $decision = $this->advisor->decide(
             'HOLD',
             $this->position(),
-            false,
+            StopLossCheckState::DENTRO,
             $this->changeWithVerdict(FundamentalChangeVerdict::DETERIORANDO)
         );
 
@@ -109,7 +149,7 @@ final class PositionDecisionAdvisorTest extends TestCase
         $decision = $this->advisor->decide(
             'SELL',
             $this->position(),
-            false,
+            StopLossCheckState::DENTRO,
             $this->changeWithVerdict(FundamentalChangeVerdict::ESTABLE)
         );
 
@@ -125,7 +165,7 @@ final class PositionDecisionAdvisorTest extends TestCase
     public function testSoloDeteriorandoDisparaRevisarTesis(): void
     {
         foreach ([FundamentalChangeVerdict::MEJORANDO, FundamentalChangeVerdict::MIXTO, FundamentalChangeVerdict::ESTABLE, FundamentalChangeVerdict::NO_EVALUABLE] as $verdict) {
-            $decision = $this->advisor->decide('HOLD', $this->position(), false, $this->changeWithVerdict($verdict));
+            $decision = $this->advisor->decide('HOLD', $this->position(), StopLossCheckState::DENTRO, $this->changeWithVerdict($verdict));
 
             self::assertSame(PositionDecisionAction::MANTENER, $decision->action, $verdict->value);
         }
@@ -133,7 +173,7 @@ final class PositionDecisionAdvisorTest extends TestCase
 
     public function testSinDiagnosticoFundamentalDisponibleEsMantenerSiNoHayOtraAlarma(): void
     {
-        $decision = $this->advisor->decide('HOLD', $this->position(), false, null);
+        $decision = $this->advisor->decide('HOLD', $this->position(), StopLossCheckState::DENTRO, null);
 
         self::assertSame(PositionDecisionAction::MANTENER, $decision->action);
     }
@@ -144,11 +184,12 @@ final class PositionDecisionAdvisorTest extends TestCase
     public function testTodaDecisionTraeCondicionDeRevision(): void
     {
         $decisiones = [
-            $this->advisor->decide('SELL', null, false, null),
-            $this->advisor->decide('BUY', null, false, null),
-            $this->advisor->decide('HOLD', $this->position(), true, null),
-            $this->advisor->decide('HOLD', $this->position(), false, $this->changeWithVerdict(FundamentalChangeVerdict::DETERIORANDO)),
-            $this->advisor->decide('HOLD', $this->position(), false, null),
+            $this->advisor->decide('SELL', null, StopLossCheckState::SIN_EVALUAR, null),
+            $this->advisor->decide('BUY', null, StopLossCheckState::SIN_EVALUAR, null),
+            $this->advisor->decide('HOLD', $this->position(), StopLossCheckState::CRUZADO, null),
+            $this->advisor->decide('HOLD', $this->position(), StopLossCheckState::SIN_EVALUAR, null),
+            $this->advisor->decide('HOLD', $this->position(), StopLossCheckState::DENTRO, $this->changeWithVerdict(FundamentalChangeVerdict::DETERIORANDO)),
+            $this->advisor->decide('HOLD', $this->position(), StopLossCheckState::DENTRO, null),
         ];
 
         foreach ($decisiones as $decision) {

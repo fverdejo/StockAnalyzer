@@ -47,6 +47,16 @@ enum PositionDecisionAction: string
      */
     case SALIR = 'salir';
 
+    /**
+     * Posicion abierta cuyo stop-loss no se puede evaluar hoy (falta
+     * precio o `RiskLevels` para adoptar uno por primera vez, ver
+     * `Enums\StopLossCheckState::SIN_EVALUAR`). Hallazgo real de Astra,
+     * `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, Entrega 1: antes, esta
+     * falta de dato se convertia en silencio en "dentro del stop", una
+     * garantia de proteccion que no estaba confirmada.
+     */
+    case REVISAR_STOP = 'revisar_stop';
+
     public function label(): string
     {
         return match ($this) {
@@ -55,6 +65,7 @@ enum PositionDecisionAction: string
             self::MANTENER => 'Mantener según el plan',
             self::REVISAR_TESIS => 'Revisar la tesis',
             self::SALIR => 'Salida activada',
+            self::REVISAR_STOP => 'Revisar el stop-loss',
         };
     }
 }

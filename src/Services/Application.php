@@ -18,6 +18,7 @@ use StockAnalyzer\Config\ScoreWeights;
 use StockAnalyzer\Config\UniverseConfig;
 use StockAnalyzer\DTO\FundamentalChangeAssessment;
 use StockAnalyzer\DTO\StockAnalysis;
+use StockAnalyzer\Enums\StopLossCheckState;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Infrastructure\Mail\LogMailer;
 use StockAnalyzer\Interfaces\MarketDataProviderInterface;
@@ -491,11 +492,16 @@ class Application
         // tiene sentido con posicion abierta y usuario identificado (sin
         // eso, PositionDecisionAdvisor::decide() ya distingue CANDIDATA de
         // ESPERAR sin necesitar mas datos). checkStopLossBreach() se llama
-        // aqui TAMBIEN (no solo en el bucle de "Mi cartera") para que
-        // isBelowActiveStop() refleje el precio de HOY si esta es la
-        // primera pagina que visita el usuario hoy.
+        // aqui TAMBIEN (no solo en el bucle de "Mi cartera") para que el
+        // estado usado abajo sea el de HOY si esta es la primera pagina
+        // que visita el usuario hoy.
+        //
+        // Correccion del 2026-09-10 (Astra, PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md,
+        // Entrega 1): el resultado de ESTA llamada se usa directamente, sin
+        // volver a leer por separado el ultimo estado persistido (lo que
+        // podia devolver un estado desactualizado cuando $levels era null).
         if ($currentUser !== null && $position !== null) {
-            $this->alertService->checkStopLossBreach(
+            $stopLossCheck = $this->alertService->checkStopLossBreach(
                 $currentUser,
                 $ticker,
                 $analysis->getRiskLevels(),
@@ -503,15 +509,15 @@ class Application
                 $this->portfolioService->currentPositionOpenedAt($currentUser, $ticker),
                 $analysis->getStock()->getCompany()->getCurrency()
             );
-            $stopLossBreached = $this->alertService->isBelowActiveStop($currentUser, $ticker);
+            $stopLossState = $stopLossCheck->state;
         } else {
-            $stopLossBreached = false;
+            $stopLossState = StopLossCheckState::SIN_EVALUAR;
         }
 
         $positionDecision = (new PositionDecisionAdvisor())->decide(
             $analysis->getRecommendation(),
             $position,
-            $stopLossBreached,
+            $stopLossState,
             $fundamentalChange
         );
 

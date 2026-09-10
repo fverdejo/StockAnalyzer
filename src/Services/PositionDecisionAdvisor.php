@@ -8,6 +8,7 @@ use StockAnalyzer\DTO\FundamentalChangeAssessment;
 use StockAnalyzer\DTO\PositionDecision;
 use StockAnalyzer\Enums\FundamentalChangeVerdict;
 use StockAnalyzer\Enums\PositionDecisionAction;
+use StockAnalyzer\Enums\StopLossCheckState;
 use StockAnalyzer\Models\Holding;
 
 /**
@@ -38,26 +39,38 @@ final class PositionDecisionAdvisor
     /**
      * @param string $recommendation ver DTO\StockAnalysis::getRecommendation()
      *        ('BUY'/'HOLD'/'SELL'/'STRONG SELL'/'DATOS_INSUFICIENTES')
-     * @param bool $stopLossBreached ver Services\AlertService::isBelowActiveStop():
-     *        true si el precio esta por debajo del stop-loss ACTIVO adoptado
-     *        para esta posicion (irrelevante sin posicion abierta)
+     * @param StopLossCheckState $stopLossState ver Services\AlertService::checkStopLossBreach():
+     *        estado del stop-loss ACTIVO adoptado para esta posicion tras la
+     *        comprobacion de HOY (irrelevante sin posicion abierta). `SIN_EVALUAR`
+     *        (falta precio o niveles con los que adoptar un stop por primera vez)
+     *        NUNCA se trata como "dentro" -- corregido el 2026-09-10, hallazgo de
+     *        Astra en `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, Entrega 1.
      */
     public function decide(
         string $recommendation,
         ?Holding $position,
-        bool $stopLossBreached,
+        StopLossCheckState $stopLossState,
         ?FundamentalChangeAssessment $fundamentalChange
     ): PositionDecision {
         if ($position === null) {
             return $this->decideWithoutPosition($recommendation);
         }
 
-        if ($stopLossBreached) {
+        if ($stopLossState === StopLossCheckState::CRUZADO) {
             return new PositionDecision(
                 PositionDecisionAction::SALIR,
                 'El precio ha perdido el stop-loss adoptado para esta posicion.',
                 'Se recalcula un stop nuevo si cierras del todo la posicion y la vuelves a abrir.',
                 true
+            );
+        }
+
+        if ($stopLossState === StopLossCheckState::SIN_EVALUAR) {
+            return new PositionDecision(
+                PositionDecisionAction::REVISAR_STOP,
+                'No se puede confirmar hoy si el precio sigue por encima del stop-loss adoptado: faltan precio o indicadores tecnicos suficientes.',
+                'Vuelve a la ficha cuando haya precio y niveles de riesgo disponibles para confirmar el estado del stop.',
+                false
             );
         }
 

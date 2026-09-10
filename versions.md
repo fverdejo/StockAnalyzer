@@ -7655,3 +7655,45 @@ Incluye:
 - Tests: seis reescritos en `BacktestingServiceCrossSectionalTest.php`/`BacktestingServiceP0FixesTest.php` (ver arriba, casos 1/2); tests nuevos en `EodhdFiscalPeriodProviderTest.php` (4: no-fecha-en-ninguna-seccion, recuperacion desde balance/flujo de caja, fecha mas tardia gana, placeholder nunca gana el maximo) y `FundamentalsQualityAuditorTest.php` (2: detecta discordancia, no marca cuando coinciden).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **693 tests, 1.913 assertions, OK** (sube desde 688/1.902). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. Confirmado por HTTP real que `?page=backtest` y la ficha de detalle siguen respondiendo 200. `config/weights.php` no se toca en ningun punto.
+
+---
+
+## 2026-09-10 (segunda entrada) - `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, Entrega 1: el stop-loss dejaba de evaluarse justo cuando faltaban indicadores tecnicos
+
+Estado: Entrega 1 (prioridad inmediata del propio plan) cerrada. Entregas 2-4 (calendario/manifiesto reproducible, replay de la politica completa via `PositionDecisionAdvisor`, protocolo de prueba de utilidad) quedan para incrementos posteriores, documentadas abajo y en `roadmap.md`.
+
+Astra revisa el commit `68a4b82` (cierre de la auditoria anterior) y entrega un plan mas amplio, con dos casos nuevos reproducidos con metodos publicos reales y repositorios en memoria, sin tocar produccion. El de prioridad inmediata: `AlertService::checkStopLossBreach()` abandonaba sin hacer nada en cuanto `$levels` (RiskLevels del dia) era `null` -- **antes** de mirar si ya habia un stop adoptado para la posicion. Quien necesitaba saber el estado (`PositionDecisionAdvisor`, via el entonces `isBelowActiveStop()`) releia por separado el ULTIMO estado guardado como si fuera el de hoy.
+
+Reproduccion de Astra (cuatro filas, mismo stop guardado de 90 en las tres primeras):
+
+| Estado de partida | Precio | Stop guardado | Niveles nuevos | Decision (antes del arreglo) |
+|---|---:|---:|---|---|
+| Antes estaba por encima | 85 | 90 | Ausentes | **MANTENER**, sin alerta -- deberia ser SALIR |
+| Mismo caso de control | 85 | 90 | Disponibles | SALIR, alerta -- correcto, confirma que el fallo es especifico de "sin niveles" |
+| No existe stop adoptado | 85 | Ausente | Ausentes | MANTENER, afirma "dentro de su stop-loss adoptado" -- no hay ningun stop que cumplir |
+| Antes estaba por debajo; precio recuperado | 95 | 90 | Ausentes | SALIR, conserva el estado viejo -- deberia ser MANTENER |
+
+El patron es el mismo en las dos filas que fallan: comparar un precio disponible contra un stop YA ADOPTADO no necesita ningun indicador nuevo (el stop de esa racha esta fijo por construccion desde el `2026-09-06`), pero el codigo pedia niveles nuevos incluso para esa comparacion, no solo para adoptar un stop por primera vez.
+
+**Correccion, siguiendo la implementacion propuesta por Astra:**
+
+- `checkStopLossBreach()` ahora solo pide `RiskLevels` nuevos para ADOPTAR un stop (primera vez de la racha, o racha nueva tras cerrar/reabrir). Si ya hay uno adoptado, compara el precio disponible contra ESE valor guardado, con o sin niveles nuevos ese dia.
+- Devuelve explicitamente un `DTO\StopLossCheck` (estado + nivel) en vez de `void`, con el nuevo `Enums\StopLossCheckState` de tres valores: `DENTRO`, `CRUZADO`, `SIN_EVALUAR` (falta precio, falta fecha de apertura de posicion, o no hay stop adoptado y tampoco niveles nuevos con que adoptarlo). El antiguo `isBelowActiveStop()` (una relectura por separado del ultimo estado persistido, la fuente misma de la desactualizacion) se retira: quien llama usa directamente el resultado de esta unica llamada.
+- `PositionDecisionAdvisor::decide()` cambia su tercer parametro de `bool $stopLossBreached` a `StopLossCheckState $stopLossState`. `SIN_EVALUAR` con posicion abierta ya NO cae en `MANTENER` (que afirmaria "dentro de su stop-loss adoptado" sin poder confirmarlo): nueva accion `PositionDecisionAction::REVISAR_STOP`, con prioridad igual que `SALIR` (por delante del diagnostico fundamental) porque es el mismo mecanismo de seguridad de precio, solo que no evaluable hoy -- `isManagementRule=false`, ya que no es la aplicacion confirmada de una regla, es un hueco de dato.
+- `Application.php` (ficha de detalle): usa directamente el `StopLossCheck` devuelto por `checkStopLossBreach()`, sin volver a leer nada por separado.
+
+Reproducidos los cuatro casos de la tabla de Astra como tests nuevos en `AlertServiceStopLossTest.php` (con un segundo ticker para el caso "mismo escenario, con y sin niveles nuevos" -- confirma que ambas vias dan exactamente el mismo `stopLoss` y el mismo estado) y en `PositionDecisionAdvisorTest.php` (`REVISAR_STOP` con y sin deterioro fundamental simultaneo, confirmando la prioridad).
+
+Incluye:
+
+- `src/Enums/StopLossCheckState.php` (nuevo): `DENTRO`/`CRUZADO`/`SIN_EVALUAR`.
+- `src/DTO/StopLossCheck.php` (nuevo): `state` + `stopLoss` nullable.
+- `src/Services/AlertService.php`: `checkStopLossBreach()` reescrito, devuelve `StopLossCheck`; `isBelowActiveStop()` retirado.
+- `src/Enums/PositionDecisionAction.php`: nuevo caso `REVISAR_STOP` ("Revisar el stop-loss").
+- `src/Services/PositionDecisionAdvisor.php`: `decide()` acepta `StopLossCheckState`, nueva rama `SIN_EVALUAR` -> `REVISAR_STOP` antes de la comprobacion fundamental.
+- `src/Services/Application.php`: ficha de detalle consume el `StopLossCheck` devuelto directamente.
+- Tests: `AlertServiceStopLossTest.php` (isBelowActiveStop sustituido por aserciones sobre el `StopLossCheck` devuelto; tests nuevos con y sin niveles nuevos, y de precio recuperado sin niveles), `PositionDecisionAdvisorTest.php` (llamadas actualizadas a `StopLossCheckState`, dos tests nuevos de `REVISAR_STOP`).
+
+**Pendiente, no es tarea de hoy**: Entregas 2 (calendario/corte/manifiesto explicitos para que un resultado historico no cambie de fase con cada sesion nueva, mas actualizar la vigencia de `config/measured_edge.php`), 3 (simulador por eventos que reproduzca la politica real de `PositionDecisionAdvisor`, no solo señales aisladas) y 4 (protocolo predeclarado para una prueba de utilidad economica) del mismo plan de Astra -- alcance mucho mayor, cada una necesita su propio diseño e implementacion. Documentado en `roadmap.md`.
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **696 tests, 1.927 assertions, OK** (sube desde 693/1.913: 3 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. Confirmado por HTTP real que `?page=backtest` y `?ticker=AAPL` siguen respondiendo 200. `config/weights.php` no se toca.
