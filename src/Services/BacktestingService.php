@@ -9,6 +9,7 @@ use DateTimeImmutable;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Config\BacktestingConfig;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
+use StockAnalyzer\DTO\FundamentalChangeAssessment;
 use StockAnalyzer\DTO\FundamentalTtmSnapshot;
 use StockAnalyzer\DTO\RiskLevels;
 use StockAnalyzer\Enums\ScoreCategory;
@@ -2281,6 +2282,103 @@ class BacktestingService
             $history,
             static fn (HistoricalQuote $quote): bool => $quote->getDate() <= $asOf
         ));
+    }
+
+    /**
+     * Historico diario congelado de un ticker (mismo filtro que
+     * `runCrossSectional()`/`replayTimeline()`, ver `historyUpTo()`), para
+     * quien necesite vigilar precios dia a dia entre dos fechas de
+     * `replayTimeline()` -- hoy solo `Services\PolicyReplaySimulator`
+     * (Entrega 3 de `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`), que
+     * comprueba el stop-loss adoptado contra cada vela real, no solo en
+     * las fechas de reevaluacion.
+     *
+     * @return list<HistoricalQuote>
+     */
+    public function historyFor(string $ticker, ?DateTimeImmutable $asOf = null): array
+    {
+        return $this->historyUpTo($this->marketDataProvider->getHistoricalQuotes($ticker), $asOf);
+    }
+
+    /**
+     * Recorrido "que diria la aplicacion en vivo, cada `$step` sesiones,
+     * sobre este historico" (Entrega 3 de
+     * `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`): a diferencia de
+     * `sampleHistory()`/`sampleOnCalendar()`, que descartan una fecha
+     * entera cuando el retorno futuro no se puede medir (hueco, Momentum
+     * 12-1 nulo...), este metodo nunca mira el futuro y nunca descarta
+     * nada -- reproduce fielmente lo que `Application::renderTickerPage()`
+     * calcularia ESE dia con ESE historico, incluido el neutral silencioso
+     * de Momentum 12-1 cuando `$index` todavia no tiene 250 sesiones
+     * previas (asi es como se comporta hoy la ficha real de un valor
+     * recien incorporado, no un defecto que corregir aqui).
+     *
+     * Pensado para alimentar `Services\PolicyReplaySimulator`, que
+     * necesita la MISMA recomendacion/stop-loss/diagnostico fundamental
+     * que veria un usuario real cada vez que reevalua su posicion, no una
+     * version simplificada.
+     *
+     * `stop_loss` solo se calcula cuando la recomendacion es BUY (igual
+     * que `buildSampleAt()`): es el nivel que se ADOPTARIA si el
+     * simulador decide aceptar esta candidata, calculado con el precio de
+     * CIERRE de esta sesion (`RiskLevelsCalculator` usa el precio del
+     * momento del analisis, igual que en produccion) -- el simulador lo
+     * fija y no lo recalcula mientras la posicion siga abierta, exactamente
+     * igual que `AlertService::checkStopLossBreach()`.
+     *
+     * `entry_price` es la apertura de la sesion SIGUIENTE (P0.1, mismo
+     * criterio que el resto del servicio: la señal de HOY no es operable
+     * hasta la apertura de mañana), o `null` si `$index` ya es la ultima
+     * vela disponible.
+     *
+     * @return list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float}>
+     */
+    public function replayTimeline(string $ticker, int $step = 5, ?DateTimeImmutable $asOf = null): array
+    {
+        $minimumLookback = 80;
+        $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
+        $history = $this->historyUpTo($this->marketDataProvider->getHistoricalQuotes($ticker), $asOf);
+        $timeline = [];
+
+        for ($index = $minimumLookback; $index < count($history); $index += $step) {
+            $current = $history[$index];
+            $synthetic = $this->stockAt($stock, $current);
+            $technical = $this->technicalAnalyzer->analyze(array_slice($history, 0, $index + 1));
+            $recommendation = $this->scoreCalculator->calculate($synthetic, $technical)->getScore()->getRecommendation();
+
+            $stopLoss = null;
+
+            if ($recommendation === 'BUY') {
+                $riskLevels = $this->riskLevelsCalculator->compute($technical, $current->getClose());
+                $stopLoss = $riskLevels?->getStopLoss();
+            }
+
+            $fundamentalChange = null;
+
+            if ($this->fundamentalsHistory instanceof FundamentalsHistoryRepository) {
+                try {
+                    $fundamentalChange = (new FundamentalChangeAssessor($this->fundamentalsHistory))->assess(
+                        $ticker,
+                        $synthetic->getFundamentals(),
+                        $synthetic->getCompany(),
+                        $current->getDate()
+                    );
+                } catch (Throwable) {
+                    $fundamentalChange = null;
+                }
+            }
+
+            $timeline[] = [
+                'date' => $current->getDate()->format('Y-m-d'),
+                'index' => $index,
+                'recommendation' => $recommendation,
+                'stop_loss' => $stopLoss,
+                'fundamental_change' => $fundamentalChange,
+                'entry_price' => $index + 1 < count($history) ? $history[$index + 1]->getOpen() : null,
+            ];
+        }
+
+        return $timeline;
     }
 
     private function sampleOnCalendar(
