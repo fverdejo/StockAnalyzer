@@ -61,6 +61,17 @@ use StockAnalyzer\Utils\UniverseTickerResolver;
 // diferencia entre poder o no leer un t-stat. El historico de cada rango se
 // cachea por separado (market_history_cache), asi que una ejecucion con
 // rango largo no altera lo que sirve la web.
+//
+// --as-of=YYYY-MM-DD (solo con --cross-sectional, Entrega 2 de
+// PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md): congela el calendario
+// compartido de BacktestingService::runCrossSectional() a las velas EN O
+// ANTES de esa fecha. Sin esto, repetir la misma medicion mas adelante (con
+// sesiones nuevas ya cacheadas) puede desplazar la FASE de toda la rejilla
+// de sampleOnCalendar() y cambiar que fechas se evaluaron, aunque ningun
+// precio historico haya cambiado -- ver el docblock de runCrossSectional().
+// Pensado para mediciones que se quieren poder reproducir tal cual
+// (config/measured_edge.php); sin --as-of el comportamiento es el de
+// siempre, anclado a la ultima sesion que devuelva hoy el proveedor.
 $options = getopt('', [
     'universe::',
     'tickers::',
@@ -72,6 +83,7 @@ $options = getopt('', [
     'cross-sectional',
     'persist',
     'no-point-in-time',
+    'as-of::',
 ]);
 $universeKey = is_string($options['universe'] ?? null) ? (string) $options['universe'] : 'default';
 $horizon = max(5, min(120, (int) ($options['horizon'] ?? 20)));
@@ -91,6 +103,23 @@ $step = max(1, min(120, (int) ($options['step'] ?? $defaultStep)));
 if (!in_array($mode, ['full', 'technical'], true)) {
     fwrite(STDERR, "Modo desconocido: '$mode'. Valores validos: 'full', 'technical'." . PHP_EOL);
     exit(1);
+}
+
+$asOfOption = is_string($options['as-of'] ?? null) ? (string) $options['as-of'] : null;
+$asOf = null;
+
+if ($asOfOption !== null) {
+    if (!$crossSectional) {
+        fwrite(STDERR, '--as-of solo tiene efecto con --cross-sectional.' . PHP_EOL);
+        exit(1);
+    }
+
+    try {
+        $asOf = new DateTimeImmutable($asOfOption);
+    } catch (\Exception) {
+        fwrite(STDERR, "--as-of invalido: '$asOfOption'. Formato esperado: YYYY-MM-DD." . PHP_EOL);
+        exit(1);
+    }
 }
 
 // ticker_backtest_cache es la cache que lee la aplicacion web, y su clave
@@ -173,7 +202,7 @@ if ($persist) {
 
 if ($crossSectional) {
     try {
-        $crossSectionalResult = $service->runCrossSectional($tickers, $horizon, $step, $topN, $mode);
+        $crossSectionalResult = $service->runCrossSectional($tickers, $horizon, $step, $topN, $mode, null, $asOf);
     } catch (InvalidArgumentException $exception) {
         fwrite(STDERR, $exception->getMessage() . PHP_EOL);
         exit(1);

@@ -259,6 +259,96 @@ final class BacktestingServiceCrossSectionalTest extends TestCase
     }
 
     /**
+     * Reproduccion de Astra (`PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`,
+     * Entrega 2): con el ancla al final del calendario compartido (arreglo
+     * del `2026-09-09`/`2026-09-10`, ver el docblock de
+     * `sampleOnCalendar()`), anadir una UNICA sesion plana a los cuatro
+     * tickers -- ningun precio historico cambia, todos avanzan el mismo dia
+     * con el mismo cierre -- desplaza la FASE de toda la rejilla: las
+     * fechas de señal pasan de 2024-03-21/26 a 2024-03-22/27 (verificado a
+     * mano: `calIndex` inicial pasa de `262-7=255` a `263-7=256`, un indice
+     * de calendario mas tarde en los dos puntos de la rejilla). Repetir la
+     * misma llamada mañana, con una sesion nueva ya cacheada, podria dejar
+     * de coincidir con el resultado de hoy sin que ningun precio historico
+     * haya cambiado.
+     *
+     * `$asOf` (nuevo parametro de `runCrossSectional()`, Entrega 2) congela
+     * el calendario a las velas de hoy: la misma llamada mañana, con el
+     * mismo `$asOf`, da EXACTAMENTE el mismo resultado.
+     */
+    public function testUnAsOfExplicitoCongelaLasFechasFrenteASesionesNuevas(): void
+    {
+        $universe = $this->universeWhereTopIsBest();
+        $cutoff = $this->lastDateAcross($universe);
+
+        $baseline = $this->service($universe)
+            ->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
+
+        $extendedUniverse = array_map(
+            fn (array $history): array => $this->appendFlatSession($history),
+            $universe
+        );
+        $extendedService = $this->service($extendedUniverse);
+
+        $withoutAsOf = $extendedService->runCrossSectional(['AAA', 'BBB', 'CCC', 'DDD'], self::HORIZON_DAYS, self::STEP, self::TOP_N);
+
+        self::assertNotSame(
+            array_column($baseline['dates'], 'date'),
+            array_column($withoutAsOf['dates'], 'date'),
+            'Control: sin $asOf, una sola sesion nueva desplaza la fase de la rejilla -- el fallo que motiva la Entrega 2.'
+        );
+
+        $withAsOf = $extendedService->runCrossSectional(
+            ['AAA', 'BBB', 'CCC', 'DDD'],
+            self::HORIZON_DAYS,
+            self::STEP,
+            self::TOP_N,
+            'full',
+            null,
+            $cutoff
+        );
+
+        self::assertSame($baseline['dates'], $withAsOf['dates']);
+        self::assertSame($baseline['avg_alpha'], $withAsOf['avg_alpha']);
+        self::assertSame($baseline['dates_evaluated'], $withAsOf['dates_evaluated']);
+    }
+
+    /**
+     * @param array<string,list<HistoricalQuote>> $historiesByTicker
+     */
+    private function lastDateAcross(array $historiesByTicker): DateTimeImmutable
+    {
+        $last = null;
+
+        foreach ($historiesByTicker as $history) {
+            $candidate = end($history)->getDate();
+
+            if ($last === null || $candidate > $last) {
+                $last = $candidate;
+            }
+        }
+
+        if ($last === null) {
+            throw new \RuntimeException('Universo vacio.');
+        }
+
+        return $last;
+    }
+
+    /**
+     * @param list<HistoricalQuote> $history
+     * @return list<HistoricalQuote>
+     */
+    private function appendFlatSession(array $history): array
+    {
+        $last = end($history);
+        $close = $last->getClose();
+        $history[] = new HistoricalQuote($last->getDate()->modify('+1 day'), $close, $close + 0.5, $close - 0.5, $close, 1_000_000);
+
+        return $history;
+    }
+
+    /**
      * Caso contrario: el ranking elige justo lo peor.
      *
      * Mismo universo de 4 tickers, pero con historicos de una sola señal

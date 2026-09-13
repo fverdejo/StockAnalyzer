@@ -404,6 +404,25 @@ class BacktestingService
      *        bloque" punto 5, 2026-09-02) contra el que se comprueba
      *        membresia point-in-time va `IndexMembershipCheckerInterface`.
      *        Sin efecto si el servicio no tiene uno conectado (constructor).
+     * @param ?DateTimeImmutable $asOf Fecha de corte explicita (Entrega 2 de
+     *        `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`). `null` (por
+     *        defecto) conserva el comportamiento de siempre: el calendario
+     *        compartido llega hasta la ULTIMA vela que devuelva hoy el
+     *        proveedor de mercado, lo que significa que repetir la misma
+     *        llamada mas adelante (con sesiones nuevas ya cacheadas) puede
+     *        desplazar la FASE de toda la rejilla de `sampleOnCalendar()` y
+     *        cambiar que fechas se evaluaron, aunque ningun precio historico
+     *        haya cambiado -- reproducido por Astra anadiendo una sola
+     *        sesion plana a cada ticker (las fechas de señal pasan de
+     *        21/03+26/03 a 22/03+27/03, la alpha de 4,00 a 3,50 pp). Pasar un
+     *        `$asOf` congela el calendario y el historico de cada ticker a
+     *        las velas EN O ANTES de esa fecha (`historyUpTo()`): repetir la
+     *        misma llamada con el mismo `$asOf` mas adelante da exactamente
+     *        el mismo resultado, sea cual sea el historico nuevo que se haya
+     *        acumulado desde entonces. Pensado para mediciones que se
+     *        quieren poder reproducir tal cual (p.ej. `config/measured_edge.php`),
+     *        no para el uso diario de la aplicacion, que si quiere ver la
+     *        sesion mas reciente disponible.
      * @return array<string,mixed>
      */
     public function runCrossSectional(
@@ -412,7 +431,8 @@ class BacktestingService
         int $step = 20,
         int $topN = 10,
         string $mode = 'full',
-        ?string $indexCode = null
+        ?string $indexCode = null,
+        ?DateTimeImmutable $asOf = null
     ): array {
         $this->assertValidMode($mode);
 
@@ -456,7 +476,7 @@ class BacktestingService
 
         foreach ($tickers as $ticker) {
             try {
-                $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+                $history = $this->historyUpTo($this->marketDataProvider->getHistoricalQuotes($ticker), $asOf);
                 $ownDates = [];
 
                 foreach ($history as $quote) {
@@ -481,8 +501,12 @@ class BacktestingService
                 // pedir aqui (en vez de conservar el historico completo de
                 // cada ticker entre pasadas) para no duplicar en memoria
                 // los historicos de un universo entero -- mismo criterio ya
-                // establecido para la primera pasada.
-                $history = $this->marketDataProvider->getHistoricalQuotes($ticker);
+                // establecido para la primera pasada. Mismo filtro de
+                // $asOf que la primera pasada: si esta segunda pasada viera
+                // velas mas alla del corte que la primera ya excluyo del
+                // calendario compartido, $ownIndexByDate tendria fechas que
+                // ninguna posicion de $calendarDates puede referenciar.
+                $history = $this->historyUpTo($this->marketDataProvider->getHistoricalQuotes($ticker), $asOf);
                 $ownIndexByDate = [];
 
                 foreach ($history as $localIndex => $quote) {
@@ -2233,6 +2257,32 @@ class BacktestingService
      * @param list<string> $calendarDates calendario compartido, ya ordenado
      * @return list<array{date: string, recommendation: string, percentage: float, forward_return: float, managed_return: ?float, exit_reason: ?string, exit_day: ?int, momentum12m1: ?float, sector: string, market_cap: ?float, market_cap_is_point_in_time: bool, free_cash_flow_yield: ?float, ev_to_ebitda: ?float, roic: ?float, operating_margin: ?float, debt_to_equity: ?float, earnings_yield: ?float, cash_conversion: ?float, fundamentals_is_point_in_time: bool}>
      */
+    /**
+     * Congela `$history` a las velas EN O ANTES de `$asOf` (Entrega 2 de
+     * `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, ver el docblock de
+     * `runCrossSectional()`). `$asOf === null` devuelve `$history` intacta
+     * -- el comportamiento de siempre, sin congelar nada.
+     *
+     * `array_values()` reindexa la lista tras el filtro: tanto
+     * `runCrossSectional()` (el `$localIndex` de `$ownIndexByDate`) como
+     * `buildSampleAt()` (slices e indices posicionales) asumen una lista
+     * 0-indexada sin huecos, igual que la que devuelve el proveedor.
+     *
+     * @param list<HistoricalQuote> $history
+     * @return list<HistoricalQuote>
+     */
+    private function historyUpTo(array $history, ?DateTimeImmutable $asOf): array
+    {
+        if ($asOf === null) {
+            return $history;
+        }
+
+        return array_values(array_filter(
+            $history,
+            static fn (HistoricalQuote $quote): bool => $quote->getDate() <= $asOf
+        ));
+    }
+
     private function sampleOnCalendar(
         Stock $stock,
         array $history,

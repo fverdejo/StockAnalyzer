@@ -7697,3 +7697,40 @@ Incluye:
 **Pendiente, no es tarea de hoy**: Entregas 2 (calendario/corte/manifiesto explicitos para que un resultado historico no cambie de fase con cada sesion nueva, mas actualizar la vigencia de `config/measured_edge.php`), 3 (simulador por eventos que reproduzca la politica real de `PositionDecisionAdvisor`, no solo señales aisladas) y 4 (protocolo predeclarado para una prueba de utilidad economica) del mismo plan de Astra -- alcance mucho mayor, cada una necesita su propio diseño e implementacion. Documentado en `roadmap.md`.
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **696 tests, 1.927 assertions, OK** (sube desde 693/1.913: 3 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. Confirmado por HTTP real que `?page=backtest` y `?ticker=AAPL` siguen respondiendo 200. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-13 - `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`, Entrega 2 (parcial): un `$asOf` explicito para que un resultado historico no cambie de fase con cada sesion nueva, mas recalculo de `config/measured_edge.php`
+
+Estado: la parte de `$asOf` explicito y el recalculo de la evidencia visible, cerrados. El manifiesto reproducible completo (version de politica/codigo/pesos/costes + hashes de OHLC/universo/fundamentales) se aplaza deliberadamente -- ver el porque al final.
+
+Astra diagnostica el problema simetrico al que se corrigio el `2026-09-10`: anclar la rejilla de `sampleOnCalendar()` al FINAL del calendario compartido es estable frente a datos MAS ANTIGUOS (el arreglo de ese dia), pero sigue siendo sensible a datos MAS RECIENTES -- cada sesion nueva que se acumula desplaza la FASE de toda la rejilla, cambiando que fechas se evaluaron aunque ningun precio historico haya cambiado. Reproduccion de Astra (sintetica): anadir una sola sesion plana desplaza las fechas de señal de 21/03+26/03 a 22/03+27/03 de 2024, con la alpha bajando de 4,00 a 3,50 pp.
+
+**Verificado con la reproduccion exacta de Astra, con el fixture literal de `BacktestingServiceCrossSectionalTest::universeWhereTopIsBest()`** (el mismo que ya da 21/03+26/03 y alpha +4,00 en el test existente): añadir una unica sesion plana a los cuatro tickers desplaza `calIndex` inicial de `262-7=255` a `263-7=256`, un indice de calendario mas tarde en los dos puntos de la rejilla -- confirmado que las fechas evaluadas cambian, sin tocar ningun precio.
+
+**Correccion (alcance reducido frente a la propuesta completa de Astra, ver mas abajo el porque): nuevo parametro `?DateTimeImmutable $asOf = null` en `BacktestingService::runCrossSectional()`.** `null` (por defecto) conserva el comportamiento de siempre -- el calendario llega hasta la ultima vela que devuelva hoy el proveedor. Con un `$asOf` explicito, tanto la primera pasada (construccion del calendario compartido) como la segunda (historico propio de cada ticker) se filtran a las velas EN O ANTES de esa fecha (`historyUpTo()`, nuevo metodo privado): repetir la misma llamada mas adelante, con el mismo `$asOf`, da EXACTAMENTE el mismo resultado sin importar cuanto historico nuevo se haya acumulado desde entonces. `bin/backtest.php --cross-sectional` gana la opcion `--as-of=YYYY-MM-DD` para poder congelar una medicion desde la linea de comandos sin escribir un script aparte.
+
+Nuevo test, `testUnAsOfExplicitoCongelaLasFechasFrenteASesionesNuevas()`: reproduce el hallazgo de Astra como caso de CONTROL (sin `$asOf`, una sesion nueva desplaza las fechas -- confirma que el fallo existe) y despues prueba que, con el mismo `$asOf` congelado a la fecha original, el resultado extendido es IDENTICO al original (fechas, alpha, `dates_evaluated`).
+
+**Recalculo de la evidencia visible** (`config/measured_edge.php`, el mismo ask explicito de Astra: "debe conservar fecha/version evaluada y distinguirse de una medicion del motor vigente"): la cifra publicada databa del `2026-09-02`, ANTES de las dos rondas de correccion del calendario compartido (`2026-09-09` y `2026-09-10`). Repetida la misma medicion exacta (636 tickers, universo point-in-time real del S&P 500, 10 años, `storage/scratch/run_point_in_time_backtest.php` original) con el motor ya corregido y, esta vez, con `--as-of=2026-09-13` explicito para que esta cifra concreta quede congelada de aqui en adelante:
+
+| | `2026-09-02` (motor sin corregir) | `2026-09-13` (motor corregido, `$asOf` congelado) |
+|---|---:|---:|
+| Fechas independientes | 112 | 113 |
+| Alpha | -0,62 pp | -0,46 pp |
+| Error estandar | 0,36 | 0,31 |
+| t pareado | -1,76 | -1,50 |
+
+Misma direccion (negativa), sigue sin cruzar `\|t\|>=1,96`: el motor corregido no revela ninguna ventaja oculta que el calendario mal anclado estuviera enmascarando, solo confirma el mismo veredicto nulo con una medicion mas fiable. Un ticker (`LEG`) fallo por un error transitorio de Yahoo ("Yahoo response is incomplete"), sin efecto sobre el resto -- mismo criterio de siempre, un fallo puntual no tumba el recorrido. Verificado en vivo: la home (`?page=home`, aviso completo con fecha) y la ficha de AAPL (aviso en linea) ya muestran "Medido el 2026-09-13" y la alpha -0,46 nueva.
+
+**Explicitamente aplazado, no es tarea de hoy: el manifiesto reproducible completo que pide Astra** (version de politica/codigo/pesos/costes/calendario + hashes de los datos de OHLC/universo/fundamentales usados, "paquete local acotado para el experimento"). Motivo: hoy no hay ningun consumidor concreto que lo necesite -- el `$asOf` explicito ya resuelve el problema de raiz que motivaba esta entrega (una medicion puntual, como `measured_edge.php`, ya se puede congelar y reproducir exactamente); un sistema de hashing de datasets enteros es infraestructura especulativa mientras no exista un flujo real (como el registro de decisiones prospectivas de la Entrega 4) que dependa de comparar dos ejecuciones byte a byte. Construirlo ahora, sin ese consumidor, iria contra el criterio ya establecido en este proyecto de no anticipar abstraccion antes de que haga falta (ver Bloque C de `roadmap.md`, las tres tablas sin construir todavia por el mismo motivo). Documentado en `roadmap.md`.
+
+Incluye:
+
+- `src/Services/BacktestingService.php`: nuevo parametro `?DateTimeImmutable $asOf` en `runCrossSectional()`, nuevo metodo privado `historyUpTo()`, docblock extenso explicando el porque.
+- `bin/backtest.php`: nueva opcion `--as-of=YYYY-MM-DD` (solo con `--cross-sectional`, valida el formato).
+- `config/measured_edge.php`: recalculado con el motor corregido y `$asOf` congelado; docblock actualizado con la tabla de antes/despues y la instruccion de reproducir con el MISMO `--as-of` si se repite esta medicion exacta.
+- `storage/scratch/refresh_measured_edge_2026-09-13.php` (nuevo, no committeado): script del recalculo, resultado completo en `refresh_measured_edge_2026-09-13_results.json` junto a el.
+- Tests: `BacktestingServiceCrossSectionalTest.php`, un test nuevo con dos helpers (`lastDateAcross()`, `appendFlatSession()`).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **697 tests, 1.931 assertions, OK** (sube desde 696/1.927: 1 test nuevo). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. Confirmado por HTTP real que la home y la ficha de AAPL muestran la cifra y la fecha nuevas. `config/weights.php` no se toca.
