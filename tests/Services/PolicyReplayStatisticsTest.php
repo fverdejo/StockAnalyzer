@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace StockAnalyzer\Tests\Services;
 
+use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
 use StockAnalyzer\Services\PolicyReplayStatistics;
 
@@ -12,9 +13,29 @@ use StockAnalyzer\Services\PolicyReplayStatistics;
  * `PLAN_VALIDACION_MOTOR_ASTRA_2026-09-10.md`): agrega los resultados de
  * `PolicyReplaySimulator::replay()` de muchos tickers en la medicion de
  * utilidad economica.
+ *
+ * El diseño de bloques temporales (`t_stat_blocked`) se corrigio el
+ * `2026-09-14` tras una segunda consulta a `auditor-estadistico`: el
+ * primer diseño (una cadena que se extiende mientras la siguiente entrada
+ * caiga antes de que salga la mas tardia del bloque anterior, MEZCLANDO
+ * tickers distintos) colapsaba casi todo en 1-2 bloques con universos
+ * grandes y holdings largos -- verificado con un piloto real de 60
+ * tickers (82 diferencias -> solo 3 bloques). El diseño actual particiona
+ * el CALENDARIO en ventanas de ancho fijo (mediana de duracion de las
+ * propias operaciones, en dias naturales), no una cadena por solape.
  */
 final class PolicyReplayStatisticsTest extends TestCase
 {
+    /**
+     * Fecha exacta a `$daysFromEpoch` dias de una fecha fija (2024-01-01):
+     * evita tener que contar meses a mano para construir fixtures del
+     * diseño de ventanas de calendario.
+     */
+    private function dateAt(int $daysFromEpoch): string
+    {
+        return (new DateTimeImmutable('2024-01-01'))->modify("+{$daysFromEpoch} days")->format('Y-m-d');
+    }
+
     /**
      * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_pending: bool, revisar_tesis_events: int}
      */
@@ -94,47 +115,85 @@ final class PolicyReplayStatisticsTest extends TestCase
     }
 
     /**
-     * Tres operaciones cuyas ventanas de tenencia se solapan en el tiempo
-     * (entrada de la siguiente antes de que termine la anterior) deben
-     * agruparse en UN SOLO bloque: el t-stat "blocked" pierde grados de
-     * libertad frente al "naive", que las trata como si fueran
-     * independientes.
+     * `W` (anchura de bloque) = mediana de la duracion de las propias
+     * operaciones. Con las tres operaciones de este test duran
+     * exactamente 30 dias cada una, `W=30`. Dos entradas (dia 0 y dia 10)
+     * caen en la MISMA ventana de calendario `[0,30)` y se promedian a un
+     * solo bloque; la tercera (dia 100) cae en la ventana `[90,120)`,
+     * bloque aparte.
      */
-    public function testOperacionesConVentanasSolapadasSeAgrupanEnUnSoloBloque(): void
+    public function testDosOperacionesEnLaMismaVentanaDeCalendarioSePromedianEnUnBloque(): void
     {
         $replays = [
             $this->replay('AAA', [
-                $this->trade('2024-01-01', '2024-03-01', 10.0, 0.0),
-                $this->trade('2024-02-01', '2024-04-01', 10.0, 0.0), // entra ANTES de que la anterior salga
-                $this->trade('2024-03-15', '2024-05-01', 10.0, 0.0), // entra ANTES de que la 2a salga
+                $this->trade($this->dateAt(0), $this->dateAt(30), 10.0, 0.0),
+                $this->trade($this->dateAt(10), $this->dateAt(40), 20.0, 0.0),
+            ]),
+            $this->replay('BBB', [
+                $this->trade($this->dateAt(100), $this->dateAt(130), -5.0, 0.0),
             ]),
         ];
 
         $summary = (new PolicyReplayStatistics())->summarize($replays);
 
         self::assertSame(3, $summary['cohorts_naive']);
-        self::assertSame(1, $summary['cohorts_blocked'], 'Las tres ventanas se solapan en cadena: un unico bloque.');
-        self::assertSame(10.0, $summary['avg_diff_blocked']);
-        self::assertNull($summary['t_stat_blocked'], 'Un solo bloque no tiene varianza que calcular (n=1).');
+        self::assertSame(30, $summary['block_width_days']);
+        self::assertSame(2, $summary['cohorts_blocked'], 'Las dos primeras comparten ventana de calendario; la tercera, muy posterior, cae en otra.');
+        self::assertSame(5.0, $summary['avg_diff_blocked'], 'Media de los bloques [15,0 (media de 10 y 20)] y [-5,0]: (15+(-5))/2.');
     }
 
     /**
-     * Una operacion que entra DESPUES de que la anterior ya haya salido
-     * empieza un bloque nuevo: no toda secuencia de operaciones colapsa en
-     * un unico bloque.
+     * Borde de la ventana: con `W=30` a partir del dia 0, una entrada
+     * exactamente en el dia 30 cae en la ventana SIGUIENTE (`[30,60)`),
+     * no en la primera (`[0,30)`) -- el intervalo es semiabierto por la
+     * derecha.
      */
-    public function testUnaEntradaPosteriorALaSalidaDeLaAnteriorEmpiezaBloqueNuevo(): void
+    public function testUnaEntradaExactamenteEnElLimiteDeLaVentanaEmpiezaLaSiguiente(): void
     {
         $replays = [
             $this->replay('AAA', [
-                $this->trade('2024-01-01', '2024-02-01', 4.0, 0.0),
-                $this->trade('2024-03-01', '2024-04-01', 6.0, 0.0), // entra DESPUES de que la anterior ya salio
+                $this->trade($this->dateAt(0), $this->dateAt(30), 4.0, 0.0),
+                $this->trade($this->dateAt(30), $this->dateAt(60), 6.0, 0.0),
             ]),
         ];
 
         $summary = (new PolicyReplayStatistics())->summarize($replays);
 
         self::assertSame(2, $summary['cohorts_blocked']);
+    }
+
+    /**
+     * Consenso de `auditor-estadistico` (`2026-09-14`): con menos de 10
+     * bloques, `t_stat_blocked` se calcula igual (diagnostico), pero el
+     * hallazgo se marca como NO CONCLUYENTE -- predeclarado antes de medir
+     * el universo completo, no decidido despues de ver el numero.
+     */
+    public function testElDisenoBloqueadoNoEsConcluyenteConMenosDeDiezBloques(): void
+    {
+        $trades = [];
+
+        for ($i = 0; $i < 9; $i++) {
+            $trades[] = $this->trade($this->dateAt($i * 10), $this->dateAt($i * 10 + 1), 1.0, 0.0);
+        }
+
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)]);
+
+        self::assertSame(9, $summary['cohorts_blocked']);
+        self::assertFalse($summary['blocked_design_conclusive']);
+    }
+
+    public function testElDisenoBloqueadoEsConcluyenteConDiezBloquesOMas(): void
+    {
+        $trades = [];
+
+        for ($i = 0; $i < 10; $i++) {
+            $trades[] = $this->trade($this->dateAt($i * 10), $this->dateAt($i * 10 + 1), 1.0, 0.0);
+        }
+
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)]);
+
+        self::assertSame(10, $summary['cohorts_blocked']);
+        self::assertTrue($summary['blocked_design_conclusive']);
     }
 
     public function testLasOperacionesPendientesQuedanExcluidasDeLaMetricaPrimaria(): void

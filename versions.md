@@ -7775,3 +7775,29 @@ Incluye:
 - Tests: `tests/Services/BacktestingServiceReplayTimelineTest.php` (nuevo, 5 tests), `tests/Services/PolicyReplaySimulatorTest.php` (nuevo, 12 tests, incluida la regresion del bug de vigilancia post-timeline), `tests/Services/PolicyReplayStatisticsTest.php` (nuevo, 7 tests).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **721 tests, 2.070 assertions, OK** (sube desde 697/1.931: 24 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca en ningun punto.
+
+---
+
+## 2026-09-14 - Entrega 3 (continuacion): el diseño de bloques temporales colapsaba con universos grandes -- corregido a ventanas de calendario de ancho fijo
+
+Estado: cerrado. El diseño de `t_stat_blocked` (`Services\PolicyReplayStatistics`) queda fijado ANTES de la medicion real de 636 tickers, que sigue sin ejecutarse.
+
+El piloto del `2026-09-13` (60 tickers, 2 años) ya habia dejado una senal de alarma sin resolver: el diseño de bloques implementado entonces (una cadena que se extiende mientras la siguiente entrada caiga antes de que salga la mas tardia del bloque anterior, MEZCLANDO todos los tickers en una unica cadena) colapso 82 diferencias emparejadas en solo 3 bloques -- documentado como punto abierto en `roadmap.md`, sin fijar el diseño final.
+
+Segunda consulta a `auditor-estadistico`, con los numeros reales del piloto sobre la mesa. Dos hallazgos que resuelven la pregunta:
+
+1. **Agrupar POR TICKER no serviria de nada.** Verificado leyendo el propio codigo de `PolicyReplaySimulator::replay()`: la variable `$inPosition` garantiza una sola posicion activa por ticker, asi que dos operaciones del MISMO ticker NUNCA se solapan en el tiempo -- es estructuralmente imposible. La dependencia real que preocupaba (una entrada de marzo y otra de junio compartiendo regimen de mercado) es siempre ENTRE tickers distintos, nunca dentro de uno.
+2. **La cadena GLOBAL (todos los tickers juntos) es transitiva y por eso degenera.** Con cientos de tickers y holdings de meses, casi siempre hay ALGUNA posicion abierta en algun ticker en un momento dado, asi que la cadena practicamente nunca se rompe -- no es "bloques de duracion >= mediana de holding", es el caso degenerado de un unico bloque, y a escala completa (636 tickers, 10 años) habria sido PEOR, no mejor, que los 3 bloques del piloto reducido.
+
+**Diseño final, definido por el propio `auditor-estadistico`, implementado tal cual**: particionar el EJE TEMPORAL (no las operaciones) en ventanas de calendario de ANCHO FIJO `W` = mediana de la duracion de las propias operaciones emparejadas, en DIAS NATURALES (no sesiones bursatiles) -- empezando en la fecha de entrada mas antigua. Cada operacion se asigna a la ventana que contiene SU fecha de entrada (intervalo semiabierto `[T0+k·W, T0+(k+1)·W)`, verificado con un test del borde exacto). El numero de bloques resultante depende del rango temporal total y de `W`, no de cuantas operaciones se solapen entre si.
+
+**Umbral minimo de bloques, predeclarado el mismo dia**: con menos de `MIN_CONCLUSIVE_BLOCKS=10` bloques, `t_stat_blocked` se sigue calculando (diagnostico), pero el resultado se marca `blocked_design_conclusive=false` -- no autoriza una promocion a "ventaja validada" frente al umbral `|t|>=1,96` predeclarado en `roadmap.md`, con independencia del valor numerico que salga. Fijado ANTES de correr la medicion real, no despues de ver cuantos bloques da.
+
+**Piloto repetido con el diseño corregido** (mismos 60 tickers, misma semilla, mismo historico de 2 años -- solo cambia el algoritmo de bloqueo): `cohorts_blocked` pasa de 3 a **25** (`block_width_days=19`), con `t_stat_blocked=-4,25` -- mucho mas cercano al `t_stat_naive=-4,82` que antes (-3,25), y ahora `blocked_design_conclusive=true`. Sigue siendo solo el PILOTO (2 años/60 tickers), no la medicion predeclarada (10 años/636 tickers) -- el signo negativo no se interpreta como resultado de la investigacion, solo confirma que el nuevo diseño produce un numero de bloques razonable en vez de degenerar.
+
+Incluye:
+
+- `src/Services/PolicyReplayStatistics.php`: `clusterIntoNonOverlappingBlocks()` (cadena, retirado) sustituido por `calendarBlockWidth()` + `clusterIntoCalendarWindows()` + `median()`; nuevos campos en el resultado `block_width_days`/`blocked_design_conclusive`; docblock de la clase reescrito con el razonamiento completo de las dos consultas.
+- Tests: `tests/Services/PolicyReplayStatisticsTest.php`, los dos tests especificos de la cadena reescritos para el diseño de ventanas (incluido el borde exacto del intervalo), mas dos tests nuevos del umbral minimo de bloques (9 vs 10).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **723 tests, 2.074 assertions, OK** (sube desde 721/2.070: 2 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
