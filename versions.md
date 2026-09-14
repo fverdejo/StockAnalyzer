@@ -7801,3 +7801,34 @@ Incluye:
 - Tests: `tests/Services/PolicyReplayStatisticsTest.php`, los dos tests especificos de la cadena reescritos para el diseño de ventanas (incluido el borde exacto del intervalo), mas dos tests nuevos del umbral minimo de bloques (9 vs 10).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **723 tests, 2.074 assertions, OK** (sube desde 721/2.070: 2 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-14 (segunda entrada) - Entrega 3 cerrada: la medicion economica real (636 tickers, 10 años), predeclarada, no supera el umbral -- resultado negativo y significativo
+
+Estado: medicion ejecutada tal cual quedo predeclarada en `roadmap.md` (pregunta, politica, comparador, umbral minimo +0,50pp Y \|t_blocked\|>=1,96, sensibilidad de costes 10/20pb), sin tocar ningun parametro despues de ver el resultado. **Veredicto: NO supera el umbral -- la diferencia es negativa, no positiva, y muy significativa.**
+
+`storage/scratch/policy_replay_full_2026-09-14.php` (no committeado, resultado completo en `policy_replay_full_2026-09-14_results.json` junto a el): 636 tickers point-in-time, `$asOf=2026-09-14`, `$step=5`, historico de 10 años. 1 error transitorio de proveedor (`LEG`, "Yahoo response is incomplete", mismo ticker que ya fallo en el recalculo de `measured_edge.php` del `2026-09-13` -- no es un bug del motor).
+
+**Resultado (coste base, 10 pb por lado):**
+
+| | Valor |
+|---|---:|
+| Operaciones aceptadas | 3.788 |
+| Cerradas por stop-loss | 3.287 (86,8%) |
+| Pendientes al corte | 501 (13,2%), valor medio a mercado **+238,12%** |
+| Diferencia media (naive, 3.282 operaciones) | -6,14 pp, t=-38,35 |
+| Diferencia media (**blocked**, 89 bloques, ancho 39 dias) | **-5,49 pp, t=-9,61** |
+| `blocked_design_conclusive` | true (89 >= 10 bloques) |
+
+**Escenario de estres (20 pb por lado)**: -5,48 pp, t=-9,61 -- practicamente identico al coste base. La sensibilidad de costes no cambia nada: el efecto es demasiado grande para ser un artefacto de comision.
+
+**El umbral predeclarado exigia diferencia >= +0,50pp Y \|t_blocked\|>=1,96, los dos a la vez.** El signo ya descarta la primera condicion por si solo: la politica gestionada (solo vende por stop-loss cruzado, sin objetivo ni horizonte) rinde **peor**, no mejor, que mantener la misma entrada 20 sesiones fijas -- con una significancia muy alta incluso en el diseño bloqueado, mas conservador (t=-9,61 sobre 89 bloques independientes, muy por encima de cualquier umbral de Bonferroni razonable).
+
+**Interpretacion honesta, no solo el numero** (advertencia predicha explicitamente por `gestor-riesgo` en la consulta de diseño del `2026-09-13`: "esta metrica no es una comparacion de rotacion de capital... es retorno condicional al cierre"): la comparacion primaria excluye, por diseño correcto, las operaciones PENDIENTES -- y esas pendientes son precisamente las que mas ganancia latente acumulan (+238% de media). Como la politica no tiene objetivo de precio ni salida por horizonte, una posicion ganadora NUNCA se cierra por si sola: solo se "cierran" (y por tanto solo entran en la comparacion primaria) las operaciones que el precio hizo caer lo bastante como para tocar el stop. El conjunto de operaciones CERRADAS esta, por construccion, sesgado hacia las perdedoras -- no es que la politica pierda dinero en conjunto, es que la unica parte de la politica que este diseño mide (como gestiona las que van mal) gestiona las que van mal PEOR que un plazo fijo de 20 sesiones, mientras dejaba sin contar (correctamente, no atribuible como ganancia todavia) el otro lado -- posiciones que llevan la ganancia mucho mas lejos que 20 sesiones al no tener techo. Ninguna de las dos mitades, por separado, responde "¿el usuario deberia seguir esto?" -- eso exigiria una comparacion de retorno TOTAL (cerradas + pendientes marcadas a mercado a la MISMA fecha de corte para ambos brazos), que no es la pregunta predeclarada y no se improvisa ahora sobre el mismo dato.
+
+**No se promociona ninguna "ventaja validada"** (no hay ninguna que promocionar: el signo es el contrario) **y tampoco se reinterpreta el resultado como si demostrara que la politica es mala en conjunto** -- solo se puede afirmar, con la evidencia predeclarada, que el brazo de SALIDA de la politica actual (solo stop-loss, sin trailing, sin objetivo) gestiona peor las operaciones que acaban mal que un plazo fijo corto. Registrado como hallazgo real, no como fallo del experimento: la propia auditoria de Astra que origino esta entrega (`gestor-riesgo`, `2026-09-13`) ya habia señalado el stop sin trailing como una politica de riesgo agresiva que "no protege ganancia acumulada" -- este resultado es la primera medicion cuantitativa de esa observacion cualitativa.
+
+**Pendiente, siguiente pregunta de investigacion, NO parte de esta medicion predeclarada**: una comparacion de retorno TOTAL a una fecha de corte comun (cerradas con su desenlace real + pendientes marcadas a mercado ese mismo dia en ambos brazos), que si podria responder si el conjunto de la politica (incluyendo las ganadoras que nunca se cierran) aporta o no utilidad frente al plazo fijo. Requiere su propia predeclaracion antes de mirar el numero (mismo protocolo de la Entrega 4), no se hace aqui para no reabrir el mismo dato con una metrica elegida a posteriori.
+
+Verificado: la medicion se ejecuto sobre el codigo ya comprobado (723 tests, PHPStan limpio, commit `5e8c713`); no se ha tocado ningun fichero de produccion en esta entrada, solo se documenta el resultado del script de investigacion.
