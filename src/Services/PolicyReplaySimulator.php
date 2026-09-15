@@ -57,6 +57,15 @@ use StockAnalyzer\Models\HistoricalQuote;
  * ignora ese parametro por completo (ver su codigo), asi que aqui se le
  * pasa un valor fijo ('HOLD') mientras se esta dentro -- no afecta a
  * ninguna rama real.
+ *
+ * **Dos hallazgos reales de Astra corregidos el `2026-09-14`**
+ * (`REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`), ver el comentario en
+ * `replay()` y el docblock de `BacktestingService::replayTimeline()`
+ * respectivamente para el detalle completo: (1) una candidata BUY en el
+ * MISMO punto del timeline que resolvia el stop de la posicion anterior se
+ * perdia en silencio; (2) el recorrido no aplicaba ningun filtro de
+ * pertenencia point-in-time al universo declarado, asi que una empresa
+ * podia "comprarse" antes de incorporarse de verdad al indice.
  */
 final class PolicyReplaySimulator
 {
@@ -75,9 +84,9 @@ final class PolicyReplaySimulator
     }
 
     /**
-     * @param list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?\StockAnalyzer\DTO\FundamentalChangeAssessment, entry_price: ?float}> $timeline ver BacktestingService::replayTimeline()
+     * @param list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?\StockAnalyzer\DTO\FundamentalChangeAssessment, entry_price: ?float, eligible: bool}> $timeline ver BacktestingService::replayTimeline()
      * @param list<HistoricalQuote> $history ver BacktestingService::historyFor(), MISMO $asOf que generó $timeline
-     * @return array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int}
+     * @return array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}
      */
     public function replay(string $ticker, array $timeline, array $history): array
     {
@@ -91,6 +100,12 @@ final class PolicyReplaySimulator
         $entryPrice = null;
         $adoptedStop = null;
         $revisarTesisEvents = 0;
+        // Hallazgo real de Astra (`2026-09-14`, caso 2): una candidata BUY
+        // fuera del indice declarado en `replayTimeline(eligible: false)`
+        // no se compra, pero se cuenta por separado -- "registrar
+        // candidatas excluidas", no descartarlas en silencio junto con las
+        // que simplemente no eran BUY ese dia.
+        $excludedByMembership = 0;
 
         foreach ($timeline as $point) {
             if ($inPosition) {
@@ -115,25 +130,48 @@ final class PolicyReplaySimulator
                     $adoptedStop = null;
                     $lastCheckedIndex = $day;
 
+                    // Correccion del 2026-09-14 (hallazgo real de Astra,
+                    // `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`, caso 1):
+                    // la version anterior hacia `continue` aqui, lo que
+                    // descartaba la propia candidata de ESTE $point si
+                    // TAMBIEN era BUY -- "el asesor real, ante BUY sin
+                    // posicion, devuelve CANDIDATA", pero el flujo nunca
+                    // llegaba a preguntarlo porque ya habia pasado al
+                    // siguiente punto del timeline. Reproducido por Astra:
+                    // anadir una observacion HOLD de por medio (que
+                    // simplemente reparte la rotura y esta misma candidata
+                    // en DOS iteraciones del bucle en vez de una) cambiaba
+                    // el resultado sin que nada real hubiera cambiado. Sin
+                    // `continue`, cae directamente a la comprobacion de
+                    // candidata de mas abajo, con el estado YA actualizado
+                    // a "sin posicion" -- evaluar la señal de este mismo
+                    // punto DESPUES de resolver su propio stop es lo mismo
+                    // que aceptar una candidata en cualquier otro punto
+                    // donde ya se estaba fuera.
+                } else {
+                    $lastCheckedIndex = $point['index'];
+                    $decision = $this->advisor->decide(
+                        'HOLD',
+                        $this->placeholderHolding($ticker),
+                        StopLossCheckState::DENTRO,
+                        $point['fundamental_change']
+                    );
+
+                    if ($decision->action === PositionDecisionAction::REVISAR_TESIS) {
+                        $revisarTesisEvents++;
+                    }
+
                     continue;
                 }
-
-                $lastCheckedIndex = $point['index'];
-                $decision = $this->advisor->decide(
-                    'HOLD',
-                    $this->placeholderHolding($ticker),
-                    StopLossCheckState::DENTRO,
-                    $point['fundamental_change']
-                );
-
-                if ($decision->action === PositionDecisionAction::REVISAR_TESIS) {
-                    $revisarTesisEvents++;
-                }
-
-                continue;
             }
 
             if ($point['recommendation'] !== 'BUY' || $point['stop_loss'] === null || $point['entry_price'] === null) {
+                continue;
+            }
+
+            if (!$point['eligible']) {
+                $excludedByMembership++;
+
                 continue;
             }
 
@@ -200,6 +238,7 @@ final class PolicyReplaySimulator
             'entries_total' => count($trades),
             'entries_closed' => count(array_filter($trades, static fn (array $trade): bool => !$trade['pending'])),
             'entries_pending' => count(array_filter($trades, static fn (array $trade): bool => $trade['pending'])),
+            'candidates_excluded_by_membership' => $excludedByMembership,
         ];
     }
 

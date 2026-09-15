@@ -2331,14 +2331,37 @@ class BacktestingService
      * hasta la apertura de mañana), o `null` si `$index` ya es la ultima
      * vela disponible.
      *
-     * @return list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float}>
+     * `eligible` (hallazgo real de Astra, `2026-09-14`,
+     * `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`, caso 2): a diferencia de
+     * `runCrossSectional()`, la primera version de este metodo no tenia
+     * NINGUN filtro de pertenencia point-in-time -- una lista de 636
+     * tickers (la union de miembros historicos de un indice, pensada para
+     * `runCrossSectional()` donde el filtro SI se aplica por muestra) se
+     * trataba aqui como si todos hubieran sido investables en TODAS las
+     * fechas, incluso antes de que una empresa se incorporara al indice.
+     * Reproducido por Astra con un historico sintetico: una empresa que
+     * entra al indice el 01/01/2025 generaba una compra el 22/03/2024,
+     * casi un año antes de existir en el universo declarado. `$indexCode`
+     * (opcional, mismo patron que `runCrossSectional()`: sin efecto si el
+     * servicio no tiene `IndexMembershipCheckerInterface` conectado)
+     * calcula `eligible` para la fecha de CADA punto; `Services\PolicyReplaySimulator`
+     * es quien decide que hacer con ello -- solo usa `eligible` como
+     * condicion de ENTRADA (no compra una candidata fuera de indice), pero
+     * sigue vigilando y gestionando una posicion YA ABIERTA
+     * independientemente de si la empresa abandona el indice despues:
+     * salir de un indice no es una regla de venta de
+     * `PositionDecisionAdvisor`, inventarla aqui seria una politica nueva
+     * sin declarar.
+     *
+     * @return list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float, eligible: bool}>
      */
-    public function replayTimeline(string $ticker, int $step = 5, ?DateTimeImmutable $asOf = null): array
+    public function replayTimeline(string $ticker, int $step = 5, ?DateTimeImmutable $asOf = null, ?string $indexCode = null): array
     {
         $minimumLookback = 80;
         $stock = $this->enrichWithDividendGrowth($this->marketDataProvider->getStock($ticker), $ticker);
         $history = $this->historyUpTo($this->marketDataProvider->getHistoricalQuotes($ticker), $asOf);
         $timeline = [];
+        $membershipActive = $indexCode !== null && $this->indexMembership instanceof IndexMembershipCheckerInterface;
 
         for ($index = $minimumLookback; $index < count($history); $index += $step) {
             $current = $history[$index];
@@ -2375,6 +2398,7 @@ class BacktestingService
                 'stop_loss' => $stopLoss,
                 'fundamental_change' => $fundamentalChange,
                 'entry_price' => $index + 1 < count($history) ? $history[$index + 1]->getOpen() : null,
+                'eligible' => !$membershipActive || $this->indexMembership->isMemberAt($ticker, (string) $indexCode, $current->getDate()),
             ];
         }
 

@@ -7832,3 +7832,42 @@ Estado: medicion ejecutada tal cual quedo predeclarada en `roadmap.md` (pregunta
 **Pendiente, siguiente pregunta de investigacion, NO parte de esta medicion predeclarada**: una comparacion de retorno TOTAL a una fecha de corte comun (cerradas con su desenlace real + pendientes marcadas a mercado ese mismo dia en ambos brazos), que si podria responder si el conjunto de la politica (incluyendo las ganadoras que nunca se cierran) aporta o no utilidad frente al plazo fijo. Requiere su propia predeclaracion antes de mirar el numero (mismo protocolo de la Entrega 4), no se hace aqui para no reabrir el mismo dato con una metrica elegida a posteriori.
 
 Verificado: la medicion se ejecuto sobre el codigo ya comprobado (723 tests, PHPStan limpio, commit `5e8c713`); no se ha tocado ningun fichero de produccion en esta entrada, solo se documenta el resultado del script de investigacion.
+
+---
+
+## 2026-09-15 - `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`: dos fallos reales en el propio replay (casos 1 y 2), corregidos -- la medicion del `2026-09-14` queda invalidada, hay que repetirla
+
+Estado: casos 1 y 2 (prioridad inmediata) corregidos y probados. Casos 3 (contrato del stop) y 4 (independencia de los bloques) requieren decision de metodologia, en consulta con los agentes especialistas antes de tocar codigo. Caso 5 (archivar el detalle completo) y caso 6 (protocolo de valoracion comun) se abordan despues de cerrar 3 y 4. **La medicion de 636 tickers del `2026-09-14` (avg_diff_blocked=-5,49pp) queda invalidada por los casos 1 y 2 -- no se puede seguir citando como el resultado predeclarado hasta repetirla con el motor corregido.**
+
+Astra continua auditando el trabajo de la Entrega 3 (revision sobre el commit `184bbbc`) y encuentra dos bugs reales en `PolicyReplaySimulator`/`BacktestingService::replayTimeline()` que mis propios 26 tests de entonces no cubrian.
+
+### Caso 1 -- una candidata en el mismo punto que resolvia un stop anterior se perdia en silencio
+
+`PolicyReplaySimulator::replay()` hacia `continue` justo despues de cerrar una posicion por stop-loss DENTRO del rango cubierto por un punto del timeline -- lo que saltaba directamente al SIGUIENTE punto sin comprobar si ESE MISMO punto (el que acababa de revelar la rotura) tambien llevaba su propia candidata BUY. El asesor real, ante BUY sin posicion, siempre devuelve CANDIDATA sin importar si el "sin posicion" se acaba de producir en esa misma iteracion o ya venia de antes.
+
+Reproduccion de Astra: BUY en el indice 10 (entra en 11), stop cruzado en el indice 12, nueva candidata BUY justo en el indice 15 (el mismo punto que revela la rotura) -- **una sola operacion, la candidata del indice 15 se perdia**. Anadiendo SOLO una observacion HOLD de por medio (indice 13), que reparte la rotura y la candidata en DOS iteraciones del bucle en vez de una -- **dos operaciones, la segunda entra en el 16**. El resultado dependia de un detalle incidental del recorrido (cuantos puntos hay de por medio), no de nada real.
+
+**Correccion**: se procesa primero la rotura de stop (si la hay) y despues se evalua la señal de ESE MISMO punto contra el estado ya actualizado -- sin `continue` intermedio. Verificado que ambas secuencias de Astra dan ahora el mismo resultado (dos operaciones, la segunda entra en el 16).
+
+### Caso 2 -- el replay no aplicaba ningun filtro de pertenencia point-in-time al universo
+
+`BacktestingService::replayTimeline()` no tenia parametro de indice ni consultaba `indexMembership`, a diferencia de `runCrossSectional()` (que SI aplica el filtro por muestra). El script de la medicion completa cargaba los 636 tickers (la union de miembros historicos) e inyectaba fundamentales point-in-time, pero NO el repositorio de pertenencia al indice -- asi que la etiqueta "universo point-in-time" no estaba respaldada por lo que el replay hacia de verdad: una empresa podia generar candidatas y compras en fechas ANTERIORES a su incorporacion real al indice.
+
+Reproduccion de Astra: historico sintetico de 2024, empresa que entra al indice el 01/01/2025, checker de pertenencia inyectado -- **cero consultas al checker, 24 candidatas fuera de pertenencia, una compra el 22/03/2024**, casi un año antes de que la empresa existiera en el universo declarado.
+
+**Correccion**: nuevo parametro `?string $indexCode` en `replayTimeline()` (mismo patron que `runCrossSectional()`), que calcula un campo `eligible` por punto usando `IndexMembershipCheckerInterface` cuando esta conectado. `PolicyReplaySimulator` usa `eligible` como condicion de ENTRADA unicamente -- una candidata fuera de indice no se compra (y se cuenta aparte, `candidates_excluded_by_membership`, "registrar candidatas excluidas" per el encargo de Astra), pero una posicion YA ABIERTA se sigue vigilando y gestionando con normalidad aunque la empresa abandone el indice mas tarde: salir de un indice no es una regla de venta de `PositionDecisionAdvisor`, y no se inventa una aqui sin declararla. Sin `$indexCode` (o sin checker conectado) el comportamiento es el de siempre -- todos los puntos elegibles, ningun consumidor existente cambia.
+
+**Consecuencia directa**: la medicion de 636 tickers documentada ayer (`avg_diff_blocked=-5,49pp`, `t=-9,61`) se ejecuto con AMBOS bugs presentes -- ni el orden correcto de reentrada ni el filtro de pertenencia estaban aplicados. El numero en si no se reinterpreta (no hay forma de saber sin repetirla cuanto cambia), pero deja de poder citarse como "la medicion predeclarada" hasta rehacerla con el motor corregido -- y unicamente despues de resolver tambien los casos 3 y 4, para no repetir el mismo computo caro dos veces.
+
+**Casos pendientes, requieren consulta de metodologia antes de tocar codigo**:
+
+- **Caso 3 (contrato del stop)**: el replay fija el stop en la fecha de la SEÑAL; `AlertService::checkStopLossBreach()` en produccion lo adopta en la PRIMERA CONSULTA con una posicion sin ese estado (que puede ser mucho mas tarde si el usuario no abre la app justo al comprar). Astra demuestra con un fixture que esto puede cambiar la decision entera (SALIR vs MANTENER) segun cuando se simula que el usuario "mira". Es una decision de que se esta midiendo (una orden stop permanentemente activa vs decisiones tomadas solo al observar el precio), no un bug de codigo -- se consulta a `analista-mercado`/`gestor-riesgo` antes de decidir.
+- **Caso 4 (independencia de los bloques)**: el diseño de ventanas de calendario corregido ayer (`2026-09-14`, segunda entrada) sigue sin garantizar independencia real -- Astra construye un contraejemplo (12 operaciones que salen la sesion siguiente, con comparadores de 20 sesiones expuestos a la MISMA sesion futura) que da 12 bloques "independientes" y `t=-110,97`, una cifra absurda. Tambien señala que el diseño actual pondera por VENTANA, no por operacion, lo que cambia la magnitud estimada, no solo su incertidumbre. Se consulta a `auditor-estadistico` (tercera ronda) antes de tocar `PolicyReplayStatistics`.
+
+Incluye:
+
+- `src/Services/PolicyReplaySimulator.php`: `replay()` reestructurado (caso 1); nuevo contador `candidates_excluded_by_membership` (caso 2); docblock de la clase actualizado.
+- `src/Services/BacktestingService.php`: `replayTimeline()` gana `?string $indexCode`, nuevo campo `eligible` por punto (caso 2).
+- Tests: `PolicyReplaySimulatorTest.php` (+4: reentrada en el mismo punto, control con observacion intermedia, candidata excluida por pertenencia, posicion abierta sigue vigilada tras dejar de ser elegible), `BacktestingServiceReplayTimelineTest.php` (+2: sin `$indexCode` todo elegible, con checker conectado `eligible` refleja la pertenencia real).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **729 tests, 2.111 assertions, OK** (sube desde 723/2.074: 6 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.

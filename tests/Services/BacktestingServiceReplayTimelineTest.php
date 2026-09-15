@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use StockAnalyzer\Analyzer\ScoreCalculator;
 use StockAnalyzer\Analyzer\TechnicalAnalyzer;
 use StockAnalyzer\Config\RiskLevelsConfig;
+use StockAnalyzer\Interfaces\IndexMembershipCheckerInterface;
 use StockAnalyzer\Models\HistoricalQuote;
 use StockAnalyzer\Services\BacktestingService;
 use StockAnalyzer\Services\RiskLevelsCalculator;
@@ -27,13 +28,14 @@ use StockAnalyzer\Services\RiskLevelsCalculator;
  */
 final class BacktestingServiceReplayTimelineTest extends TestCase
 {
-    private function service(): BacktestingService
+    private function service(?IndexMembershipCheckerInterface $indexMembership = null): BacktestingService
     {
         return new BacktestingService(
-            new PerTickerHistoryProvider(SyntheticStock::create(), ['AAA' => $this->risingHistory()]),
-            new TechnicalAnalyzer(),
-            new ScoreCalculator(),
-            new RiskLevelsCalculator(new RiskLevelsConfig(2.5, 2.0))
+            marketDataProvider: new PerTickerHistoryProvider(SyntheticStock::create(), ['AAA' => $this->risingHistory()]),
+            technicalAnalyzer: new TechnicalAnalyzer(),
+            scoreCalculator: new ScoreCalculator(),
+            riskLevelsCalculator: new RiskLevelsCalculator(new RiskLevelsConfig(2.5, 2.0)),
+            indexMembership: $indexMembership
         );
     }
 
@@ -142,5 +144,45 @@ final class BacktestingServiceReplayTimelineTest extends TestCase
         $timeline = $this->service()->replayTimeline('AAA', step: 10, asOf: $cutoff);
 
         self::assertLessThanOrEqual(150, end($timeline)['index']);
+    }
+
+    /**
+     * Sin `$indexCode` (o sin `IndexMembershipCheckerInterface` conectado),
+     * el comportamiento es el de siempre: todos los puntos son elegibles,
+     * ningun test/llamada existente cambia -- mismo patron que
+     * `$membershipActive` en `runCrossSectional()`.
+     */
+    public function testSinIndexCodeTodosLosPuntosSonElegibles(): void
+    {
+        $timeline = $this->service()->replayTimeline('AAA', step: 10);
+
+        foreach ($timeline as $point) {
+            self::assertTrue($point['eligible']);
+        }
+    }
+
+    /**
+     * Hallazgo real de Astra (`REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`,
+     * caso 2): con `$indexCode` y un `IndexMembershipCheckerInterface`
+     * conectado, `eligible` refleja la pertenencia point-in-time real --
+     * `false` antes de que la empresa se incorporara al indice, `true`
+     * despues. Reproduccion analoga a la de Astra: la empresa entra al
+     * indice el 2024-06-01, a mitad del historico del fixture.
+     */
+    public function testConIndexCodeYCheckerConectadoEligibleReflejaLaPertenenciaPointInTime(): void
+    {
+        $checker = new ArrayIndexMembershipChecker([
+            ['ticker' => 'AAA', 'indexCode' => 'GSPC', 'startDate' => '2024-06-01', 'endDate' => null],
+        ]);
+
+        $timeline = $this->service($checker)->replayTimeline('AAA', step: 10, indexCode: 'GSPC');
+
+        self::assertNotEmpty(array_filter($timeline, static fn (array $point): bool => !$point['eligible']));
+        self::assertNotEmpty(array_filter($timeline, static fn (array $point): bool => $point['eligible']));
+
+        foreach ($timeline as $point) {
+            $expectedEligible = $point['date'] >= '2024-06-01';
+            self::assertSame($expectedEligible, $point['eligible'], "fecha {$point['date']}");
+        }
     }
 }

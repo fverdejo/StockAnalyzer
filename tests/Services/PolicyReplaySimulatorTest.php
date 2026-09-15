@@ -48,14 +48,15 @@ final class PolicyReplaySimulatorTest extends TestCase
     }
 
     /**
-     * @return array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float}
+     * @return array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float, eligible: bool}
      */
     private function point(
         array $history,
         int $index,
         string $recommendation,
         ?float $stopLoss = null,
-        ?FundamentalChangeAssessment $fundamentalChange = null
+        ?FundamentalChangeAssessment $fundamentalChange = null,
+        bool $eligible = true
     ): array {
         return [
             'date' => $history[$index]->getDate()->format('Y-m-d'),
@@ -64,6 +65,7 @@ final class PolicyReplaySimulatorTest extends TestCase
             'stop_loss' => $stopLoss,
             'fundamental_change' => $fundamentalChange,
             'entry_price' => $index + 1 < count($history) ? $history[$index + 1]->getOpen() : null,
+            'eligible' => $eligible,
         ];
     }
 
@@ -231,6 +233,63 @@ final class PolicyReplaySimulatorTest extends TestCase
     }
 
     /**
+     * Hallazgo real de Astra (`REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`,
+     * caso 1, prioridad inmediata): la version anterior, tras cerrar una
+     * posicion por stop DENTRO del rango cubierto por un punto del
+     * timeline, hacia `continue` sin comprobar si ESE MISMO punto tambien
+     * llevaba una candidata BUY propia -- el asesor real, ante BUY sin
+     * posicion, siempre devuelve CANDIDATA, sin importar si el "sin
+     * posicion" se acaba de producir en esta misma iteracion o ya venia de
+     * antes. Reproduccion de Astra: BUY en el indice 10 (entra en 11),
+     * stop cruzado en el indice 12, y una NUEVA candidata BUY justo en el
+     * indice 15 (el mismo punto del timeline que revela la rotura) -- debe
+     * aceptarse y entrar en el 16, no perderse.
+     */
+    public function testUnaCandidataEnElMismoPuntoQueResuelveUnStopAnteriorSeAcepta(): void
+    {
+        $history = $this->flatHistory([
+            12 => new HistoricalQuote(new DateTimeImmutable('2024-01-13'), 100.0, 100.5, 85.0, 95.0, 1_000_000),
+        ]);
+        $timeline = [
+            $this->point($history, 10, 'BUY', 90.0),
+            $this->point($history, 15, 'BUY', 95.0),
+        ];
+
+        $result = $this->simulator()->replay('ACME', $timeline, $history);
+
+        self::assertSame(2, $result['entries_total'], 'La candidata del propio indice 15 no debe perderse.');
+        self::assertSame(11, $result['trades'][0]['entry_index']);
+        self::assertSame(12, $result['trades'][0]['exit_index']);
+        self::assertSame('stop_loss', $result['trades'][0]['exit_reason']);
+        self::assertSame(16, $result['trades'][1]['entry_index'], 'La candidata del mismo punto que resuelve el stop anterior entra en la sesion siguiente (P0.1).');
+    }
+
+    /**
+     * Control de Astra: añadir una observacion HOLD de por medio (que
+     * reparte la rotura de stop y la candidata siguiente en DOS
+     * iteraciones del bucle en vez de una) demostraba que el bug del test
+     * anterior dependia de un detalle incidental del recorrido -- con la
+     * correccion, el resultado es el MISMO con o sin esa observacion
+     * intermedia.
+     */
+    public function testAnadirUnaObservacionIntermediaNoCambiaElResultado(): void
+    {
+        $history = $this->flatHistory([
+            12 => new HistoricalQuote(new DateTimeImmutable('2024-01-13'), 100.0, 100.5, 85.0, 95.0, 1_000_000),
+        ]);
+        $timeline = [
+            $this->point($history, 10, 'BUY', 90.0),
+            $this->point($history, 13, 'HOLD'),
+            $this->point($history, 15, 'BUY', 95.0),
+        ];
+
+        $result = $this->simulator()->replay('ACME', $timeline, $history);
+
+        self::assertSame(2, $result['entries_total']);
+        self::assertSame(16, $result['trades'][1]['entry_index']);
+    }
+
+    /**
      * Si el historico se acaba sin que el stop se cruce nunca, la
      * operacion se marca "pendiente" (sin desenlace atribuido), valorada
      * al ultimo cierre disponible -- no como ganancia ni como perdida de
@@ -302,5 +361,46 @@ final class PolicyReplaySimulatorTest extends TestCase
         $result = $this->simulator()->replay('ACME', $timeline, $history);
 
         self::assertSame(0, $result['entries_total']);
+    }
+
+    /**
+     * Hallazgo real de Astra (`REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`,
+     * caso 2, prioridad inmediata): una candidata BUY con `eligible: false`
+     * (fuera del indice declarado en esa fecha, ver
+     * `BacktestingService::replayTimeline()`) no se compra -- pero se
+     * cuenta por separado, no se pierde en silencio junto con los dias que
+     * simplemente no eran BUY.
+     */
+    public function testUnaCandidataFueraDelIndiceNoSeCompraYSeCuentaAparte(): void
+    {
+        $history = $this->flatHistory();
+        $timeline = [$this->point($history, 10, 'BUY', 90.0, eligible: false)];
+
+        $result = $this->simulator()->replay('ACME', $timeline, $history);
+
+        self::assertSame(0, $result['entries_total']);
+        self::assertSame(1, $result['candidates_excluded_by_membership']);
+    }
+
+    /**
+     * La pertenencia al indice solo es una condicion de ENTRADA: una
+     * posicion YA ABIERTA sigue vigilada y gestionada aunque la empresa
+     * abandone el indice mas tarde -- abandonar un indice no es una regla
+     * de venta de `PositionDecisionAdvisor`, y este replay no inventa una.
+     */
+    public function testUnaPosicionYaAbiertaSigueVigiladaAunqueDejeDeSerElegibleMasTarde(): void
+    {
+        $history = $this->flatHistory([
+            50 => new HistoricalQuote(new DateTimeImmutable('2024-02-20'), 100.0, 100.5, 85.0, 95.0, 1_000_000),
+        ]);
+        $timeline = [
+            $this->point($history, 10, 'BUY', 90.0, eligible: true),
+            $this->point($history, 20, 'HOLD', eligible: false),
+        ];
+
+        $result = $this->simulator()->replay('ACME', $timeline, $history);
+
+        self::assertSame(1, $result['entries_total']);
+        self::assertSame(50, $result['trades'][0]['exit_index'], 'Se sigue vigilando el stop pese a que el punto del indice 20 llega con eligible=false.');
     }
 }
