@@ -7908,3 +7908,34 @@ Incluye:
 - Tests: `PolicyReplayStatisticsTest.php` reescrito casi por completo (13 tests: punto estimado por operacion con el fixture literal de Astra, reproducibilidad con semilla fija, umbral de tamaño efectivo, regresion de la salvaguarda de resolucion temporal encontrada con el piloto).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **733 tests, 2.122 assertions, OK** (sube desde 729/2.111: 4 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca en ningun punto.
+
+---
+
+## 2026-09-15 (tercera entrada) - Caso 6 de Astra: simulador de "misma entrada, misma fecha de valoracion", validado con piloto real
+
+Estado: mecanismo construido, probado y validado con un piloto real (60 tickers/2 años). Queda pendiente ampliarlo al universo completo (636 tickers/10 años) -- ver el porque al final. Tambien pendiente: refactor de deduplicacion aplicado (`Services\Concerns\StopLossExitCalculator`).
+
+El caso 6 de `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md` propone una SEGUNDA medicion, distinta de la ya cerrada: `PolicyReplaySimulator` mide "cuanto rinde seguir la ficha indefinidamente" (una sola posicion por ticker, sin horizonte), y su comparacion primaria selecciona SOLO operaciones cerradas por stop -- lo que sesga la muestra hacia las perdedoras, porque las ganadoras nunca se cierran solas y quedan fuera. Astra propone una pregunta mas acotada: "de las mismas candidatas aceptadas, ¿gestionar con el stop durante VEINTE SESIONES aporta algo frente a mantener esas mismas veinte sesiones sin gestionar?" -- ambos brazos valorados a la MISMA fecha de corte, asi que las ganadoras SI entran en la comparacion (a precio de mercado, igual que las perdedoras).
+
+**`Services\PolicyReplayEpisodeSimulator` (nuevo)**, diseño literal de Astra:
+
+- Cada candidata aceptada (misma regla de entrada que `PolicyReplaySimulator`: BUY, elegible por indice, con stop calculable) abre su PROPIO episodio -- a diferencia de `PolicyReplaySimulator`, aqui NO hay una sola posicion activa por ticker. Astra es explicita: "Todos los candidatos pueden generar episodios solapados; eso no constituye una cartera ejecutable ni elimina su dependencia" -- verificado con un test que dos candidatas solapadas del mismo ticker abren dos episodios independientes.
+- Fecha de valoracion: entrada + 20 sesiones (mismo horizonte estandar). Brazo gestionado: vigila el stop a diario; si se cruza ANTES, usa ESE retorno (el efectivo resultante no rinde nada durante los dias que falten -- supuesto declarado explicitamente, sin inventar un tipo libre de riesgo sin medir); si NO se cruza, se valora a mercado EXACTAMENTE en la sesion 20 (nunca sigue esperando mas alla, a diferencia de `PolicyReplaySimulator`). Comparador: mantiene hasta la MISMA fecha de valoracion.
+- Episodio sin desenlace: `pending_future` (la fecha de valoracion todavia no ha ocurrido, historico y `$asOf` insuficientes) vs `unresolved_gap` (el TICKER dejo de cotizar -deslistado/suspendido- antes de esa fecha, pero `$asOf` ya es muy posterior -- serian datos que deberian existir y no existen). Astra: "no borrarlo silenciosamente" -- ambos casos se marcan `pending=true` (excluidos de la metrica primaria, mismo criterio de siempre), pero con una etiqueta distinta para no confundirlos.
+
+**Reutiliza `Services\PolicyReplayStatistics` sin ningun cambio**: al estar SIEMPRE acotada a 20 sesiones, la ventana de exposicion de cada episodio es casi constante -- el bootstrap de bloques moviles (diseñado para duraciones variables) sigue siendo valido, con una anchura de bloque mucho mas pequeña y estable que en `PolicyReplaySimulator`.
+
+**Refactor de deduplicacion** (antes de escribir la segunda copia de la misma logica): `PolicyReplaySimulator` y `PolicyReplayEpisodeSimulator` comparten la MISMA mecanica de vigilancia de stop-loss (gap-aware, v2.73) y de coste de operar -- extraida a un trait nuevo, `Services\Concerns\StopLossExitCalculator`, usado por ambas clases. Evita que un futuro arreglo de esa mecanica (como el de gaps del `2026-09-08`) se aplique en una clase y se olvide en la otra.
+
+**Piloto de validacion sobre datos reales** (`storage/scratch/policy_replay_episode_pilot_2026-09-15.php`, no committeado): mismos 60 tickers/semilla que los pilotos anteriores, historico de 2 años. **0/60 errores.** 511 episodios (mucho mas que las 100 operaciones de `PolicyReplaySimulator` sobre el mismo universo -- esperado, aqui los episodios se solapan en vez de exigir una sola posicion). Desglose de desenlaces: 270 `valuation_close`, 218 `stop_loss`, 23 `pending_future`, 0 `unresolved_gap` (correcto para un piloto de 2 años sin deslistados en la muestra). `avg_diff=-0,16pp` -- mucho mas pequeño en magnitud que el -5,66pp del piloto de `PolicyReplaySimulator` del mismo dia, coherente con que aqui la mayoria de episodios (270/488, 55%) nunca llegan a cruzar el stop dentro de las veinte sesiones y esos aportan diferencia cero por construccion. `result_informative=false` por la misma salvaguarda de resolucion temporal del bootstrap (piloto corto de proposito) -- comportamiento correcto y esperado, no un fallo.
+
+**Explicitamente NO ampliado al universo completo en esta entrada**: siguiendo el orden que recomienda la propia Astra ("ejecutar un piloto... comprobar contabilidad y cobertura antes de ampliarlo"), la medicion a escala completa (636 tickers, 10 años) queda para cuando se pueda dedicar una sesion con tiempo de computo dedicado -- el piloto ya cumplio su proposito de validar el mecanismo antes de ese gasto.
+
+Incluye:
+
+- `src/Services/Concerns/StopLossExitCalculator.php` (nuevo, trait): `walkForStopBreach()`, `netReturn()`.
+- `src/Services/PolicyReplaySimulator.php`: usa el trait nuevo, metodos duplicados retirados.
+- `src/Services/PolicyReplayEpisodeSimulator.php` (nuevo): el simulador de episodios.
+- Tests: `tests/Services/PolicyReplayEpisodeSimulatorTest.php` (nuevo, 8 tests: sin candidatas, valoracion a mercado sin rotura, rotura antes de la valoracion, episodios solapados independientes, pendiente futuro vs hueco no resuelto, exclusion por pertenencia, coste de operar).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **741 tests, 2.145 assertions, OK** (sube desde 733/2.122: 8 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.

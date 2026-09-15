@@ -9,6 +9,7 @@ use StockAnalyzer\Enums\PositionDecisionAction;
 use StockAnalyzer\Enums\StopLossCheckState;
 use StockAnalyzer\Models\Holding;
 use StockAnalyzer\Models\HistoricalQuote;
+use StockAnalyzer\Services\Concerns\StopLossExitCalculator;
 
 /**
  * Replay fiel de `PositionDecisionAdvisor::decide()` sobre historico real de
@@ -102,6 +103,8 @@ use StockAnalyzer\Models\HistoricalQuote;
  */
 final class PolicyReplaySimulator
 {
+    use StopLossExitCalculator;
+
     /**
      * Horizonte fijo del comparador (Entrega 3): "mantener cada entrada
      * durante veinte sesiones" es el horizonte estandar ya usado en todo
@@ -114,6 +117,11 @@ final class PolicyReplaySimulator
         private readonly PositionDecisionAdvisor $advisor = new PositionDecisionAdvisor(),
         private readonly BacktestingConfig $backtestingConfig = new BacktestingConfig()
     ) {
+    }
+
+    protected function getCostRate(): float
+    {
+        return $this->backtestingConfig->getCostRate();
     }
 
     /**
@@ -329,69 +337,6 @@ final class PolicyReplaySimulator
             'baseline_pending' => $baselinePending,
             'revisar_tesis_events' => $revisarTesisEvents,
         ];
-    }
-
-    /**
-     * Retorno neto de costes de una operacion completa (misma formula que
-     * `BacktestingService::netManagedReturn()`: coste en la compra Y en la
-     * venta). Para una operacion `pending_at_cutoff` esto es una
-     * valoracion a mercado, no una venta real -- por eso
-     * `Services\PolicyReplayStatistics` excluye las pendientes del
-     * contraste principal aunque este campo si se calcule para ellas
-     * (diagnostico, ver el hallazgo de `gestor-riesgo` sobre la
-     * distribucion de pendientes cerca del stop).
-     */
-    private function netReturn(float $entryPrice, float $exitPrice): float
-    {
-        $cost = $this->backtestingConfig->getCostRate();
-        $netEntry = $entryPrice * (1 + $cost);
-        $netExit = $exitPrice * (1 - $cost);
-
-        return round((($netExit / $netEntry) - 1) * 100, 2);
-    }
-
-    /**
-     * Version de un solo lado de `BacktestingService::resolveDayExit()`:
-     * aqui no existe "objetivo", solo stop-loss. Mismo criterio de huecos
-     * (v2.73): una apertura que ya cae en o por debajo del stop se
-     * ejecuta a ESA apertura, no al nivel del stop -- cobrar el stop en un
-     * hueco bajista seria la forma mas silenciosa de inflar el resultado.
-     */
-    private function stopBreachedOn(HistoricalQuote $day, float $stopLoss): ?float
-    {
-        $open = $day->getOpen();
-
-        if ($open <= $stopLoss) {
-            return $open;
-        }
-
-        if ($day->getLow() <= $stopLoss) {
-            return $stopLoss;
-        }
-
-        return null;
-    }
-
-    /**
-     * Recorre `$history[$fromIndex..$toIndex]` (ambos inclusive) buscando
-     * el primer dia que cruza `$stopLoss`. `null` si ningun dia del rango
-     * lo cruza -- un rango vacio (`$fromIndex > $toIndex`) tambien
-     * devuelve `null` sin iterar nada.
-     *
-     * @param list<HistoricalQuote> $history
-     * @return array{0: int, 1: float}|null indice del dia y precio de salida
-     */
-    private function walkForStopBreach(array $history, int $fromIndex, int $toIndex, float $stopLoss): ?array
-    {
-        for ($day = $fromIndex; $day <= $toIndex; $day++) {
-            $exitPrice = $this->stopBreachedOn($history[$day], $stopLoss);
-
-            if ($exitPrice !== null) {
-                return [$day, $exitPrice];
-            }
-        }
-
-        return null;
     }
 
     /**
