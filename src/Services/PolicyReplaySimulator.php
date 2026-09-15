@@ -42,10 +42,43 @@ use StockAnalyzer\Models\HistoricalQuote;
  *   confirmacion (exigir que el BUY persista N reevaluaciones) sin
  *   evidencia de que aporte algo -- séria una variante nueva sin
  *   predeclarar, justo lo que la Entrega 4 quiere evitar.
- * - **Stop-loss vigilado a diario, fijado UNA SOLA VEZ al entrar.** Igual
- *   que `AlertService::checkStopLossBreach()` en produccion: el nivel se
- *   calcula con el precio/ATR14 del dia de la señal y no se recalcula
- *   mientras la misma posicion siga abierta.
+ * - **Stop-loss vigilado a diario, fijado UNA SOLA VEZ al entrar, con el
+ *   precio/ATR14 del dia de la SEÑAL.** *(Correccion del `2026-09-15`,
+ *   caso 3 de `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`: la version
+ *   anterior de este parrafo afirmaba "igual que
+ *   `AlertService::checkStopLossBreach()` en produccion" -- ES FALSO,
+ *   confirmado con el codigo real de `AlertService` por
+ *   `analista-mercado`/`gestor-riesgo`. En produccion el stop se adopta en
+ *   la PRIMERA VISITA con una posicion sin stop guardado, con el
+ *   precio/ATR de ESE DIA de la visita, no el de la señal de compra -- si
+ *   el usuario tarda en volver a mirar la ficha, el nivel adoptado puede
+ *   ser mucho mas laxo (o mas estricto) que el de la señal. Astra lo
+ *   demuestra con un fixture: señal a 100/stop 90, una caida a 85 que el
+ *   replay vende, pero que produccion -- si la primera visita ocurre
+ *   DESPUES de la caida -- adoptaria un stop de 75 sobre el precio ya
+ *   caido y devolveria MANTENER, sin alertar nunca.)* Este replay simula
+ *   una ORDEN STOP PERMANENTEMENTE ACTIVA (fijada el dia de la señal,
+ *   vigilada contra el rango completo -apertura/minimo- de cada vela
+ *   real desde entonces) -- un supuesto de simulacion legitimo y habitual
+ *   en backtesting de sistemas con stop, consenso de
+ *   `analista-mercado`/`gestor-riesgo` (`2026-09-15`) para seguir siendo
+ *   la medicion PRINCIPAL (parametro-libre, preserva comparabilidad con
+ *   la medicion ya hecha una vez), pero DISTINTO de "que veria un usuario
+ *   que consulta la ficha de vez en cuando", que exigiria ademas suponer
+ *   una frecuencia de visita sin datos reales de los que partir (Stock
+ *   Analyzer es una herramienta de uso personal, sin telemetria de uso).
+ *   **Pendiente, no construido todavia**: una variante secundaria que
+ *   simule ese segundo supuesto (adopcion en la primera "visita"
+ *   simulada, decision solo con el precio observado ese dia, no el rango
+ *   intradia), reutilizando el mismo `$step` de `replayTimeline()` como
+ *   cadencia de visita (en produccion el recalculo de recomendacion y la
+ *   comprobacion del stop ocurren en la MISMA llamada, no son dos
+ *   cadencias independientes) -- reportada aparte, nunca fundida con esta
+ *   medicion principal. `gestor-riesgo` señala ademas que el propio diseño
+ *   de `AlertService` (el nivel de proteccion depende de CUANDO mira el
+ *   usuario, no de un nivel fijado al comprar) es un hallazgo de riesgo
+ *   real en produccion, independiente de este replay -- pendiente,
+ *   candidato para `desarrollador-php` en una tarea aparte.
  * - **Posiciones abiertas en la fecha de corte se marcan "pendientes", NO
  *   se les atribuye ganancia ni perdida** (ni al asesor ni al comparador):
  *   la politica nunca las cerro, asi que no tienen un desenlace que
@@ -86,7 +119,7 @@ final class PolicyReplaySimulator
     /**
      * @param list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?\StockAnalyzer\DTO\FundamentalChangeAssessment, entry_price: ?float, eligible: bool}> $timeline ver BacktestingService::replayTimeline()
      * @param list<HistoricalQuote> $history ver BacktestingService::historyFor(), MISMO $asOf que generó $timeline
-     * @return array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}
+     * @return array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}
      */
     public function replay(string $ticker, array $timeline, array $history): array
     {
@@ -244,7 +277,7 @@ final class PolicyReplaySimulator
 
     /**
      * @param list<HistoricalQuote> $history
-     * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_pending: bool, revisar_tesis_events: int}
+     * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}
      */
     private function closeTrade(
         string $entryDate,
@@ -263,6 +296,16 @@ final class PolicyReplaySimulator
         $baselineReturn = $baselinePending
             ? null
             : $this->netReturn($entryPrice, $history[$baselineIndex]->getClose());
+        // Hallazgo real de Astra (caso 4, `2026-09-14`): la ventana de
+        // exposicion del brazo COMPARADOR (20 sesiones fijas desde la
+        // MISMA entrada) es tan relevante para la dependencia temporal
+        // entre operaciones como la duracion del brazo gestionado -- un
+        // diseño de bloques que solo mira cuanto dura la gestionada (como
+        // el de ayer) puede tratar como "independientes" operaciones cuyos
+        // comparadores de 20 sesiones SI comparten dias de mercado.
+        // `Services\PolicyReplayStatistics` necesita esta fecha, no solo
+        // el indice, para calcular esa ventana de exposicion.
+        $baselineExitDate = $baselinePending ? null : $history[$baselineIndex]->getDate()->format('Y-m-d');
 
         return [
             'entry_date' => $entryDate,
@@ -276,6 +319,7 @@ final class PolicyReplaySimulator
             'holding_days' => $exitIndex - $entryIndex,
             'managed_return' => $this->netReturn($entryPrice, $exitPrice),
             'baseline_return' => $baselineReturn,
+            'baseline_exit_date' => $baselineExitDate,
             // Distinto de `pending` (la operacion GESTIONADA sigue
             // abierta): esto marca que el comparador de 20 sesiones
             // tampoco tiene desenlace todavia porque el historico

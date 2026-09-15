@@ -14,22 +14,24 @@ use StockAnalyzer\Services\PolicyReplayStatistics;
  * `PolicyReplaySimulator::replay()` de muchos tickers en la medicion de
  * utilidad economica.
  *
- * El diseño de bloques temporales (`t_stat_blocked`) se corrigio el
- * `2026-09-14` tras una segunda consulta a `auditor-estadistico`: el
- * primer diseño (una cadena que se extiende mientras la siguiente entrada
- * caiga antes de que salga la mas tardia del bloque anterior, MEZCLANDO
- * tickers distintos) colapsaba casi todo en 1-2 bloques con universos
- * grandes y holdings largos -- verificado con un piloto real de 60
- * tickers (82 diferencias -> solo 3 bloques). El diseño actual particiona
- * el CALENDARIO en ventanas de ancho fijo (mediana de duracion de las
- * propias operaciones, en dias naturales), no una cadena por solape.
+ * Diseño del `2026-09-15` (tercera consulta a `auditor-estadistico`, tras
+ * un hallazgo real de Astra en `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`,
+ * caso 4): estimando primario = media POR OPERACION; incertidumbre =
+ * bootstrap de bloques moviles de calendario, no ventanas fijas por
+ * cadena/ancho-de-holding (los dos diseños anteriores, ambos con huecos
+ * reales encontrados por Astra -- ver el docblock de la clase).
+ *
+ * Los tests que necesitan reproducibilidad exacta del bootstrap pasan
+ * `$seed` explicito: `mt_rand()` con `mt_srand()` fijo es determinista
+ * dentro de la misma build de PHP.
  */
 final class PolicyReplayStatisticsTest extends TestCase
 {
+    private const SEED = 20260915;
+
     /**
      * Fecha exacta a `$daysFromEpoch` dias de una fecha fija (2024-01-01):
-     * evita tener que contar meses a mano para construir fixtures del
-     * diseño de ventanas de calendario.
+     * evita tener que contar meses a mano.
      */
     private function dateAt(int $daysFromEpoch): string
     {
@@ -37,13 +39,14 @@ final class PolicyReplayStatisticsTest extends TestCase
     }
 
     /**
-     * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_pending: bool, revisar_tesis_events: int}
+     * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}
      */
     private function trade(
         string $entryDate,
         string $exitDate,
         float $managedReturn,
         ?float $baselineReturn,
+        ?string $baselineExitDate = null,
         bool $pending = false,
         int $revisarTesisEvents = 0
     ): array {
@@ -59,6 +62,7 @@ final class PolicyReplayStatisticsTest extends TestCase
             'holding_days' => 1,
             'managed_return' => $managedReturn,
             'baseline_return' => $baselineReturn,
+            'baseline_exit_date' => $baselineExitDate ?? ($baselineReturn === null ? null : $exitDate),
             'baseline_pending' => $baselineReturn === null,
             'revisar_tesis_events' => $revisarTesisEvents,
         ];
@@ -66,9 +70,9 @@ final class PolicyReplayStatisticsTest extends TestCase
 
     /**
      * @param list<array<string,mixed>> $trades
-     * @return array{ticker: string, trades: list<array<string,mixed>>, entries_total: int, entries_closed: int, entries_pending: int}
+     * @return array{ticker: string, trades: list<array<string,mixed>>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}
      */
-    private function replay(string $ticker, array $trades): array
+    private function replay(string $ticker, array $trades, int $excludedByMembership = 0): array
     {
         return [
             'ticker' => $ticker,
@@ -76,6 +80,7 @@ final class PolicyReplayStatisticsTest extends TestCase
             'entries_total' => count($trades),
             'entries_closed' => count(array_filter($trades, static fn (array $t): bool => !$t['pending'])),
             'entries_pending' => count(array_filter($trades, static fn (array $t): bool => $t['pending'])),
+            'candidates_excluded_by_membership' => $excludedByMembership,
         ];
     }
 
@@ -84,124 +89,74 @@ final class PolicyReplayStatisticsTest extends TestCase
         $summary = (new PolicyReplayStatistics())->summarize([]);
 
         self::assertSame(0, $summary['entries_total']);
-        self::assertNull($summary['avg_diff_naive']);
-        self::assertNull($summary['t_stat_naive']);
-        self::assertNull($summary['avg_diff_blocked']);
+        self::assertSame(0, $summary['cohorts']);
+        self::assertNull($summary['avg_diff']);
+        self::assertNull($summary['se_bootstrap']);
+        self::assertNull($summary['ci95_low']);
+        self::assertFalse($summary['result_informative']);
     }
 
     /**
-     * Dos operaciones cerradas de tickers distintos, en fechas
-     * suficientemente separadas como para no compartir ningun bloque: la
-     * media pareada es la media simple de las diferencias, y ambos
-     * disenos (naive/blocked) deben coincidir porque no hay solape que
-     * corregir.
+     * Con una sola operacion emparejable, el punto estimado es esa unica
+     * diferencia, pero no hay variabilidad que remuestrear -- el bootstrap
+     * (que necesita al menos dos observaciones) sale `null`, no una cifra
+     * inventada.
      */
-    public function testDiferenciaPareadaSimpleSinSolapeCoincideEnAmbosDisenos(): void
+    public function testConUnaSolaOperacionElBootstrapNoSeCalcula(): void
     {
-        $replays = [
-            $this->replay('AAA', [$this->trade('2024-01-10', '2024-02-10', 8.0, 5.0)]),
-            $this->replay('BBB', [$this->trade('2024-06-10', '2024-07-10', 2.0, 5.0)]),
-        ];
+        $replays = [$this->replay('AAA', [$this->trade($this->dateAt(0), $this->dateAt(5), 8.0, 5.0)])];
 
-        $summary = (new PolicyReplayStatistics())->summarize($replays);
+        $summary = (new PolicyReplayStatistics())->summarize($replays, self::SEED);
 
-        // Diferencias: +3,00 y -3,00 -> media 0, pero se comprueba cada
-        // pieza para no perder precision de redondeo en la propia media.
-        self::assertSame(2, $summary['cohorts_naive']);
-        self::assertSame(0.0, $summary['avg_diff_naive']);
-        self::assertSame(2, $summary['cohorts_blocked'], 'Fechas de enero y junio no se solapan: cada una es su propio bloque.');
-        self::assertSame($summary['avg_diff_naive'], $summary['avg_diff_blocked']);
-        self::assertSame($summary['t_stat_naive'], $summary['t_stat_blocked']);
+        self::assertSame(1, $summary['cohorts']);
+        self::assertSame(3.0, $summary['avg_diff']);
+        self::assertNull($summary['se_bootstrap']);
+        self::assertNull($summary['ci95_low']);
+        self::assertFalse($summary['result_informative']);
     }
 
     /**
-     * `W` (anchura de bloque) = mediana de la duracion de las propias
-     * operaciones. Con las tres operaciones de este test duran
-     * exactamente 30 dias cada una, `W=30`. Dos entradas (dia 0 y dia 10)
-     * caen en la MISMA ventana de calendario `[0,30)` y se promedian a un
-     * solo bloque; la tercera (dia 100) cae en la ventana `[90,120)`,
-     * bloque aparte.
+     * Hallazgo real de Astra (`REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md`,
+     * caso 4, segundo ejemplo): el punto estimado tiene que ser la media
+     * POR OPERACION, sin importar como se agrupen en el tiempo. Fixture
+     * literal de Astra: 100 diferencias de +1pp muy juntas en el
+     * calendario, y 9 diferencias de -1pp muy separadas entre si -- la
+     * media por operacion es (100x1 + 9x(-1))/109 ~ +0,83pp; la media "por
+     * ventana" (el diseño anterior, ya retirado) habria dado -0,80pp. Solo
+     * se comprueba `avg_diff`, no el bootstrap (que depende del ancho de
+     * bloque, no de esto).
      */
-    public function testDosOperacionesEnLaMismaVentanaDeCalendarioSePromedianEnUnBloque(): void
-    {
-        $replays = [
-            $this->replay('AAA', [
-                $this->trade($this->dateAt(0), $this->dateAt(30), 10.0, 0.0),
-                $this->trade($this->dateAt(10), $this->dateAt(40), 20.0, 0.0),
-            ]),
-            $this->replay('BBB', [
-                $this->trade($this->dateAt(100), $this->dateAt(130), -5.0, 0.0),
-            ]),
-        ];
-
-        $summary = (new PolicyReplayStatistics())->summarize($replays);
-
-        self::assertSame(3, $summary['cohorts_naive']);
-        self::assertSame(30, $summary['block_width_days']);
-        self::assertSame(2, $summary['cohorts_blocked'], 'Las dos primeras comparten ventana de calendario; la tercera, muy posterior, cae en otra.');
-        self::assertSame(5.0, $summary['avg_diff_blocked'], 'Media de los bloques [15,0 (media de 10 y 20)] y [-5,0]: (15+(-5))/2.');
-    }
-
-    /**
-     * Borde de la ventana: con `W=30` a partir del dia 0, una entrada
-     * exactamente en el dia 30 cae en la ventana SIGUIENTE (`[30,60)`),
-     * no en la primera (`[0,30)`) -- el intervalo es semiabierto por la
-     * derecha.
-     */
-    public function testUnaEntradaExactamenteEnElLimiteDeLaVentanaEmpiezaLaSiguiente(): void
-    {
-        $replays = [
-            $this->replay('AAA', [
-                $this->trade($this->dateAt(0), $this->dateAt(30), 4.0, 0.0),
-                $this->trade($this->dateAt(30), $this->dateAt(60), 6.0, 0.0),
-            ]),
-        ];
-
-        $summary = (new PolicyReplayStatistics())->summarize($replays);
-
-        self::assertSame(2, $summary['cohorts_blocked']);
-    }
-
-    /**
-     * Consenso de `auditor-estadistico` (`2026-09-14`): con menos de 10
-     * bloques, `t_stat_blocked` se calcula igual (diagnostico), pero el
-     * hallazgo se marca como NO CONCLUYENTE -- predeclarado antes de medir
-     * el universo completo, no decidido despues de ver el numero.
-     */
-    public function testElDisenoBloqueadoNoEsConcluyenteConMenosDeDiezBloques(): void
+    public function testElPuntoEstimadoEsLaMediaPorOperacionNoPorVentanaTemporal(): void
     {
         $trades = [];
+
+        for ($i = 0; $i < 100; $i++) {
+            // Las 100 entran el mismo dia (mismo instante de mercado),
+            // holding de 1 dia: caerian todas en la misma ventana de
+            // calendario del diseño ya retirado.
+            $trades[] = $this->trade($this->dateAt(0), $this->dateAt(1), 6.0, 5.0);
+        }
 
         for ($i = 0; $i < 9; $i++) {
-            $trades[] = $this->trade($this->dateAt($i * 10), $this->dateAt($i * 10 + 1), 1.0, 0.0);
+            // Muy separadas entre si (2.000 dias = ~5,5 años): cada una
+            // séria su propia ventana en el diseño ya retirado.
+            $trades[] = $this->trade($this->dateAt(2000 * ($i + 1)), $this->dateAt(2000 * ($i + 1) + 1), 4.0, 5.0);
         }
 
         $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)]);
 
-        self::assertSame(9, $summary['cohorts_blocked']);
-        self::assertFalse($summary['blocked_design_conclusive']);
-    }
-
-    public function testElDisenoBloqueadoEsConcluyenteConDiezBloquesOMas(): void
-    {
-        $trades = [];
-
-        for ($i = 0; $i < 10; $i++) {
-            $trades[] = $this->trade($this->dateAt($i * 10), $this->dateAt($i * 10 + 1), 1.0, 0.0);
-        }
-
-        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)]);
-
-        self::assertSame(10, $summary['cohorts_blocked']);
-        self::assertTrue($summary['blocked_design_conclusive']);
+        self::assertSame(109, $summary['cohorts']);
+        $expected = round((100 * 1.0 + 9 * (-1.0)) / 109, 2);
+        self::assertSame($expected, $summary['avg_diff']);
+        self::assertGreaterThan(0.0, $summary['avg_diff'], 'Media por operacion: positiva. La media por ventana (diseño retirado) habria sido negativa.');
     }
 
     public function testLasOperacionesPendientesQuedanExcluidasDeLaMetricaPrimaria(): void
     {
         $replays = [
             $this->replay('AAA', [
-                $this->trade('2024-01-01', '2024-02-01', 5.0, 2.0),
-                $this->trade('2024-06-01', '2024-09-01', 999.0, null, pending: true),
+                $this->trade($this->dateAt(0), $this->dateAt(5), 5.0, 2.0),
+                $this->trade($this->dateAt(100), $this->dateAt(120), 999.0, null, pending: true),
             ]),
         ];
 
@@ -211,37 +166,183 @@ final class PolicyReplayStatisticsTest extends TestCase
         self::assertSame(1, $summary['entries_closed']);
         self::assertSame(1, $summary['entries_pending']);
         self::assertSame(50.0, $summary['pct_pending']);
-        self::assertSame(1, $summary['cohorts_naive'], 'La pendiente no entra en el contraste pareado.');
-        self::assertSame(3.0, $summary['avg_diff_naive']);
+        self::assertSame(1, $summary['cohorts'], 'La pendiente no entra en el contraste pareado.');
+        self::assertSame(3.0, $summary['avg_diff']);
         self::assertSame(999.0, $summary['pending_avg_managed_return']);
     }
 
     /**
      * Una operacion YA CERRADA por stop-loss pero cuyo comparador de
-     * veinte sesiones todavia no tiene desenlace (`baseline_pending`)
-     * cuenta como cerrada, pero no aporta una diferencia emparejable.
+     * veinte sesiones todavia no tiene desenlace (`baseline_exit_date`
+     * nulo) cuenta como cerrada, pero no aporta una diferencia emparejable
+     * -- sin fecha de salida del comparador tampoco hay forma de calcular
+     * su ventana de exposicion para el bootstrap.
      */
     public function testUnaOperacionCerradaConComparadorPendienteNoAportaDiferenciaEmparejada(): void
     {
         $replays = [
-            $this->replay('AAA', [$this->trade('2024-01-01', '2024-02-01', 5.0, null)]),
+            $this->replay('AAA', [$this->trade($this->dateAt(0), $this->dateAt(5), 5.0, null)]),
         ];
 
         $summary = (new PolicyReplayStatistics())->summarize($replays);
 
         self::assertSame(1, $summary['entries_closed']);
-        self::assertSame(0, $summary['cohorts_naive']);
+        self::assertSame(0, $summary['cohorts']);
+    }
+
+    public function testLasCandidatasExcluidasPorPertenenciaSeSumanDeTodosLosTickers(): void
+    {
+        $replays = [
+            $this->replay('AAA', [$this->trade($this->dateAt(0), $this->dateAt(5), 5.0, 2.0)], excludedByMembership: 3),
+            $this->replay('BBB', [$this->trade($this->dateAt(0), $this->dateAt(5), 5.0, 2.0)], excludedByMembership: 2),
+        ];
+
+        $summary = (new PolicyReplayStatistics())->summarize($replays);
+
+        self::assertSame(5, $summary['candidates_excluded_by_membership_total']);
     }
 
     public function testCuentaLosEventosDeRevisarTesisDeTodasLasOperaciones(): void
     {
         $replays = [
-            $this->replay('AAA', [$this->trade('2024-01-01', '2024-02-01', 5.0, 2.0, revisarTesisEvents: 2)]),
-            $this->replay('BBB', [$this->trade('2024-01-01', '2024-02-01', 5.0, 2.0, revisarTesisEvents: 1)]),
+            $this->replay('AAA', [$this->trade($this->dateAt(0), $this->dateAt(5), 5.0, 2.0, revisarTesisEvents: 2)]),
+            $this->replay('BBB', [$this->trade($this->dateAt(0), $this->dateAt(5), 5.0, 2.0, revisarTesisEvents: 1)]),
         ];
 
         $summary = (new PolicyReplayStatistics())->summarize($replays);
 
         self::assertSame(3, $summary['revisar_tesis_events_total']);
+    }
+
+    /**
+     * Mismo `$seed` y misma entrada -> mismo resultado exacto (Entrega 2:
+     * mismo criterio de reproducibilidad que `$asOf`). Sin esto, la
+     * medicion real no se podria repetir para verificarla.
+     */
+    public function testElBootstrapConLaMismaSemillaEsReproducible(): void
+    {
+        $trades = $this->manyIndependentTrades(40);
+        $replays = [$this->replay('AAA', $trades)];
+
+        $first = (new PolicyReplayStatistics())->summarize($replays, self::SEED);
+        $second = (new PolicyReplayStatistics())->summarize($replays, self::SEED);
+
+        self::assertSame($first['se_bootstrap'], $second['se_bootstrap']);
+        self::assertSame($first['ci95_low'], $second['ci95_low']);
+        self::assertSame($first['ci95_high'], $second['ci95_high']);
+    }
+
+    public function testElIntervaloDeConfianzaTieneElLimiteInferiorPorDebajoDelSuperior(): void
+    {
+        $trades = $this->manyIndependentTrades(40);
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)], self::SEED);
+
+        self::assertLessThanOrEqual($summary['ci95_high'], $summary['ci95_low']);
+    }
+
+    /**
+     * Consenso de `auditor-estadistico` (`2026-09-15`): por debajo de 30
+     * operaciones EFECTIVAS (tras corregir por dependencia temporal), el
+     * resultado se marca no informativo -- aqui ni siquiera hay 30
+     * operaciones EN BRUTO, asi que el efectivo tiene que ser menor.
+     */
+    public function testResultInformativeEsFalsoConMuyPocasOperaciones(): void
+    {
+        $trades = $this->manyIndependentTrades(5);
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)], self::SEED);
+
+        self::assertFalse($summary['result_informative']);
+    }
+
+    /**
+     * Con suficientes operaciones BIEN SEPARADAS en el tiempo (sin
+     * exposicion compartida entre ellas), el tamaño efectivo deberia
+     * acercarse al bruto -- informativo con 40 operaciones independientes.
+     */
+    public function testResultInformativeEsVerdaderoConSuficientesOperacionesBienSeparadas(): void
+    {
+        $trades = $this->manyIndependentTrades(40);
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)], self::SEED);
+
+        self::assertTrue($summary['result_informative'], "effective_n={$summary['effective_n']}, cohorts={$summary['cohorts']}");
+        self::assertGreaterThanOrEqual(30.0, (float) $summary['effective_n']);
+    }
+
+    /**
+     * Regresion de un hallazgo real, encontrado con un piloto sobre datos
+     * reales (60 tickers/2 años, `2026-09-15`), NO por Astra: un rango
+     * temporal total CORTO frente a la anchura de bloque colapsa
+     * `se_bootstrap` de forma artificial (en el piloto real: 0,015 frente
+     * a un `se_naive` de 1,049, un `pseudo_t` de -377 -- la misma clase de
+     * cifra absurda que motivo la correccion del caso 4 de Astra, solo que
+     * causada por una razon distinta: aqui no hace falta que las
+     * operaciones AL PROPIO tiempo esten muy solapadas, basta con que el
+     * bootstrap no tenga sitio para sortear posiciones de bloque
+     * realmente distintas entre si). Fixture: muchas operaciones repartidas
+     * en solo ~2 años (700 dias), cada una con una ventana de exposicion
+     * larga (~200 dias) -- el ancho de bloque resultante (2x200=400) apenas
+     * cabe dos veces en el rango total.
+     */
+    public function testResultInformativeEsFalsoSinResolucionSuficienteDeBootstrapAunqueHayaMuchasOperaciones(): void
+    {
+        $trades = [];
+
+        for ($i = 0; $i < 34; $i++) {
+            $entry = (int) round($i * (700 / 34));
+            $trades[] = $this->trade(
+                $this->dateAt($entry),
+                $this->dateAt($entry + 200),
+                5.0 + ($i % 5),
+                5.0,
+                $this->dateAt($entry + 195)
+            );
+        }
+
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)], self::SEED);
+
+        self::assertSame(34, $summary['cohorts']);
+        self::assertFalse($summary['bootstrap_has_enough_resolution']);
+        self::assertFalse($summary['result_informative'], 'Muchas operaciones no bastan si el bootstrap no tiene resolucion temporal real.');
+    }
+
+    /**
+     * `calendar_windows_observed` (el diseño de bloques por ancho fijo,
+     * ya retirado como criterio de decision) se sigue calculando como
+     * campo puramente descriptivo -- no decide nada, pero no desaparece.
+     */
+    public function testCalendarWindowsObservedEsSoloDescriptivo(): void
+    {
+        $trades = $this->manyIndependentTrades(10);
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)]);
+
+        self::assertGreaterThan(0, $summary['calendar_windows_observed']);
+        self::assertArrayNotHasKey('blocked_design_conclusive', $summary);
+    }
+
+    /**
+     * 40 operaciones separadas por 200 dias cada una (holding y
+     * comparador ambos resueltos en menos de 20 dias): ninguna exposicion
+     * se solapa con otra, asi que el efecto de diseño deberia acercarse a
+     * 1 (independencia casi total).
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function manyIndependentTrades(int $count): array
+    {
+        $trades = [];
+
+        for ($i = 0; $i < $count; $i++) {
+            $entry = 200 * $i;
+            // Retorno gestionado variable (no constante): con una
+            // diferencia identica en todas las operaciones la varianza
+            // "naive" sale exactamente 0, lo que deja indefinido el efecto
+            // de diseño (SE_bootstrap/SE_naive) -- nunca pasaria con datos
+            // reales, pero un fixture de prueba si puede caer ahi por
+            // accidente si no se declara a proposito.
+            $managedReturn = 5.0 + ($i % 5);
+            $trades[] = $this->trade($this->dateAt($entry), $this->dateAt($entry + 5), $managedReturn, 5.0, $this->dateAt($entry + 20));
+        }
+
+        return $trades;
     }
 }
