@@ -7939,3 +7939,29 @@ Incluye:
 - Tests: `tests/Services/PolicyReplayEpisodeSimulatorTest.php` (nuevo, 8 tests: sin candidatas, valoracion a mercado sin rotura, rotura antes de la valoracion, episodios solapados independientes, pendiente futuro vs hueco no resuelto, exclusion por pertenencia, coste de operar).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **741 tests, 2.145 assertions, OK** (sube desde 733/2.122: 8 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-15 (cuarta entrada) - Caso 5 de Astra: intento de repetir la medicion completa, bloqueado por un limite real de infraestructura (no un bug de codigo)
+
+Estado: el script de archivado completo (caso 5) esta escrito, corregido tras un fallo real, y verificado que preserva trabajo parcial -- pero la medicion completa de 636 tickers/10 años **no ha llegado a terminar** en esta sesion. Motivo: un limite de memoria de la propia maquina de desarrollo (WSL2), no un fallo del motor. Documentado aqui en vez de ocultarlo o forzar un tercer intento.
+
+**Primer intento**: script nuevo (`storage/scratch/policy_replay_full_2026-09-15.php`) que ademas de repetir la medicion con los casos 1, 2 y 4 corregidos, implementaba el caso 5 de `REVISION_REPLAY_MOTOR_ASTRA_2026-09-14.md` (archivar identificador de ejecucion, configuracion, revision de codigo, y el detalle COMPLETO de operaciones de ambos brazos de los 636 tickers, no solo el resumen). Se lanzo en segundo plano en PARALELO con el piloto del caso 6 -- error de gestion de recursos propio, ambos scripts competian por el mismo contenedor de base de datos. Murio a mitad de camino (~590/636 tickers) con "MySQL server has gone away" en cascada y `exit 137` (SIGKILL), **sin escribir ningun resultado**: todo el detalle se acumulaba en memoria hasta un unico `file_put_contents()` al final, asi que un fallo a mitad de camino perdia el trabajo entero.
+
+**Correccion de diseño (no solo repetir con mas cuidado)**: el script se reescribe para escribir un fichero JSON POR TICKER en cuanto ese ticker termina, liberando esa memoria del proceso principal de inmediato -- un fallo a mitad de camino pierde como mucho el ticker en curso, no el trabajo entero.
+
+**Segundo intento, en solitario (sin el piloto en paralelo) y con `memory_limit=1024M`**: `memory_get_usage()` registrado cada 25 tickers se mantuvo PLANO en 8MB durante todo el recorrido -- **confirma que el proceso PHP nunca fue el problema de memoria**. Aun asi, volvio a morir (esta vez ~225/636) con el mismo patron: "MySQL server has gone away" en cascada seguido de `exit 137`. Verificado despues del fallo: `ddev describe` mostraba los contenedores `web` Y `db` en estado `stopped` (los dos, no solo la conexion), y `free -h` dentro de WSL2 mostraba solo **6,5GB de memoria total asignados a toda la maquina virtual** -- consistente con que el propio limite de memoria de WSL2, no el script, es quien esta matando los contenedores bajo la carga sostenida de 10 años x 636 tickers de trafico a MariaDB. Mismo tipo de incidente, distinta causa, que el ya documentado con la Raspberry Pi (roadmap.md, "Bloque A": "el primer intento de backfill colgo la Raspberry Pi de produccion... 906 MiB de RAM").
+
+**Progreso real preservado, no perdido esta vez**: 232 ficheros JSON por ticker (de los 636) quedaron escritos en disco antes del segundo fallo -- confirma que la correccion de diseño funciona (un fallo a mitad de camino ya NO borra el trabajo hecho hasta ese punto), aunque no haya bastado por si sola para completar la medicion en este entorno.
+
+**No se intenta una tercera vez en esta sesion.** Entorno ya restaurado y verificado estable (`ddev start`, 741 tests OK) para dejarlo en buen estado. Pendiente para una sesion futura, con alguna de estas mitigaciones (ninguna implementada todavia, para no improvisar una solucion a un problema de infraestructura sin medir primero cual funciona de verdad):
+
+- Procesar el universo en LOTES mas pequeños (p.ej. 50-100 tickers por invocacion de PHP), reiniciando el proceso entre lotes para que cualquier acumulacion a nivel de contenedor (no de PHP) se libere periodicamente.
+- Revisar/aumentar la asignacion de memoria de WSL2 (`.wslconfig`, `memory=`) antes de repetir el intento.
+- Diseño ya preparado para RETOMAR desde los ficheros por ticker ya escritos (el propio directorio `_tickers/` de un intento anterior), en vez de recalcular desde cero.
+
+Incluye:
+
+- `storage/scratch/policy_replay_full_2026-09-15.php` (no committeado): reescrito con archivado incremental por ticker.
+
+Verificado: entorno restaurado (`ddev start`) y suite completa en verde (`ddev exec vendor/bin/phpunit` -- **741 tests, 2.145 assertions, OK**, sin cambios de codigo de produccion en esta entrada). `config/weights.php` no se toca. La medicion completa (caso 5 a escala real) sigue pendiente.
