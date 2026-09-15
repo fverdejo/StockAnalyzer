@@ -135,7 +135,7 @@ final class PolicyReplayStatistics
     private const MIN_EFFECTIVE_N = 30;
 
     /**
-     * @param list<array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}> $replaysByTicker
+     * @param list<array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: ?float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}> $replaysByTicker
      * @param ?int $seed Semilla de `mt_srand()` para que el bootstrap sea reproducible (Entrega 2: mismo criterio que `$asOf`). `null` usa el estado ambiental del generador -- aceptable para uso exploratorio, no para una medicion que se quiera poder repetir exactamente.
      * @return array{entries_total: int, entries_closed: int, entries_pending: int, pct_pending: ?float, pending_avg_managed_return: ?float, candidates_excluded_by_membership_total: int, cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int, revisar_tesis_events_total: int}
      */
@@ -159,7 +159,17 @@ final class PolicyReplayStatistics
 
                 if ($trade['pending']) {
                     $entriesPending++;
-                    $pendingManagedReturns[] = $trade['managed_return'];
+
+                    // Correccion del 2026-09-16 (caso 3 de
+                    // `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`):
+                    // `managed_return` puede ser `null` de verdad ahora
+                    // (un episodio de `PolicyReplayEpisodeSimulator` sin
+                    // NINGUN desenlace conocido todavia, ni siquiera el
+                    // del stop) -- desconocido no es lo mismo que cero, y
+                    // no debe entrar en la media de pendientes.
+                    if ($trade['managed_return'] !== null) {
+                        $pendingManagedReturns[] = $trade['managed_return'];
+                    }
 
                     continue;
                 }
@@ -352,7 +362,30 @@ final class PolicyReplayStatistics
             $replicateMeans[] = array_sum($sampledDiffs) / count($sampledDiffs);
         }
 
-        [, $seBootstrap] = $this->pairedStats($replicateMeans);
+        // Correccion del 2026-09-15/16 (hallazgo real de Astra,
+        // `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`, caso 1,
+        // prioridad inmediata): `pairedStats()` divide la desviacion
+        // tipica por `sqrt(n)` porque esta pensada para el error estandar
+        // de una MEDIA de observaciones i.i.d. -- pero `$replicateMeans`
+        // YA SON las medias de las 5.000 replicas del bootstrap, no
+        // observaciones individuales. Su desviacion tipica ES la
+        // incertidumbre bootstrap por definicion (documentacion oficial de
+        // `scipy.stats.bootstrap`, citada por Astra); dividirla otra vez
+        // por `sqrt(5000)` calculaba la precision Monte Carlo de la MEDIA
+        // de las replicas, no el error estandar buscado -- encogia
+        // `se_bootstrap` por un factor de ~70,71 (`sqrt(5000)`) respecto al
+        // valor correcto. Verificado por Astra reconstruyendo los mismos
+        // sorteos con la misma semilla sobre los pilotos ya archivados:
+        // la desviacion real (0,227825-1,084) es del mismo orden que
+        // `se_naive`, nunca la cifra absurda que se publicaba (0,002-0,015).
+        // Esto invalida la propia salvaguarda de resolucion temporal que
+        // se añadio ese mismo dia (`bootstrap_has_enough_resolution`): se
+        // diseño para un sintoma que en realidad era este bug de formula,
+        // no falta de resolucion del remuestreo -- se conserva por ahora
+        // (Astra: "corregir esta formula no demuestra que sobre ninguna"),
+        // pendiente de revisar su justificacion por separado con el
+        // resultado YA corregido.
+        $seBootstrap = $this->standardDeviation($replicateMeans);
         sort($replicateMeans);
 
         return [
@@ -495,6 +528,31 @@ final class PolicyReplayStatistics
         }
 
         return intdiv($sortedValues[$mid - 1] + $sortedValues[$mid], 2);
+    }
+
+    /**
+     * Desviacion tipica MUESTRAL (n-1), SIN dividir por `sqrt(n)` --
+     * distinta a proposito de `pairedStats()`. Uso especifico: la
+     * incertidumbre bootstrap es la desviacion tipica de las medias de las
+     * replicas, no el error estandar de esas medias tratadas como si
+     * fueran una muestra i.i.d. nueva sobre la que aplicar el mismo
+     * `pairedStats()` (ver el comentario en `bootstrapUncertainty()`, caso
+     * 1 de `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`).
+     *
+     * @param list<float> $values
+     */
+    private function standardDeviation(array $values): ?float
+    {
+        $n = count($values);
+
+        if ($n < 2) {
+            return null;
+        }
+
+        $mean = array_sum($values) / $n;
+        $variance = array_sum(array_map(static fn (float $v): float => ($v - $mean) ** 2, $values)) / ($n - 1);
+
+        return round(sqrt($variance), 3);
     }
 
     /**

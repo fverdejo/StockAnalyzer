@@ -180,6 +180,56 @@ final class PolicyReplayEpisodeSimulatorTest extends TestCase
         self::assertSame('unresolved_gap', $episode['exit_reason']);
     }
 
+    /**
+     * Hallazgo real de Astra (`REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`,
+     * caso 3, prioridad inmediata): un stop YA cruzado dentro del tramo
+     * disponible no puede borrarse solo porque el comparador todavia no
+     * llega a la sesion de valoracion. Fixture: compra a 100, stop 90
+     * cruzado dentro del historico disponible, pero el historico se acaba
+     * antes de la sesion 20 -- el retorno gestionado conocido (-10%, no
+     * 0,00%) debe conservarse.
+     */
+    public function testUnStopYaConocidoSeConservaAunqueElComparadorQuedePendiente(): void
+    {
+        $history = $this->flatHistory([
+            15 => new HistoricalQuote(new DateTimeImmutable('2024-01-16'), 100.0, 100.5, 85.0, 90.0, 1_000_000),
+        ], length: 18); // entrada en 11, valoracion en 31: el historico se acaba en el indice 17
+
+        $timeline = [$this->point($history, 10, 'BUY', 90.0)];
+        $asOf = $history[17]->getDate();
+
+        $result = $this->simulator()->replay('ACME', $timeline, $history, $asOf);
+
+        $episode = $result['trades'][0];
+        self::assertTrue($episode['pending'], 'El PAR sigue pendiente: el comparador no tiene desenlace.');
+        self::assertSame('stop_loss', $episode['exit_reason']);
+        self::assertSame(15, $episode['exit_index']);
+        self::assertNotNull($episode['managed_return'], 'El retorno gestionado YA se conoce, no debe perderse.');
+        self::assertLessThan(0.0, $episode['managed_return'], 'La perdida conocida del stop no puede convertirse en 0,00%.');
+        self::assertNull($episode['baseline_return'], 'El comparador SI sigue desconocido -- null, no cero.');
+    }
+
+    /**
+     * Sin ningun stop cruzado y sin datos suficientes para la valoracion,
+     * el episodio no tiene NINGUN desenlace conocido todavia -- el
+     * retorno gestionado debe ser `null` (desconocido), nunca `0.0`
+     * (que afirmaria "se sabe que el resultado es cero").
+     */
+    public function testSinStopYSinDatosSuficientesElRetornoGestionadoEsDesconocidoNoCero(): void
+    {
+        $history = $this->flatHistory(length: 18);
+        $timeline = [$this->point($history, 10, 'BUY', 90.0)];
+        $asOf = $history[17]->getDate();
+
+        $result = $this->simulator()->replay('ACME', $timeline, $history, $asOf);
+
+        $episode = $result['trades'][0];
+        self::assertTrue($episode['pending']);
+        self::assertSame('pending_future', $episode['exit_reason']);
+        self::assertNull($episode['managed_return']);
+        self::assertNull($episode['baseline_return']);
+    }
+
     public function testUnaCandidataFueraDelIndiceNoAbreEpisodioYSeCuentaAparte(): void
     {
         $history = $this->flatHistory();

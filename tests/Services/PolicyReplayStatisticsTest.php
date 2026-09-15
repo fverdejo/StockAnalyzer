@@ -241,6 +241,36 @@ final class PolicyReplayStatisticsTest extends TestCase
     }
 
     /**
+     * Regresion de un hallazgo real de Astra
+     * (`REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`, caso 1, prioridad
+     * inmediata): `se_bootstrap` se calculaba con `pairedStats()`, que
+     * divide la desviacion tipica por `sqrt(n)` -- correcto para el error
+     * estandar de una MEDIA de observaciones i.i.d., pero aqui los
+     * valores YA son las medias de las 5.000 replicas del bootstrap, cuya
+     * desviacion tipica ES la incertidumbre buscada. El bug encogia
+     * `se_bootstrap` por un factor de `sqrt(5000)~=70,71` -- verificado
+     * por Astra reconstruyendo los mismos sorteos con la misma semilla
+     * sobre datos reales archivados (piloto del `2026-09-15`): la
+     * desviacion real (1,084) es del mismo orden que `se_naive` (1,049),
+     * nunca la cifra que se publicaba entonces (0,015). Para datos
+     * razonablemente independientes, `se_bootstrap` no puede ser un orden
+     * de magnitud mas pequeño que `se_naive`.
+     */
+    public function testSeBootstrapNoSeEncogePorLaRaizDeLasReplicas(): void
+    {
+        $trades = $this->manyIndependentTrades(40);
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)], self::SEED);
+
+        self::assertNotNull($summary['se_bootstrap']);
+        self::assertNotNull($summary['se_naive']);
+        self::assertGreaterThan(
+            $summary['se_naive'] / 10,
+            $summary['se_bootstrap'],
+            'se_bootstrap no puede ser un orden de magnitud mas pequeño que se_naive para datos casi independientes -- señal de que se volvio a dividir por sqrt(numero de replicas).'
+        );
+    }
+
+    /**
      * Consenso de `auditor-estadistico` (`2026-09-15`): por debajo de 30
      * operaciones EFECTIVAS (tras corregir por dependencia temporal), el
      * resultado se marca no informativo -- aqui ni siquiera hay 30

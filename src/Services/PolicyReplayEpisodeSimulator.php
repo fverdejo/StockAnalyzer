@@ -56,16 +56,52 @@ use StockAnalyzer\Services\Concerns\StopLossExitCalculator;
  *   nunca sigue esperando mas alla de esas veinte sesiones.
  * - Comparador: mantiene hasta la MISMA fecha de valoracion (igual que
  *   siempre).
- * - Si la fecha de valoracion todavia no ha ocurrido (el historico
- *   congelado por `$asOf` no llega tan lejos, y la propia fecha de corte
- *   tampoco): episodio pendiente en AMBOS brazos, `exit_reason='pending_future'`.
- * - Si la fecha de valoracion YA deberia haber ocurrido (el historico del
- *   TICKER se acaba antes de `$asOf`, tipico de un deslistado/suspension)
- *   pero el dato no llega: `exit_reason='unresolved_gap'` -- distinto de
- *   `pending_future`, para no confundir "todavia no ha pasado" con "deberia
- *   haber datos y no los hay" (Astra: "no borrarlo silenciosamente").
- *   Ambos casos se marcan `pending=true` (excluidos de la metrica
- *   primaria, mismo criterio que `PolicyReplaySimulator`).
+ * - **Corregido el `2026-09-16`** (hallazgo real de Astra,
+ *   `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`, caso 3): si la
+ *   fecha de valoracion todavia no ha ocurrido (no hay datos hasta ahi),
+ *   el brazo GESTIONADO puede seguir teniendo un desenlace CONOCIDO (un
+ *   stop ya cruzado dentro del tramo disponible) aunque el COMPARADOR
+ *   siga sin resolver -- ese retorno conocido NUNCA se descarta ni se
+ *   sustituye por 0,00% (la version anterior lo hacia, borrando una
+ *   perdida real). El PAR se marca `pending=true` igualmente (la
+ *   comparacion necesita ambos brazos), pero `managed_return` queda con
+ *   su valor real y solo `baseline_return` queda `null` (desconocido de
+ *   verdad, nunca cero).
+ * - **Maduracion del episodio, tambien corregida el `2026-09-16`**: la
+ *   distincion entre `pending_future` (la fecha de valoracion todavia no
+ *   ha podido ocurrir) y `unresolved_gap` (ya deberia haber ocurrido,
+ *   pero faltan datos -- deslistado, suspension, hueco de proveedor) ya
+ *   NO se infiere de "cuantos dias hace de la ultima vela disponible"
+ *   (una regla de siete dias que Astra demuestra rota en los dos
+ *   sentidos: marca hueco cuando en realidad la valoracion sigue siendo
+ *   futura, y marca futuro cuando en realidad la valoracion ya vencio).
+ *   Se compara directamente la fecha de valoracion PREVISTA -proyectada
+ *   desde la entrada (20 sesiones ~ 28 dias naturales, una estimacion que
+ *   solo puede quedarse CORTA si hay festivos de por medio, nunca larga)-
+ *   contra `$asOf`. Ambos casos se marcan `pending=true` (excluidos de la
+ *   metrica primaria, mismo criterio que `PolicyReplaySimulator`).
+ *
+ * **Limitacion conocida, sin corregir todavia** (caso 2 de la misma
+ * auditoria): la fecha de valoracion se calcula como `entryIndex + 20`
+ * sobre el HISTORICO PROPIO de este ticker, sin verificar que esas 20
+ * posiciones de array representen de verdad 20 sesiones bursatiles reales
+ * sin huecos -- si al ticker le falta una vela intermedia (hueco de
+ * proveedor, no un festivo: los festivos estan ausentes de TODOS los
+ * tickers por igual y no desplazan nada), la valoracion cae un dia mas
+ * tarde de lo debido y puede fabricar una diferencia artificial. Medido
+ * sobre datos reales antes de decidir la urgencia (2026-09-16, sin red,
+ * 150 tickers muestreados de `point_in_time_universe.txt`): solo 1/150
+ * (0,67%) tiene algun hueco interno real, y es `LEG`, el mismo ticker que
+ * ya falla de forma conocida en cada medicion completa ("Yahoo response is
+ * incomplete"). Corregirlo de verdad exige un calendario de referencia
+ * (compartido entre tickers, como ya hace `sampleOnCalendar()`, o un
+ * calendario de festivos de EEUU) -- una comprobacion local ingenua
+ * (huecos de calendario dia a dia) NO basta: un festivo real tambien deja
+ * un hueco de varios dias en el historico de un ticker, y confundirlo con
+ * un hueco de datos marcaria como "no resuelta" a la mayoria de las
+ * ventanas de 20 sesiones (casi todas contienen un festivo). Dado el
+ * impacto medido tan bajo, se documenta y se aplaza en vez de improvisar
+ * una correccion parcial que podria ser peor que el problema.
  *
  * Reutiliza `Services\PolicyReplayStatistics` sin cambios: al estar
  * SIEMPRE acotada a 20 sesiones (~28 dias naturales), la ventana de
@@ -98,20 +134,12 @@ final class PolicyReplayEpisodeSimulator
     /**
      * @param list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?\StockAnalyzer\DTO\FundamentalChangeAssessment, entry_price: ?float, eligible: bool}> $timeline ver BacktestingService::replayTimeline()
      * @param list<HistoricalQuote> $history ver BacktestingService::historyFor(), MISMO $asOf que generó $timeline
-     * @param DateTimeImmutable $asOf MISMO corte que se uso para congelar $timeline/$history -- necesario para distinguir "todavia no ha pasado" de "deberia haber datos y faltan" en los episodios sin resolver.
-     * @return array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}
+     * @param DateTimeImmutable $asOf MISMO corte que se uso para congelar $timeline/$history -- necesario para saber si la fecha de valoracion PREVISTA de un episodio ya deberia haber ocurrido (Entrega/caso 3 de `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`).
+     * @return array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: ?float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}
      */
     public function replay(string $ticker, array $timeline, array $history, DateTimeImmutable $asOf): array
     {
         $historyCount = count($history);
-        // Buffer de una semana natural: `$asOf` puede caer en fin de
-        // semana/festivo mientras la ultima vela real del ticker es de
-        // unos dias antes, sin que eso signifique que dejo de cotizar --
-        // solo se trata como "datos que faltan" (deslistado/suspension)
-        // si el hueco es claramente mayor que eso.
-        $lastAvailableDate = $historyCount > 0 ? $history[$historyCount - 1]->getDate() : null;
-        $tickerDataEndsBeforeAsOf = $lastAvailableDate !== null && $lastAvailableDate < $asOf->modify('-7 days');
-
         $episodes = [];
         $excludedByMembership = 0;
 
@@ -139,7 +167,7 @@ final class PolicyReplayEpisodeSimulator
                 $entryIndex,
                 (float) $point['entry_price'],
                 (float) $point['stop_loss'],
-                $tickerDataEndsBeforeAsOf
+                $asOf
             );
         }
 
@@ -154,31 +182,101 @@ final class PolicyReplayEpisodeSimulator
     }
 
     /**
+     * Corregido el `2026-09-16` (hallazgo real de Astra,
+     * `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`, caso 3): la
+     * version anterior, en cuanto el historico congelado no llegaba a la
+     * fecha de valoracion, devolvia `managed_return=0.0` sin siquiera
+     * buscar si el stop YA se habia cruzado dentro del tramo disponible --
+     * borrando una perdida (o ganancia) YA CONOCIDA del brazo gestionado
+     * solo porque el brazo COMPARADOR seguia sin resolver. Reproducido por
+     * Astra: stop cruzado el 29/04 (retorno conocido -10%), comparador sin
+     * llegar a la sesion 20 -- el simulador devolvia 0, no -10%.
+     *
+     * Ahora se busca el stop SIEMPRE, con independencia de si hay datos
+     * suficientes para el comparador: si se encuentra, `managed_return` es
+     * el valor REAL conocido (nunca 0.0 salvo que el calculo de verdad de
+     * 0,00%); solo `baseline_return` queda `null` (desconocido de verdad,
+     * no cero) mientras el comparador siga sin desenlace. El PAR sigue
+     * `pending=true` (excluido de la metrica primaria, ya que la
+     * comparacion necesita AMBOS brazos), pero el valor gestionado ya no
+     * se pierde -- `PolicyReplayStatistics` lo recoge igual que antes en
+     * `pending_avg_managed_return`.
+     *
+     * Tambien corregido: la distincion `pending_future` vs
+     * `unresolved_gap` ya NO se infiere de "cuantos dias hace de la
+     * ultima vela" (una regla de 7 dias que Astra demuestra rota en
+     * ambos sentidos -- ver el docblock de la clase). Se compara
+     * directamente la fecha de valoracion PREVISTA (proyectada desde la
+     * entrada, no desde el final del historico) contra `$asOf`: si la
+     * prevista es POSTERIOR a `$asOf`, todavia no ha podido ocurrir
+     * (`pending_future`); si es ANTERIOR O IGUAL, ya deberia haber
+     * ocurrido y faltan datos (`unresolved_gap`).
+     *
      * @param list<HistoricalQuote> $history
-     * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}
+     * @return array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: ?float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}
      */
     private function buildEpisode(
         array $history,
         int $entryIndex,
         float $entryPrice,
         float $adoptedStop,
-        bool $tickerDataEndsBeforeAsOf
+        DateTimeImmutable $asOf
     ): array {
-        $entryDate = $history[$entryIndex]->getDate()->format('Y-m-d');
+        $entryDate = $history[$entryIndex]->getDate();
+        $entryDateIso = $entryDate->format('Y-m-d');
+        $lastIndex = count($history) - 1;
         $valuationIndex = $entryIndex + self::VALUATION_HORIZON_DAYS;
+        // Estimacion conservadora de la fecha de valoracion PREVISTA:
+        // veinte sesiones bursatiles equivalen a cuatro semanas de cinco
+        // dias si no hay ningun festivo de por medio -- 28 dias
+        // naturales. Un festivo real solo puede alargar la fecha
+        // verdadera, nunca acortarla, asi que esta estimacion nunca
+        // adelanta una valoracion que en la realidad aun no ha llegado.
+        $projectedValuationDate = $entryDate->modify('+28 days');
 
-        if ($valuationIndex >= count($history)) {
+        // Busca el stop en TODO el tramo disponible (hasta la valoracion
+        // o hasta donde llegue el dato, lo que sea antes) -- el desenlace
+        // del brazo GESTIONADO puede conocerse aunque el COMPARADOR siga
+        // sin resolver.
+        $searchUntil = min($valuationIndex, $lastIndex);
+        $breach = $this->walkForStopBreach($history, $entryIndex, $searchUntil, $adoptedStop);
+
+        if ($valuationIndex > $lastIndex) {
+            $isMature = $projectedValuationDate <= $asOf;
+            $exitReason = $isMature ? 'unresolved_gap' : 'pending_future';
+
+            if ($breach !== null) {
+                [$day, $exitPrice] = $breach;
+
+                return [
+                    'entry_date' => $entryDateIso,
+                    'entry_index' => $entryIndex,
+                    'entry_price' => round($entryPrice, 4),
+                    'exit_date' => $history[$day]->getDate()->format('Y-m-d'),
+                    'exit_index' => $day,
+                    'exit_price' => round($exitPrice, 4),
+                    'exit_reason' => 'stop_loss',
+                    'pending' => true,
+                    'holding_days' => $day - $entryIndex,
+                    'managed_return' => $this->netReturn($entryPrice, $exitPrice),
+                    'baseline_return' => null,
+                    'baseline_exit_date' => null,
+                    'baseline_pending' => true,
+                    'revisar_tesis_events' => 0,
+                ];
+            }
+
             return [
-                'entry_date' => $entryDate,
+                'entry_date' => $entryDateIso,
                 'entry_index' => $entryIndex,
                 'entry_price' => round($entryPrice, 4),
-                'exit_date' => $entryDate,
+                'exit_date' => $entryDateIso,
                 'exit_index' => $entryIndex,
                 'exit_price' => round($entryPrice, 4),
-                'exit_reason' => $tickerDataEndsBeforeAsOf ? 'unresolved_gap' : 'pending_future',
+                'exit_reason' => $exitReason,
                 'pending' => true,
                 'holding_days' => 0,
-                'managed_return' => 0.0,
+                'managed_return' => null,
                 'baseline_return' => null,
                 'baseline_exit_date' => null,
                 'baseline_pending' => true,
@@ -186,7 +284,6 @@ final class PolicyReplayEpisodeSimulator
             ];
         }
 
-        $breach = $this->walkForStopBreach($history, $entryIndex, $valuationIndex, $adoptedStop);
         $valuationClose = $history[$valuationIndex]->getClose();
         $valuationDate = $history[$valuationIndex]->getDate()->format('Y-m-d');
         $baselineReturn = $this->netReturn($entryPrice, $valuationClose);
@@ -195,7 +292,7 @@ final class PolicyReplayEpisodeSimulator
             [$day, $exitPrice] = $breach;
 
             return [
-                'entry_date' => $entryDate,
+                'entry_date' => $entryDateIso,
                 'entry_index' => $entryIndex,
                 'entry_price' => round($entryPrice, 4),
                 'exit_date' => $history[$day]->getDate()->format('Y-m-d'),
@@ -213,7 +310,7 @@ final class PolicyReplayEpisodeSimulator
         }
 
         return [
-            'entry_date' => $entryDate,
+            'entry_date' => $entryDateIso,
             'entry_index' => $entryIndex,
             'entry_price' => round($entryPrice, 4),
             'exit_date' => $valuationDate,
@@ -229,5 +326,4 @@ final class PolicyReplayEpisodeSimulator
             'revisar_tesis_events' => 0,
         ];
     }
-
 }

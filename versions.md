@@ -7965,3 +7965,49 @@ Incluye:
 - `storage/scratch/policy_replay_full_2026-09-15.php` (no committeado): reescrito con archivado incremental por ticker.
 
 Verificado: entorno restaurado (`ddev start`) y suite completa en verde (`ddev exec vendor/bin/phpunit` -- **741 tests, 2.145 assertions, OK**, sin cambios de codigo de produccion en esta entrada). `config/weights.php` no se toca. La medicion completa (caso 5 a escala real) sigue pendiente.
+
+---
+
+## 2026-09-16 - `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`: la incertidumbre del bootstrap se dividia dos veces (caso 1), mas un episodio podia borrar un desenlace ya conocido (caso 3)
+
+Estado: casos 1 y 3 (los dos de "prioridad inmediata") corregidos y probados. Caso 2 (calendario) medido sobre datos reales y aplazado con razones explicitas -- ver mas abajo. Casos 4, 5 y 6 reconocidos, con correccion parcial o aplazamiento documentado.
+
+Astra continua auditando el trabajo del `2026-09-14`/`15` (revision sobre el commit `e932c27`) y encuentra un error de formula serio en el bootstrap, mas dos problemas reales en `PolicyReplayEpisodeSimulator` que ninguno de mis 44 tests de entonces cubria.
+
+### Caso 1 (prioridad inmediata) -- `se_bootstrap` se dividia por `sqrt(5.000)` de mas
+
+`PolicyReplayStatistics::bootstrapUncertainty()` calculaba `se_bootstrap` con `pairedStats($replicateMeans)`, que divide la desviacion tipica por `sqrt(n)` -- correcto para el error estandar de una MEDIA de observaciones i.i.d., pero `$replicateMeans` YA SON las medias de las 5.000 replicas del bootstrap: su desviacion tipica ES la incertidumbre bootstrap por definicion (documentacion oficial de `scipy.stats.bootstrap`, citada por Astra). Dividirla otra vez por `sqrt(5000)~=70,71` encogia `se_bootstrap` por ese mismo factor.
+
+Astra reconstruyo los mismos sorteos con la misma semilla sobre los dos pilotos ya archivados del `2026-09-15`: la desviacion REAL de las replicas (0,227825-1,083643) es del mismo orden que `se_naive`, nunca la cifra publicada entonces (0,002-0,015). **Esto invalida la explicacion que yo mismo habia escrito ese dia** ("el bootstrap colapsa por falta de resolucion temporal en un piloto corto") -- la desviacion real del piloto de posiciones (1,084) es casi identica a `se_naive` (1,049): no habia ningun colapso real, era este bug de formula.
+
+**Correccion**: nuevo metodo `standardDeviation()` (desviacion tipica muestral, SIN dividir por `sqrt(n)`), usado para `se_bootstrap` en vez de `pairedStats()`. Verificado recalculando los dos pilotos archivados (`storage/scratch/recompute_pilots_2026-09-16.php`, no committeado): `se_bootstrap` pasa de 0,015 a 1,084 (piloto de posiciones) y de 0,002 a 0,134 (piloto de episodios) -- coincide con la reconstruccion independiente de Astra. Los percentiles del intervalo de confianza NO cambian (nunca dependieron de esta formula, tal como señalaba Astra). La propia salvaguarda `bootstrap_has_enough_resolution` (añadida el `2026-09-15` para un sintoma que en realidad era este bug) se CONSERVA por ahora -- Astra: "corregir esta formula no demuestra que sobre ninguna" -- pendiente de revisar su justificacion por separado con el resultado ya corregido (relacionado con el caso 4, ver mas abajo).
+
+### Caso 3 (prioridad inmediata) -- un episodio con stop ya conocido se resetaba a retorno cero
+
+`PolicyReplayEpisodeSimulator::buildEpisode()`, en cuanto el historico disponible no llegaba a la sesion de valoracion, devolvia `managed_return=0.0` SIN buscar si el stop ya se habia cruzado dentro del tramo disponible. Fixture de Astra: compra a 100, stop 90 cruzado el 29/04 (perdida real conocida, -10%), comparador sin llegar todavia a la sesion 20 -- el simulador publicaba retorno gestionado **0**, no -10%.
+
+Astra señala tambien que la distincion `pending_future`/`unresolved_gap` (`lastAvailableDate < asOf - 7 dias`) esta rota en los dos sentidos: una valoracion futura con datos antiguos se etiquetaba erroneamente como hueco, y una valoracion YA vencida con la ultima vela reciente se etiquetaba erroneamente como futura.
+
+**Correccion**: el stop se busca SIEMPRE en el tramo disponible, con independencia de si el comparador tiene datos para resolverse -- si se encuentra, `managed_return` es el valor REAL (nunca 0.0 salvo que de verdad sea 0,00%); el PAR sigue `pending=true` (la comparacion sigue necesitando ambos brazos), pero ya no se pierde el dato conocido. `managed_return`/`baseline_return` pasan a `?float`: `null` explicito para "desconocido de verdad", reservando `0.0` para un retorno calculado que de verdad sale cero. La distincion de madurez se rehace comparando la fecha de valoracion PREVISTA (entrada + 28 dias naturales, una estimacion que solo puede quedarse corta con festivos de por medio, nunca larga) directamente contra `$asOf`, sin ninguna regla de "dias desde la ultima vela".
+
+### Caso 2 -- un hueco de datos en un ticker puede fabricar una ventaja ficticia (medido, aplazado con razones)
+
+`entryIndex + 20` se calcula sobre el HISTORICO PROPIO de cada ticker, sin verificar que esas 20 posiciones de array representen 20 sesiones bursatiles reales sin huecos. Astra reproduce con un fixture sintetico: quitar UNA vela plana intermedia desplaza la fecha de valoracion un dia y fabrica una diferencia de +10pp que no deberia existir.
+
+**Medido sobre datos reales antes de decidir la urgencia** (`storage/scratch/measure_ticker_gaps_2026-09-16.php`, no committeado, sin red: 150 tickers muestreados de `point_in_time_universe.txt`, comparando el historico propio de cada uno contra un calendario de "mercado abierto" construido con la union de fechas que tiene al menos el 90% de la muestra): **solo 1/150 tickers (0,67%) tiene algun hueco interno real, y es `LEG`** -- el MISMO ticker que ya fallaba con "Yahoo response is incomplete" en cada medicion completa de esta semana. Los festivos/fines de semana NO cuentan como hueco (estan ausentes de TODOS los tickers por igual, no desplazan nada).
+
+**Por que se aplaza la correccion de codigo, no solo por falta de tiempo**: una comprobacion local ingenua (marcar cualquier hueco de calendario dia a dia dentro de la ventana) NO sirve -- un festivo real TAMBIEN deja un hueco de varios dias en el historico de un ticker, indistinguible localmente de un hueco de datos. Con ~10 festivos de EEUU al año y ventanas de 20 sesiones (~4 semanas), la mayoria de las ventanas contienen al menos un festivo: marcar todas esas como "no resueltas" destruiria la mayor parte de la potencia estadistica para evitar un problema que, medido, afecta a 1 ticker de 150. La correccion correcta exige un calendario de referencia real -- compartido entre tickers (como ya hace `sampleOnCalendar()`) o un calendario de festivos de EEUU calculado por reglas -- que es alcance mayor, documentado como pendiente en `roadmap.md`.
+
+### Casos 4, 5 y 6 -- reconocidos, sin cambio de codigo en esta entrada
+
+- **Caso 4 (el remuestreo infrarrepresenta los extremos del calendario)**: limitacion conocida del moving block bootstrap sin tratamiento circular de bordes (documentacion de `arch`, citada por Astra) -- Astra la presenta como "una validacion del diseño estadistico, posterior a corregir la formula", no como un defecto de implementacion. Pendiente de evaluar un tratamiento circular/estacionario en una consulta futura con `auditor-estadistico`.
+- **Caso 5 (reanudacion verificable del archivado)**: el script ya escribe un fichero por ticker (correccion del `2026-09-15`), pero no reanuda desde un intento anterior ni valida compatibilidad -- Astra da una propuesta detallada de 5 puntos (manifiesto al inicio, reanudacion explicita con limite de tickers, escritura atomica, resumen reconstruible offline, finalizacion solo con todos los simbolos contabilizados). No implementado todavia; los 232 ficheros parciales del intento anterior se conservan sin mezclarlos con nada nuevo.
+- **Caso 6 (E/S por ticker, y correccion de mi propia afirmacion sobre `memory_get_usage()`)**: Astra corrige, con razon, que `memory_get_usage(true)` no mide toda la memoria residente del proceso (RSS) -- mi conclusion del `2026-09-15` ("PHP nunca fue el problema") fue mas categorica de lo que esa metrica permite afirmar. Se acepta la correccion explicitamente: la causa raiz del fallo de infraestructura sigue sin demostrarse con certeza, solo hay indicios (contenedores parados, VM con 6,5GB). Pendiente: registrar RSS real y eventos de contenedor en el proximo intento, antes de concluir nada sobre la causa.
+
+Incluye:
+
+- `src/Services/PolicyReplayStatistics.php`: nuevo metodo `standardDeviation()`; `se_bootstrap` corregido; `managed_return` del tipo de dato de entrada pasa a `?float`.
+- `src/Services/PolicyReplayEpisodeSimulator.php`: `buildEpisode()` reescrito -- busca el stop antes de decidir si hay datos suficientes; `managed_return`/`baseline_return` pasan a `?float`; madurez del episodio recalculada contra la fecha de valoracion prevista, no contra la antigüedad de la ultima vela.
+- Tests: `PolicyReplayStatisticsTest.php` (+1: `se_bootstrap` no se encoge por la raiz de las replicas), `PolicyReplayEpisodeSimulatorTest.php` (+2: stop conocido se conserva con comparador pendiente, sin stop ni datos el retorno es desconocido no cero).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **744 tests, 2.158 assertions, OK** (sube desde 741/2.145: 3 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
