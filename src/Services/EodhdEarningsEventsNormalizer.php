@@ -49,6 +49,21 @@ use StockAnalyzer\DTO\CalendarEarningsEvent;
  * esos casos (confirmado en las 414), asi que aqui se hace lo mismo: un
  * `estimate` de 0 no se puede usar como denominador de un porcentaje sin
  * inventar una escala.
+ *
+ * **Corregido el 2026-09-16** (hallazgo real de Astra,
+ * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A3): antes, CUALQUIER
+ * payload sin una clave `earnings` de tipo lista (ausente, de otro tipo, o
+ * un cuerpo de error como `{"error":"..."}`) se trataba exactamente igual
+ * que `{"earnings":[]}` -- devolvia `[]` en silencio. `replaceForTicker()`
+ * BORRA todas las filas previas del ticker antes de insertar las nuevas, asi
+ * que una captura mal formada (un fallo de red devuelto como JSON, una
+ * respuesta de la seccion equivocada) podia BORRAR un historico de eventos
+ * valido y dejarlo vacio para siempre, sin ningun error visible. Ahora se
+ * distingue: `{"earnings":[]}` (clave presente, tipo lista, posiblemente
+ * vacia) es el UNICO vacio valido; cualquier otra forma lanza una excepcion
+ * explicita ANTES de llegar a `replaceForTicker()` -- el llamador
+ * (`bin/normalize-eodhd-earnings-events.php`) ya trata cualquier excepcion
+ * de este metodo como error de ticker sin tocar las filas existentes.
  */
 final class EodhdEarningsEventsNormalizer
 {
@@ -74,13 +89,25 @@ final class EodhdEarningsEventsNormalizer
         }
 
         if (!is_array($payload)) {
-            return [];
+            throw new InvalidArgumentException(sprintf(
+                'El JSON de calendar/earnings de EODHD para %s no es un objeto/lista -- no se puede distinguir de un vacio valido, se trata como captura invalida.',
+                $ticker
+            ));
         }
 
         $earnings = $payload['earnings'] ?? null;
 
         if (!is_array($earnings)) {
-            return [];
+            // Vacio valido es EXCLUSIVAMENTE {"earnings": []} (clave
+            // presente, tipo lista). Cualquier otra forma -- clave ausente,
+            // tipo distinto (p.ej. `"unavailable"`), o un cuerpo de error
+            // sin esa clave -- es una captura que no se puede normalizar
+            // con confianza: mejor fallar aqui que devolver un vacio
+            // indistinguible del real (ver docblock de la clase).
+            throw new InvalidArgumentException(sprintf(
+                'El payload de calendar/earnings de EODHD para %s no tiene una seccion "earnings" valida (clave ausente o de tipo distinto a lista) -- no se trata como vacio valido.',
+                $ticker
+            ));
         }
 
         /** @var array<string,CalendarEarningsEvent> $eventsByFiscalPeriod */

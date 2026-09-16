@@ -27,6 +27,15 @@ use StockAnalyzer\Services\EodhdEarningsEventsNormalizer;
  * reciente de ese ticker (`EarningsEventsRepository::isNormalizedFromSource()`).
  * `--force` ignora esa comprobacion y renormaliza igualmente.
  *
+ * Corregido el 2026-09-16 (hallazgo real de Astra,
+ * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A2): antes se
+ * tomaba el hash/fecha de `allVersionsFor()` (ordenado por el `fetched_at`
+ * del BLOB) y el contenido de `latestFor()` (ordenado por OBSERVACION) --
+ * en una secuencia A->B->A eso escribia el contenido real de A junto al
+ * hash y la fecha de B. Ahora todo sale de una unica llamada a
+ * `latestObservationFor()`, que resuelve contenido, hash y fecha SIEMPRE
+ * por la misma observacion.
+ *
  * Uso:
  *   php bin/normalize-eodhd-earnings-events.php
  *   php bin/normalize-eodhd-earnings-events.php --tickers="AAPL MSFT"
@@ -84,25 +93,17 @@ foreach ($tickers as $index => $ticker) {
     $ticker = (string) $ticker;
     $prefix = sprintf('[%3d/%3d] %-12s ', $index + 1, count($tickers), $ticker);
 
-    // `allVersionsFor()` trae metadatos (sin el payload) de TODAS las
-    // versiones archivadas del ticker, de cualquier api_version/section;
-    // se filtra aqui a calendar/earnings y se toma la primera (ya viene
-    // ordenada de mas reciente a mas antigua).
-    $calendarVersions = array_values(array_filter(
-        $versions->allVersionsFor($ticker),
-        static fn (array $v): bool => $v['api_version'] === 'calendar' && $v['section'] === 'earnings'
-    ));
+    $observation = $versions->latestObservationFor($ticker, 'calendar', 'earnings');
 
-    if ($calendarVersions === []) {
+    if ($observation === null) {
         echo $prefix . 'sin version calendar/earnings archivada, se salta' . PHP_EOL;
         ++$skippedNoVersion;
 
         continue;
     }
 
-    $latest = $calendarVersions[0];
-    $sourceHash = $latest['payload_hash'];
-    $capturedAt = new DateTimeImmutable($latest['fetched_at']);
+    $sourceHash = $observation['payload_hash'];
+    $capturedAt = new DateTimeImmutable($observation['observed_at_utc']);
 
     if (!$force && $repository->isNormalizedFromSource($ticker, $sourceHash)) {
         echo $prefix . 'ya normalizado desde esta captura, se salta' . PHP_EOL;
@@ -112,16 +113,7 @@ foreach ($tickers as $index => $ticker) {
     }
 
     try {
-        $json = $versions->latestFor($ticker, 'calendar', 'earnings');
-
-        if ($json === null) {
-            // No deberia ocurrir tras confirmar $calendarVersions !== [],
-            // salvo una condicion de carrera; se trata como error legible
-            // en vez de romper el lote completo.
-            throw new RuntimeException('latestFor() no devolvio payload pese a haber una version archivada.');
-        }
-
-        $events = $normalizer->parse($ticker, $json);
+        $events = $normalizer->parse($ticker, $observation['payload']);
         $written = $repository->replaceForTicker($ticker, $events, $sourceHash, $capturedAt);
 
         if ($written === 0) {

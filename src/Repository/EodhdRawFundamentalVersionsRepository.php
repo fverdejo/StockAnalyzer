@@ -190,6 +190,51 @@ class EodhdRawFundamentalVersionsRepository
     }
 
     /**
+     * La OBSERVACION mas reciente de un `(ticker, api_version, section)`
+     * completa: contenido, hash y fecha observada JUNTOS, en una unica
+     * lectura consistente. Existe para corregir un bug real senalado por
+     * Astra (`AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A2):
+     * `bin/normalize-eodhd-earnings-events.php` combinaba el hash/fecha de
+     * `allVersionsFor()` (ordenado por el `fetched_at` del BLOB, que NO se
+     * actualiza cuando un blob ya existente se reutiliza -- ver
+     * `store()`) con el contenido de `latestFor()` (ordenado por
+     * OBSERVACION) -- en una secuencia A->B->A eso escribia el contenido
+     * real de A junto al hash y la fecha de B, una procedencia que no
+     * corresponde a ningun estado real. Este metodo es la UNICA fuente de
+     * verdad para ambas cosas a la vez, resuelta siempre por observacion
+     * (igual que `latestFor()`), para que no puedan volver a desincronizarse.
+     *
+     * @return array{payload: string, payload_hash: string, observed_at_utc: string}|null
+     */
+    public function latestObservationFor(string $ticker, string $apiVersion, string $section): ?array
+    {
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT v.payload_compressed, v.payload_hash, o.observed_at_utc
+             FROM eodhd_raw_fundamental_version_observations o
+             INNER JOIN eodhd_raw_fundamental_versions v ON v.id = o.version_id
+             WHERE o.ticker = :ticker AND o.api_version = :api_version AND o.section = :section
+             ORDER BY o.observed_at_utc DESC, o.id DESC
+             LIMIT 1'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'api_version' => $apiVersion,
+            'section' => $section,
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        if ($row === false || !is_string($row['payload_compressed'])) {
+            return null;
+        }
+
+        return [
+            'payload' => $this->decompress($row['payload_compressed']),
+            'payload_hash' => (string) $row['payload_hash'],
+            'observed_at_utc' => (string) $row['observed_at_utc'],
+        ];
+    }
+
+    /**
      * TODAS las OBSERVACIONES archivadas de un `(ticker, api_version,
      * section)`, de mas antigua a mas reciente, con el JSON de su blob ya
      * descomprimido. A diferencia de `latestFor()` (solo la ultima), este
@@ -263,6 +308,33 @@ class EodhdRawFundamentalVersionsRepository
             'ticker' => strtoupper($ticker),
             'api_version' => $apiVersion,
             'section' => $section,
+        ]);
+
+        return $statement->fetchColumn() !== false;
+    }
+
+    /**
+     * Igual que `hasVersion()`, pero exige ademas que el hash coincida.
+     * `hasVersion()` sola solo prueba "existe alguna captura archivada de
+     * este ticker", no que sea la MISMA que la fuente tiene ahora mismo --
+     * hallazgo real de Astra (tarea A1, punto 1): si la fila origen de
+     * `eodhd_raw_fundamentals` cambiase entre dos ejecuciones del backfill,
+     * `hasVersion()` seguiria devolviendo `true` (hay una version antigua) y
+     * el contenido nuevo nunca se archivaria. Usado por
+     * `bin/backfill-eodhd-fundamental-versions.php`.
+     */
+    public function hasVersionWithHash(string $ticker, string $apiVersion, string $section, string $payloadHash): bool
+    {
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT 1 FROM eodhd_raw_fundamental_versions
+             WHERE ticker = :ticker AND api_version = :api_version AND section = :section AND payload_hash = :payload_hash
+             LIMIT 1'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'api_version' => $apiVersion,
+            'section' => $section,
+            'payload_hash' => $payloadHash,
         ]);
 
         return $statement->fetchColumn() !== false;

@@ -30,7 +30,12 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
         string $filingDate,
         float $revenue = 416_161_000_000.0,
         float $netIncome = 112_010_000_000.0,
-        ?float $dividendsPaid = -15_421_000_000.0
+        ?float $dividendsPaid = -15_421_000_000.0,
+        ?float $ebit = 132_729_000_000.0,
+        ?float $incomeBeforeTax = 132_729_000_000.0,
+        ?float $incomeTaxExpense = 20_719_000_000.0,
+        ?float $totalStockholdersEquity = 73_733_000_000.0,
+        ?float $totalDebt = 112_377_000_000.0
     ): FiscalPeriod {
         return new FiscalPeriod(
             ticker: 'AAPL',
@@ -42,13 +47,13 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
             operatingIncome: 133_050_000_000.0,
             netIncome: $netIncome,
             ebitda: 144_427_000_000.0,
-            ebit: 132_729_000_000.0,
-            incomeBeforeTax: 132_729_000_000.0,
-            incomeTaxExpense: 20_719_000_000.0,
+            ebit: $ebit,
+            incomeBeforeTax: $incomeBeforeTax,
+            incomeTaxExpense: $incomeTaxExpense,
             epsDiluted: 7.46,
             sharesDiluted: 15_004_697_000.0,
-            totalStockholdersEquity: 73_733_000_000.0,
-            totalDebt: 112_377_000_000.0,
+            totalStockholdersEquity: $totalStockholdersEquity,
+            totalDebt: $totalDebt,
             netDebt: 76_443_000_000.0,
             totalCurrentAssets: 147_957_000_000.0,
             totalCurrentLiabilities: 165_631_000_000.0,
@@ -182,6 +187,125 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
     // ---------------------------------------------------------------
     // 3. Ausencia de dato frente a dato inventado
     // ---------------------------------------------------------------
+
+    /**
+     * Fixture literal de Astra (`AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`,
+     * tarea A4): EBIT 20, deuda 100, patrimonio 100, tasa fiscal 25% ->
+     * ROIC 7,5%. Sirve de control positivo antes de comprobar que ningun
+     * componente ausente puede mejorar este numero.
+     */
+    public function testElRoicSeCalculaConTodosLosComponentesPresentes(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([
+            $this->periodo(
+                '2025-09-27',
+                '2025-10-31',
+                ebit: 20.0,
+                incomeBeforeTax: 100.0,
+                incomeTaxExpense: 25.0,
+                totalStockholdersEquity: 100.0,
+                totalDebt: 100.0
+            ),
+        ]))->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertEqualsWithDelta(7.5, $f->getRoic(), 0.001);
+    }
+
+    /**
+     * Corregido el 2026-09-16 (hallazgo real de Astra, tarea A4): antes, la
+     * deuda ausente se sumaba como 0.0 al capital empleado, ASI QUE MENOS
+     * capital daba un ROIC mas ALTO -- una perdida de dato mejoraba el
+     * ratio. Con el mismo fixture que el control positivo pero
+     * `totalDebt: null`, el codigo anterior devolvia 15% (el
+     * `FundamentalChangeAssessor` real llegaba a informar "mejorando").
+     * Ahora debe ser `null`: capital empleado desconocido, no cero.
+     */
+    public function testLaDeudaAusenteNoMejoraElRoic(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([
+            $this->periodo(
+                '2025-09-27',
+                '2025-10-31',
+                ebit: 20.0,
+                incomeBeforeTax: 100.0,
+                incomeTaxExpense: 25.0,
+                totalStockholdersEquity: 100.0,
+                totalDebt: null
+            ),
+        ]))->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getRoic());
+    }
+
+    /** Mismo hallazgo, con el patrimonio ausente en vez de la deuda. */
+    public function testElPatrimonioAusenteNoMejoraElRoic(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([
+            $this->periodo(
+                '2025-09-27',
+                '2025-10-31',
+                ebit: 20.0,
+                incomeBeforeTax: 100.0,
+                incomeTaxExpense: 25.0,
+                totalStockholdersEquity: null,
+                totalDebt: 100.0
+            ),
+        ]))->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getRoic());
+    }
+
+    /**
+     * Corregido el 2026-09-16 (mismo hallazgo): con los impuestos ausentes,
+     * el codigo anterior asumia tasa 0% (NOPAT = EBIT completo) y devolvia
+     * 10% en vez de "desconocido". La tasa impositiva no puede asumirse
+     * cuando falta el dato -- distinto de una perdida real antes de
+     * impuestos (`incomeBeforeTax <= 0.0` con AMBOS datos presentes), que
+     * si usa 0% como convencion documentada.
+     */
+    public function testLosImpuestosAusentesNoMejoranElRoic(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([
+            $this->periodo(
+                '2025-09-27',
+                '2025-10-31',
+                ebit: 20.0,
+                incomeBeforeTax: null,
+                incomeTaxExpense: null,
+                totalStockholdersEquity: 100.0,
+                totalDebt: 100.0
+            ),
+        ]))->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getRoic());
+    }
+
+    /**
+     * Una perdida antes de impuestos REAL (dato presente, no ausente) si
+     * sigue usando la convencion de tasa 0% -- no es el caso que este
+     * hallazgo corrige.
+     */
+    public function testUnaPerdidaAntesDeImpuestosRealUsaTasaCero(): void
+    {
+        $f = (new PointInTimeFundamentalsBuilder([
+            $this->periodo(
+                '2025-09-27',
+                '2025-10-31',
+                ebit: 20.0,
+                incomeBeforeTax: -50.0,
+                incomeTaxExpense: 0.0,
+                totalStockholdersEquity: 100.0,
+                totalDebt: 100.0
+            ),
+        ]))->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertEqualsWithDelta(10.0, $f->getRoic(), 0.001); // 20/200*100, sin descuento fiscal
+    }
 
     /**
      * Con beneficios cayendo, el PEG saldria negativo y se leeria como

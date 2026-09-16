@@ -412,24 +412,50 @@ class PointInTimeFundamentalsBuilder
      * `FundamentalAnalyzer` lo trata como opcional, de modo que tenerlo
      * suma y no tenerlo no resta.
      *
+     * **Corregido el 2026-09-16** (hallazgo real de Astra,
+     * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A4): antes,
+     * `totalDebt`/`totalStockholdersEquity` ausentes se sumaban como `0.0`
+     * (`?? 0.0`) y una tasa impositiva sin datos tambien caia a `0.0` -- en
+     * ambos casos, DATO AUSENTE se convertia en el numero mas FAVORABLE
+     * posible para el ratio (menos capital empleado, menos impuesto),
+     * nunca al reves. Fixture de Astra: EBIT 20, deuda 100, patrimonio 100,
+     * tasa 25% da ROIC 7,5%; quitando solo la deuda (dejandola `null`, no
+     * cero) el codigo anterior devolvia 15%, y `FundamentalChangeAssessor`
+     * llegaba a informar "mejorando" cuando lo unico que habia pasado era
+     * perder un dato. Ahora, si falta cualquier componente necesario
+     * (deuda, patrimonio, o AMBOS lados de la tasa impositiva), el ROIC es
+     * `null` (desconocido), nunca el valor que resultaria de asumir cero --
+     * mismo criterio que ya usaba esta funcion para `$ebit === null`. La
+     * unica excepcion es la perdida antes de impuestos genuina
+     * (`incomeBeforeTax <= 0.0` con AMBOS datos presentes): ahi la tasa 0%
+     * sigue siendo la convencion documentada de esta clase, no una ausencia
+     * de dato.
+     *
      * @param TtmFigures|null $ttm
      */
     private function roic(FiscalPeriod $current, ?array $ttm): ?float
     {
-        $capital = ($current->totalDebt ?? 0.0) + ($current->totalStockholdersEquity ?? 0.0);
+        if ($current->totalDebt === null || $current->totalStockholdersEquity === null) {
+            return null;
+        }
+
+        $capital = $current->totalDebt + $current->totalStockholdersEquity;
         $ebit = $this->figure($ttm, 'ebit');
 
         if ($ebit === null || $capital <= 0.0) {
             return null;
         }
 
-        $taxRate = 0.0;
         $incomeBeforeTax = $this->figure($ttm, 'incomeBeforeTax');
         $incomeTaxExpense = $this->figure($ttm, 'incomeTaxExpense');
 
-        if ($incomeBeforeTax !== null && $incomeBeforeTax > 0.0 && $incomeTaxExpense !== null) {
-            $taxRate = max(0.0, min(1.0, $incomeTaxExpense / $incomeBeforeTax));
+        if ($incomeBeforeTax === null || $incomeTaxExpense === null) {
+            return null;
         }
+
+        $taxRate = $incomeBeforeTax > 0.0
+            ? max(0.0, min(1.0, $incomeTaxExpense / $incomeBeforeTax))
+            : 0.0;
 
         return ($ebit * (1 - $taxRate)) / $capital * 100;
     }

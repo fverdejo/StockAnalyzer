@@ -400,4 +400,46 @@ final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCas
         self::assertSame($observaciones[0]['payload_hash'], $observaciones[2]['payload_hash']);
         self::assertNotSame($observaciones[0]['payload_hash'], $observaciones[1]['payload_hash']);
     }
+
+    /**
+     * `latestObservationFor()` (correccion del 2026-09-16 a un bug real
+     * senalado por Astra, tarea A2): resuelve contenido, hash y fecha
+     * SIEMPRE de la misma observacion, para que no puedan desincronizarse
+     * como pasaba combinando `allVersionsFor()` (orden de BLOB) con
+     * `latestFor()` (orden de observacion). Mismo fixture A->B->A que ya
+     * prueba `latestFor()`: el ultimo ESTADO real es A, y su hash/fecha
+     * tienen que corresponder EXACTAMENTE a esa tercera captura, no a B.
+     */
+    public function testLatestObservationForDevuelveContenidoHashYFechaDeLaMismaObservacion(): void
+    {
+        $this->repository->store('AAPL', '{"v":"A"}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-01 10:00:00'));
+        $this->repository->store('AAPL', '{"v":"B"}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-10 10:00:00'));
+        $this->repository->store('AAPL', '{"v":"A"}', 'calendar', 'earnings', new DateTimeImmutable('2026-09-20 10:00:00'));
+
+        $observation = $this->repository->latestObservationFor('AAPL', 'calendar', 'earnings');
+
+        self::assertNotNull($observation);
+        self::assertSame('{"v":"A"}', $observation['payload']);
+        self::assertSame(hash('sha256', '{"v":"A"}'), $observation['payload_hash']);
+        self::assertSame('2026-09-20 10:00:00', $observation['observed_at_utc']);
+    }
+
+    public function testLatestObservationForDevuelveNuloSinVersiones(): void
+    {
+        self::assertNull($this->repository->latestObservationFor('AAPL', 'calendar', 'earnings'));
+    }
+
+    /**
+     * `hasVersionWithHash()` (correccion del 2026-09-16, tarea A1 punto 1):
+     * a diferencia de `hasVersion()`, no basta con que exista ALGUNA
+     * captura -- tiene que ser exactamente ese contenido.
+     */
+    public function testHasVersionWithHashExigeElHashExacto(): void
+    {
+        $this->repository->store('AAPL', '{"v":1}', 'legacy', 'full', new DateTimeImmutable('2026-09-01'));
+
+        self::assertTrue($this->repository->hasVersionWithHash('AAPL', 'legacy', 'full', hash('sha256', '{"v":1}')));
+        self::assertFalse($this->repository->hasVersionWithHash('AAPL', 'legacy', 'full', hash('sha256', '{"v":2}')));
+        self::assertFalse($this->repository->hasVersionWithHash('MSFT', 'legacy', 'full', hash('sha256', '{"v":1}')));
+    }
 }

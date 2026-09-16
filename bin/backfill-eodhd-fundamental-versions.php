@@ -30,13 +30,23 @@ use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
  * `bin/compare-fundamentals-history-v2110.php`).
  *
  * Idempotente: antes de llamar a `store()` por cada ticker se comprueba
- * `hasVersion('legacy', 'full')` -- ejecutar este script dos veces no
- * vuelve a insertar nada, la segunda vez todas las filas caen en "ya
- * existia" sin tocar la tabla. Esta comprobacion importa mas desde la
- * correccion del 2026-09-06 (ver `versions.md`): `store()` ya NO deduplica
- * en silencio la OBSERVACION (solo el blob por `payload_hash`), asi que sin
- * este guardia repetir el backfill anhadiria una observacion nueva e
- * identica por cada fila en cada repeticion.
+ * `hasVersionWithHash(..., $hashDeLaFilaOrigenActual)` -- ejecutar este
+ * script dos veces no vuelve a insertar nada, la segunda vez todas las
+ * filas caen en "ya existia" sin tocar la tabla. Esta comprobacion importa
+ * mas desde la correccion del 2026-09-06 (ver `versions.md`): `store()` ya
+ * NO deduplica en silencio la OBSERVACION (solo el blob por
+ * `payload_hash`), asi que sin este guardia repetir el backfill anhadiria
+ * una observacion nueva e identica por cada fila en cada repeticion.
+ *
+ * Corregido el 2026-09-16 (hallazgo real de Astra,
+ * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A1, punto 1): antes
+ * se usaba `hasVersion('legacy', 'full')`, que solo prueba "existe ALGUNA
+ * captura archivada", no que sea la MISMA que tiene ahora mismo la fila
+ * origen -- si `eodhd_raw_fundamentals` cambiase entre dos ejecuciones, el
+ * contenido nuevo nunca se habria archivado. Ahora se compara por hash
+ * (`hasVersionWithHash()`), y la fila origen se lee siempre (ya era una
+ * lectura de una fila a la vez, sin el riesgo de memoria del SELECT masivo
+ * documentado abajo).
  *
  * Uso:
  *   php bin/backfill-eodhd-fundamental-versions.php
@@ -79,13 +89,6 @@ foreach ($tickers as $ticker) {
     ++$index;
     $ticker = (string) $ticker;
 
-    if ($versions->hasVersion($ticker, 'legacy', 'full')) {
-        printf('[%3d/%3d] %-10s ya existia (idempotencia)%s', $index, $sourceCount, $ticker, PHP_EOL);
-        ++$alreadyExisted;
-
-        continue;
-    }
-
     $rowStatement->execute(['ticker' => $ticker]);
     $row = $rowStatement->fetch();
     $rowStatement->closeCursor();
@@ -115,6 +118,13 @@ foreach ($tickers as $ticker) {
         );
         ++$corrupted;
         $corruptedTickers[] = $ticker;
+
+        continue;
+    }
+
+    if ($versions->hasVersionWithHash($ticker, 'legacy', 'full', $recomputedHash)) {
+        printf('[%3d/%3d] %-10s ya existia (idempotencia, mismo hash)%s', $index, $sourceCount, $ticker, PHP_EOL);
+        ++$alreadyExisted;
 
         continue;
     }

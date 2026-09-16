@@ -8011,3 +8011,62 @@ Incluye:
 - Tests: `PolicyReplayStatisticsTest.php` (+1: `se_bootstrap` no se encoge por la raiz de las replicas), `PolicyReplayEpisodeSimulatorTest.php` (+2: stop conocido se conserva con comparador pendiente, sin stop ni datos el retorno es desconocido no cero).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **744 tests, 2.158 assertions, OK** (sube desde 741/2.145: 3 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-16 (segunda entrada) - `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`: procedencia de calendar/earnings desincronizada (A2), un calendario mal formado podia borrar el historico (A3), datos ausentes mejoraban el ROIC (A4)
+
+Estado: A2, A3 y A4 (las tres marcadas "prioridad inmediata"/"prioridad alta" con un bug de codigo concreto y demostrado) corregidas y probadas. De A1, los DOS bugs de guion senalados (idempotencia por hash, semantica de `--max-tickers`) estan corregidos -- la CAMPANA de descarga real (1.246 tickers, ~12.460 unidades de cuota de EODHD) sigue sin ejecutarse, ver mas abajo. A5, A6 y A7 reconocidos, sin cambio de codigo.
+
+Astra continua la auditoria del `2026-09-15` (revision sobre el commit `cec5e51`) verificando primero que las correcciones de esa entrada aguantan (47 tests/227 aserciones de replay, 48 tests/148 aserciones de fundamentales: **95 tests, 375 aserciones, OK**, una seleccion dirigida, no la suite completa) y despues abre siete tareas nuevas (A1-A7) sobre EODHD, fundamentales y el replay.
+
+### A2 (prioridad inmediata) -- el hash/fecha guardados en `earnings_events` no correspondian al contenido normalizado
+
+`bin/normalize-eodhd-earnings-events.php` tomaba el hash y la fecha de `allVersionsFor()` (ordenado por el `fetched_at` del BLOB en `eodhd_raw_fundamental_versions`, que NO se actualiza cuando un blob ya existente se reutiliza) pero el CONTENIDO de `latestFor()` (resuelto por la tabla de OBSERVACIONES, `eodhd_raw_fundamental_version_observations`). Son dos ordenes distintos desde que el repositorio permite volver a observar un contenido antiguo (correccion del `2026-09-06`).
+
+Reproduccion de Astra: captura A (EPS 1) -> captura B (EPS 2) -> captura A otra vez (EPS 1). Tras normalizar B, `earnings_events` queda con EPS 2 y `source_hash` de B. Cuando A se recaptura, el BLOB de A se reutiliza (dedup por hash) y su fila en `eodhd_raw_fundamental_versions` NUNCA actualiza su propio `fetched_at` -- asi que `allVersionsFor()` sigue viendo a B como "mas reciente" para siempre, aunque la ultima OBSERVACION real sea A. Con `--force`, el script escribia el contenido REAL de A pero con el hash y la fecha de B: una procedencia que no corresponde a ningun estado real jamas observado. Sin `--force`, el CLI cree que ya esta "al dia" con B y nunca vuelve a normalizar, dejando EPS 2 publicado indefinidamente.
+
+**Correccion**: nuevo metodo `EodhdRawFundamentalVersionsRepository::latestObservationFor()`, que devuelve contenido, hash Y fecha JUNTOS desde la MISMA fila de observacion -- ya no hay dos lecturas que puedan desincronizarse. `bin/normalize-eodhd-earnings-events.php` reescrito para usar solo este metodo. Pendiente sin cerrar (senalado tambien por Astra en la aceptacion de A2, exige un cambio de esquema mayor que se aplaza): la procedencia de un resultado VALIDO VACIO (cero eventos para un ticker) no se guarda en ningun sitio hoy, porque `replaceForTicker()` con una lista vacia no inserta ninguna fila -- `isNormalizedFromSource()` nunca puede confirmar "ya comprobado, de verdad vacio" para esos tickers.
+
+### A3 (prioridad inmediata, antes de refrescar calendarios) -- un calendario mal formado podia vaciar el historico de eventos sin ningun aviso
+
+`EodhdEarningsEventsNormalizer::parse()` trataba CUALQUIER payload sin una clave `earnings` de tipo lista exactamente igual que `{"earnings":[]}` (vacio valido): clave ausente, tipo equivocado (`"unavailable"`), o un cuerpo de error (`{"error":"..."}`) devolvian todos `[]` en silencio. `EarningsEventsRepository::replaceForTicker()` BORRA todas las filas del ticker antes de insertar las nuevas -- asi que una captura invalida (un fallo de red mal disfrazado de 200, la seccion equivocada) podia sustituir un historico real por nada, sin ningun error visible.
+
+**Correccion**: `parse()` ahora distingue explicitamente -- `{"earnings":[]}` (clave presente, tipo lista, posiblemente vacia) sigue siendo el UNICO vacio valido; cualquier otra forma lanza `InvalidArgumentException` ANTES de tocar la base. El llamante (`bin/normalize-eodhd-earnings-events.php`) ya trataba cualquier excepcion de `parse()` como error de ticker sin invocar `replaceForTicker()`, asi que el historico existente queda intacto automaticamente -- no hizo falta tocar el repositorio ni el script para conseguirlo. Probado con los cuatro cuerpos exactos del fixture de Astra (`{"earnings":[]}` vacio valido, `{"error":"..."}`, `{"earnings":"unavailable"}`, `{"trends":[]}`, los tres ultimos ahora error).
+
+### A4 (prioridad alta) -- datos de balance/impuestos ausentes hacian que el ROIC pareciera MEJOR, no peor
+
+`PointInTimeFundamentalsBuilder::roic()` sumaba `totalDebt`/`totalStockholdersEquity` ausentes como `0.0` (menos capital empleado = ROIC mas alto) y, cuando faltaban `incomeBeforeTax`/`incomeTaxExpense`, asumia tasa impositiva 0% (NOPAT = EBIT completo sin descontar impuesto = ROIC mas alto). En los dos casos, un DATO PERDIDO se convertia en el numero MAS FAVORABLE posible, nunca al reves.
+
+Fixture de Astra: EBIT 20, deuda 100, patrimonio 100, tasa 25% -> ROIC 7,5% (correcto). Quitando solo la deuda (`null`, no cero): el codigo anterior devolvia 15%. Quitando solo los impuestos: 10%. Astra confirma que el `FundamentalChangeAssessor` REAL llega a informar **"mejorando"** cuando lo unico que ha pasado es que EODHD dejo de reportar la deuda de un periodo.
+
+**Correccion**: si falta `totalDebt`, `totalStockholdersEquity`, o CUALQUIERA de los dos lados de la tasa impositiva (`incomeBeforeTax`/`incomeTaxExpense`), el ROIC es `null` (desconocido) -- mismo criterio que la funcion ya aplicaba a `$ebit === null`. Una perdida REAL antes de impuestos (`incomeBeforeTax <= 0.0` con AMBOS datos PRESENTES) sigue usando la convencion documentada de tasa 0%, sin cambios: no es una ausencia de dato. Alcance de esta correccion: solo `PointInTimeFundamentalsBuilder::roic()` (el historico point-in-time). `EodhdFiscalPeriodProvider::totalDebt()` (suma deuda corto/largo plazo, linea 359) tiene el mismo patron de "ausencia se convierte en 0.0" que senala Astra -- no se ha tocado en esta entrada porque ahi la ambiguedad es distinta (EODHD normalmente SI reporta explicitamente un componente en cero cuando de verdad lo es), queda pendiente de revisar con mas cuidado en una sesion futura.
+
+### A1 -- conservacion y cobertura de EODHD: los dos bugs de guion corregidos, la campana de descarga NO ejecutada
+
+Inventario de Astra (16/09, sin red): 1.246 simbolos del archivo original (2.184) sin copia en `eodhd_raw_fundamental_versions`/v1.1; 384 simbolos configurados sin ni siquiera archivo original.
+
+Dos bugs de guion reales, corregidos sin tocar ningun dato ni gastar cuota:
+
+- `bin/backfill-eodhd-fundamental-versions.php` usaba `hasVersion()` (solo prueba "existe ALGUNA captura archivada") para decidir si saltarse un ticker -- si la fila origen de `eodhd_raw_fundamentals` cambiase entre dos ejecuciones, el contenido nuevo nunca se habria archivado. Nuevo metodo `hasVersionWithHash()`, que exige que el hash coincida exactamente.
+- `bin/archive-eodhd-fundamentals-v11.php` aplicaba `--max-tickers=N` sobre la lista ORDENADA completa ANTES de descartar los ya archivados -- repetir el mismo `--max-tickers=N` en ejecuciones sucesivas procesaba siempre los mismos N primeros tickers (alfabeticamente), sin avanzar si ya estaban archivados. Ahora (sin `--force`) los ya archivados se descartan ANTES del recorte, asi que el mismo `--max-tickers=N` avanza naturalmente al siguiente lote pendiente en cada ejecucion.
+
+**No se ha lanzado la campana real** (copiar los 1.246 a la version versionada, completar los 1.246 de v1.1): a la tarifa documentada de EODHD (10 unidades por peticion de fundamentales), completar v1.1 para los 1.246 pendientes cuesta **~12.460 unidades de cuota**, antes de reintentos -- un gasto real contra un servicio de pago que esta auditoria no ha podido confirmar (cuota/acceso efectivos de la cuenta). Se deja preparado (guiones corregidos, reanudables de verdad) pero pendiente de que Francisco confirme que quiere gastar esa cuota antes de lanzarlo.
+
+### A5, A6 y A7 -- reconocidos, sin cambio de codigo en esta entrada
+
+- **A5 (hacer comparable y util el diagnostico fundamental junto a la señal tecnica)**: Astra reproduce que dos snapshots recientes construidos desde el MISMO informe antiguo (ejercicio cerrado en 2019, publicado en 2020) pasan el control de antigüedad de D2 (365 dias frente al limite de 730, medido desde la fecha del snapshot/precio, no desde la publicacion contable real) y el diagnostico sale "estable" con 2.418 dias de antigüedad real. Es una pieza de producto mayor (procedencia conservada hasta el diagnostico, fecha real de publicacion distinta de una aproximada, UI de la ficha) que queda documentada en `roadmap.md` para una sesion dedicada, no abordada aqui.
+- **A6 (antes de ampliar el replay: calendario compartido y cobertura medible)**: Astra demuestra con un fixture de calendario real de EEUU que la maduracion `pending_future`/`unresolved_gap` (corregida el `2026-09-16` con `entrada + 28 dias`) puede seguir clasificando mal un episodio que en realidad todavia es futuro -- un unico festivo cerca del limite hace que la estimacion (siempre por defecto, nunca por exceso) quede exactamente en el borde. Astra tambien señala un punto ciego real en mi propia medicion de 150 tickers del `2026-09-15`: el umbral del 90% se calcula sobre el total de la muestra para TODAS las fechas, asi que tickers incorporados mas tarde al universo pueden hacer que se descarten fechas antiguas del calendario de referencia aunque los tickers viejos si tengan dato ahi -- un hueco real en esa zona quedaria sin detectar. Esto no cambia la decision de aplazar la correccion completa (sigue exigiendo un calendario de referencia compartido, misma razon que el caso 2 del `2026-09-15`), pero SI invalida la confianza que se le podia dar a la cifra "1/150" como cota superior fiable -- se trata ahora como una medicion con un sesgo conocido hacia abajo, no como una medicion limpia. No se repite la medicion hasta corregir su denominador (instruccion explicita de Astra).
+- **A7 (cerrar reproducibilidad antes de buscar otra variante ganadora)**: agrupa lo ya reconocido en la entrada anterior como pendiente (extremos del bootstrap -- caso 4, reanudacion del archivado -- caso 5) y anhade precarga por ticker manteniendo las consultas as-of. Sin cambios en esta entrada; Astra insiste en que corregir estos errores por si solo no demuestra rentabilidad de ninguna variante nueva.
+
+Incluye:
+
+- `src/Repository/EodhdRawFundamentalVersionsRepository.php`: `latestObservationFor()` y `hasVersionWithHash()` (nuevos).
+- `src/Services/EodhdEarningsEventsNormalizer.php`: `parse()` lanza excepcion en vez de devolver `[]` para cualquier forma que no sea `{"earnings":[]}`.
+- `src/Services/PointInTimeFundamentalsBuilder.php`: `roic()` propaga `null` en vez de tratar deuda/patrimonio/impuestos ausentes como cero.
+- `bin/normalize-eodhd-earnings-events.php`: usa `latestObservationFor()` como unica fuente de hash/fecha/contenido.
+- `bin/backfill-eodhd-fundamental-versions.php`: idempotencia por hash exacto, no por "existe alguna version".
+- `bin/archive-eodhd-fundamentals-v11.php`: `--max-tickers` opera sobre pendientes, no sobre la lista completa.
+- Tests: `EodhdRawFundamentalVersionsRepositoryTest.php` (+3), `EodhdEarningsEventsNormalizerTest.php` (+3), `PointInTimeFundamentalsBuilderTest.php` (+5).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **755 tests, 2.179 assertions, OK** (sube desde 744/2.158: 11 tests nuevos; 1 skip preexistente sin relacion). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. No se ha ejecutado ninguna descarga real contra EODHD ni modificado ningun dato ya archivado.

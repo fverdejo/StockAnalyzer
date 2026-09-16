@@ -134,11 +134,58 @@ final class EodhdEarningsEventsNormalizerTest extends TestCase
         self::assertSame([], (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload));
     }
 
-    public function testPayloadSinClaveEarningsDevuelveListaVacia(): void
+    /**
+     * Corregido el 2026-09-16 (hallazgo real de Astra, tarea A3): antes esto
+     * devolvia `[]`, indistinguible de `{"earnings":[]}` (vacio valido).
+     * `replaceForTicker()` habria borrado el historico real del ticker sin
+     * ningun aviso. Ahora es un error explicito ANTES de tocar la base.
+     */
+    public function testPayloadSinClaveEarningsLanzaExcepcionEnVezDeVaciarElHistorico(): void
     {
         $payload = json_encode(['type' => 'Earnings', 'symbols' => 'ANR.US'], JSON_THROW_ON_ERROR);
 
-        self::assertSame([], (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload));
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
+    }
+
+    /**
+     * Fixture literal de Astra (tarea A3): un cuerpo de error de EODHD, sin
+     * clave "earnings", no puede confundirse con un vacio valido.
+     */
+    public function testCuerpoDeErrorSinClaveEarningsLanzaExcepcion(): void
+    {
+        $payload = json_encode(['error' => 'synthetic upstream failure'], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
+    }
+
+    /**
+     * Fixture literal de Astra (tarea A3): "earnings" con el tipo
+     * equivocado (cadena, no lista) tampoco es un vacio valido.
+     */
+    public function testEarningsDeTipoEquivocadoLanzaExcepcion(): void
+    {
+        $payload = json_encode(['earnings' => 'unavailable'], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
+    }
+
+    /**
+     * Fixture literal de Astra (tarea A3): la seccion equivocada
+     * ("trends" en vez de "earnings") tampoco puede leerse como vacio valido.
+     */
+    public function testSeccionEquivocadaLanzaExcepcion(): void
+    {
+        $payload = json_encode(['trends' => []], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
     }
 
     public function testConservaDosFilasConLaMismaFechaDeReporteYDistintoPeriodoFiscal(): void

@@ -50,6 +50,17 @@ use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
  *                        un proceso cortado no vuelve a pedir lo que ya se
  *                        guardo con exito)
  *
+ * Corregido el 2026-09-16 (hallazgo real de Astra,
+ * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A1, punto 2): antes
+ * `--max-tickers` recortaba la lista ORDENADA ANTES de descartar los ya
+ * archivados, asi que repetir el MISMO `--max-tickers=N` en ejecuciones
+ * sucesivas siempre tocaba los mismos N primeros tickers (alfabeticamente)
+ * -- si ya estaban archivados, la segunda ejecucion no avanzaba nada.
+ * Ahora (sin `--force`) los ya archivados se descartan ANTES del recorte,
+ * asi que repetir el mismo `--max-tickers=N` procesa naturalmente el
+ * SIGUIENTE lote de pendientes en cada ejecucion, sin tener que ir
+ * aumentando el numero a mano.
+ *
  * La API key nunca aparece en la salida de este script: los mensajes de
  * error de EodhdFiscalPeriodProvider ya estan escritos para no filtrarla
  * (mismo criterio que el resto de scripts de EODHD).
@@ -61,6 +72,7 @@ $maxTickers = (int) ($options['max-tickers'] ?? 0);
 
 $connection = new Connection();
 $legacyArchive = new EodhdRawFundamentalsRepository($connection);
+$versions = new EodhdRawFundamentalVersionsRepository($connection);
 
 if (is_string($options['tickers'] ?? null) && trim((string) $options['tickers']) !== '') {
     $tickers = array_values(array_unique(array_map(
@@ -74,6 +86,15 @@ if (is_string($options['tickers'] ?? null) && trim((string) $options['tickers'])
     // componentes del S&P 500 que no estan en ningun universo actual).
     $tickers = $legacyArchive->archivedTickers();
     sort($tickers);
+}
+
+if (!$force) {
+    // Descartar los ya archivados ANTES del recorte de --max-tickers: ver
+    // correccion del 2026-09-16 en el docblock de arriba.
+    $tickers = array_values(array_filter(
+        $tickers,
+        static fn (string $t): bool => !$versions->hasVersion($t, 'v1.1', 'full')
+    ));
 }
 
 if ($maxTickers > 0) {
@@ -92,7 +113,6 @@ if ($apiKey === '') {
     exit(1);
 }
 
-$versions = new EodhdRawFundamentalVersionsRepository($connection);
 $provider = new EodhdFiscalPeriodProvider($apiKey);
 
 /**
