@@ -8115,3 +8115,23 @@ Incluye:
 - Datos: 2.184 tickers con `legacy/full`, 2.343 con `v1.1/full`, 2.281 tickers con calendario normalizado en `earnings_events` (todo en la base de datos, no en git).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **755 tests, 2.179 assertions, OK** (sin cambio respecto a la entrada anterior: esta entrada no añade tests nuevos, solo el mapa de sufijos, ya cubierto indirectamente por los scripts `bin/` que no tienen suite propia). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-16 (cuarta entrada) - Remedicion del caso 2/A6 con los dos defectos metodologicos de Astra corregidos: 0,31% sobre el universo COMPLETO, confirma con mucha mas fuerza que aplazar la refactorizacion del calendario fue la decision correcta
+
+Estado: A6 (`AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`) pedia explicitamente "repetir la medicion pequeña solo tras corregir su denominador y congelar sus entradas" antes de confiar de nuevo en la cifra "1/150". Se corrigen los dos defectos exactos que señalo Astra y se repite.
+
+**Defecto 1 corregido -- calendario por UNION, no por umbral de muestra**: la medicion del `2026-09-15` construia el calendario de referencia como "fechas que tiene al menos el 90% de una MUESTRA de 150 tickers" -- Astra demostro que ese umbral es un punto ciego real: un ticker incorporado tarde al universo puede hacer que fechas antiguas (donde tickers MAS VIEJOS de la muestra SI cotizaban) caigan por debajo del 90% y se descarten del calendario, ocultando un hueco real en esos tickers viejos. Corregido con una UNION pura (cualquier ticker que cotizara ese dia lo incluye en el calendario, sin umbral) -- estructuralmente no puede tener ese punto ciego: una fecha solo desaparece si NINGUN ticker de los cargados cotizo ese dia.
+
+**Defecto 2 corregido -- lectura genuinamente offline**: la medicion anterior usaba `CachedMarketDataProvider`, que consulta al proveedor real si el cache esta caducado (P7D para rango `10y`) -- Astra señalo que esto no garantiza "sin red" de verdad. Corregido leyendo directamente `MarketDataCacheRepository::findHistory()` con un TTL artificialmente permisivo (100 años): un ticker sin fila en cache se descarta de la muestra, nunca se pide a Yahoo.
+
+**Ampliado ademas al universo COMPLETO**: 636/636 tickers de `point_in_time_universe.txt` (no una submuestra de 150) -- barato porque es enteramente local, y "congela las entradas" literalmente (no hay aleatoriedad ni semilla que discutir).
+
+**Resultado** (`storage/scratch/measure_ticker_gaps_union_2026-09-16.php`, no committeado): calendario de referencia de 2.515 fechas distintas (union real). **Solo 2/636 tickers (0,31%) tienen algun hueco interno real** -- incluso MENOS que la cifra sesgada anterior (1/150, 0,67%), no mas: `LEG` (25 dias de hueco, ya conocido y documentado en cada medicion completa por "Yahoo response is incomplete") y `FISV` (1 dia de hueco, hallazgo nuevo, sin investigar mas por su magnitud minima). Total: 26 dias de hueco en TODO el dataset (636 tickers x su propio rango cotizado).
+
+**Interpretacion**: la correccion de la medicion no revelo un problema mayor oculto por el punto ciego -- al contrario, la cifra real es AUN mas baja que la sesgada. Esto da mucha mas confianza en que aplazar la refactorizacion completa del calendario compartido (Case 2 de `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`, A6 de esta auditoria) sigue siendo la decision correcta: el coste de construir un calendario de referencia compartido y reescribir la aritmetica de indices de `PolicyReplaySimulator`/`PolicyReplayEpisodeSimulator` en torno a el (arquitectura grande, riesgo real de introducir un bug nuevo en un motor ya muy auditado) no esta justificado por una magnitud de 0,31% concentrada en dos tickers ya identificables. Si se quisiera un remedio de bajo riesgo en vez del refactor completo, la opcion mas barata seria excluir `LEG`/`FISV` explicitamente del universo de replay -- no implementado en esta entrada, queda como opcion documentada, no como accion tomada.
+
+**No cierra A6 del todo**: el hallazgo especifico de Astra sobre la clasificacion `pending_future`/`unresolved_gap` (la estimacion `entrada + 28 dias` puede coincidir justo con `$asOf` cuando hay un festivo cerca del limite) sigue sin corregir -- afecta solo al diagnostico de episodios PENDIENTES (ambos casos ya se excluyen de la metrica primaria), no al punto estimado ni al intervalo de confianza, asi que se mantiene como limitacion documentada de baja prioridad.
+
+Verificado: medicion enteramente de lectura (sin escritura en base de datos, sin llamadas de red, sin cambio de codigo de produccion). No aplica suite de tests ni PHPStan a esta entrada.
