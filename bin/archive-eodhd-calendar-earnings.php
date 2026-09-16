@@ -101,22 +101,35 @@ $provider = new EodhdCalendarProvider($apiKey);
  * Mismo caso especial que `bin/archive-eodhd-fundamentals-v11.php`: 18/938
  * tickers llevan el sufijo `_OLD`/`_OLD1` (mayusculas en la tabla), cuyo
  * simbolo real ante EODHD es en minusculas e insertado antes del sufijo de
- * bolsa.
+ * bolsa. Y el mismo mapa de sufijo de bolsa internacional (Yahoo vs EODHD),
+ * confirmado en vivo el 2026-09-16 -- ver el docblock de
+ * `bin/archive-eodhd-fundamentals-v11.php` para el detalle completo.
  */
+const YAHOO_TO_EODHD_EXCHANGE_SUFFIX = [
+    'L' => 'LSE',
+    'DE' => 'XETRA',
+    'AX' => 'AU',
+];
+
 $symbolFor = static function (string $ticker): ?string {
-    if (preg_match('/^(.+)_OLD(\d*)$/', $ticker, $matches) !== 1) {
-        return null;
+    if (preg_match('/^(.+)_OLD(\d*)$/', $ticker, $matches) === 1) {
+        $base = $matches[1];
+        $suffix = 'old' . $matches[2];
+        $eodhdBase = str_contains($base, '.') ? $base : $base . '.US';
+
+        return str_ends_with($eodhdBase, '.US')
+            ? substr($eodhdBase, 0, -3) . '_' . $suffix . '.US'
+            : $eodhdBase . '_' . $suffix;
     }
 
-    $base = $matches[1];
-    $suffix = 'old' . $matches[2];
-    $eodhdBase = str_contains($base, '.') ? $base : $base . '.US';
-
-    if (str_ends_with($eodhdBase, '.US')) {
-        return substr($eodhdBase, 0, -3) . '_' . $suffix . '.US';
+    if (
+        preg_match('/^(.+)\.([A-Za-z]+)$/', $ticker, $matches) === 1
+        && isset(YAHOO_TO_EODHD_EXCHANGE_SUFFIX[strtoupper($matches[2])])
+    ) {
+        return $matches[1] . '.' . YAHOO_TO_EODHD_EXCHANGE_SUFFIX[strtoupper($matches[2])];
     }
 
-    return $eodhdBase . '_' . $suffix;
+    return null;
 };
 
 printf(

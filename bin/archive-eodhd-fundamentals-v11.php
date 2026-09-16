@@ -123,21 +123,47 @@ $provider = new EodhdFiscalPeriodProvider($apiKey);
  * despues para una empresa NO relacionada. El sufijo real que exige la API
  * de EODHD es en minusculas (`_old`) e insertado ANTES del sufijo de bolsa
  * (`APC_old.US`, no `APC.US_old`) -- confirmado en vivo el 2026-09-02.
+ *
+ * Sufijos de bolsa internacional (añadido el 2026-09-16, al ampliar el
+ * archivado a `config/universes.php` mas alla de EEUU): `config/universes.php`
+ * usa la convencion de Yahoo Finance (unica fuente de precios del
+ * proyecto), que NO siempre coincide con el codigo de bolsa de EODHD.
+ * Confirmado en vivo antes de escribir esto (`/api/exchanges-list/` mas una
+ * peticion real por bolsa, ver `versions.md`): Toronto (`.TO`), Oslo
+ * (`.OL`), Suiza (`.SW`) y Helsinki (`.HE`) YA coinciden (mismo codigo en
+ * Yahoo y EODHD, no necesitan mapa); Londres (`.L`), Alemania (`.DE`) y
+ * Australia (`.AX`) NO -- EODHD exige `LSE`/`XETRA`/`AU` respectivamente.
+ * Japon (`.T`), Italia (`.MI`), Singapur (`.SI`), Israel (`.TA`) y Nueva
+ * Zelanda (`.NZ`) no aparecen en absoluto en `/api/exchanges-list/` bajo el
+ * plan "Fundamentals Data Feed" actual -- no es un problema de sufijo, esas
+ * bolsas no estan cubiertas por esta suscripcion (ver `roadmap.md`), y este
+ * mapa NO intenta adivinar un codigo para ellas.
  */
+const YAHOO_TO_EODHD_EXCHANGE_SUFFIX = [
+    'L' => 'LSE',
+    'DE' => 'XETRA',
+    'AX' => 'AU',
+];
+
 $symbolFor = static function (string $ticker): ?string {
-    if (preg_match('/^(.+)_OLD(\d*)$/', $ticker, $matches) !== 1) {
-        return null;
+    if (preg_match('/^(.+)_OLD(\d*)$/', $ticker, $matches) === 1) {
+        $base = $matches[1];
+        $suffix = 'old' . $matches[2];
+        $eodhdBase = str_contains($base, '.') ? $base : $base . '.US';
+
+        return str_ends_with($eodhdBase, '.US')
+            ? substr($eodhdBase, 0, -3) . '_' . $suffix . '.US'
+            : $eodhdBase . '_' . $suffix;
     }
 
-    $base = $matches[1];
-    $suffix = 'old' . $matches[2];
-    $eodhdBase = str_contains($base, '.') ? $base : $base . '.US';
-
-    if (str_ends_with($eodhdBase, '.US')) {
-        return substr($eodhdBase, 0, -3) . '_' . $suffix . '.US';
+    if (
+        preg_match('/^(.+)\.([A-Za-z]+)$/', $ticker, $matches) === 1
+        && isset(YAHOO_TO_EODHD_EXCHANGE_SUFFIX[strtoupper($matches[2])])
+    ) {
+        return $matches[1] . '.' . YAHOO_TO_EODHD_EXCHANGE_SUFFIX[strtoupper($matches[2])];
     }
 
-    return $eodhdBase . '_' . $suffix;
+    return null;
 };
 
 printf(

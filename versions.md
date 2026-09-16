@@ -8070,3 +8070,48 @@ Incluye:
 - Tests: `EodhdRawFundamentalVersionsRepositoryTest.php` (+3), `EodhdEarningsEventsNormalizerTest.php` (+3), `PointInTimeFundamentalsBuilderTest.php` (+5).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **755 tests, 2.179 assertions, OK** (sube desde 744/2.158: 11 tests nuevos; 1 skip preexistente sin relacion). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. No se ha ejecutado ninguna descarga real contra EODHD ni modificado ningun dato ya archivado.
+
+---
+
+## 2026-09-16 (tercera entrada) - Campaña de descarga de EODHD (tarea A1 completada): 100% de cobertura de fundamentales alcanzables, calendario de resultados ampliado, sufijo de bolsa internacional corregido
+
+Estado: Francisco autoriza explicitamente gastar la cuota de EODHD ("Descarga los datos que necesites... EODHD se ha pagado solo por un mes y lo tenemos disponible durante 14 dias mas... a partir del 1 de octubre solo tendremos disponible Yahoo Finance"). Se ejecuta la campana completa de A1, mas una ampliacion razonable del calendario de resultados que reutiliza el mismo pipeline ya corregido en la entrada anterior (A2/A3).
+
+### Paso 1 -- copia legacy->versionada (sin red, gratis)
+
+`bin/backfill-eodhd-fundamental-versions.php`: 1.246 pendientes copiados con `hasVersionWithHash()` (la correccion de esta misma sesion), 0 corruptos. `eodhd_raw_fundamentals` (origen) y `legacy/full` (versionado) quedan en 2.184=2.184 exactos, verificado tambien por interseccion de conjuntos completa (no solo por conteo) tras un mensaje de verificacion del propio script que resulto ser el que estaba mal calculado (`countDistinctTickers()` cuenta TODOS los `api_version` mezclados, no solo `legacy/full` -- cosmetico, no de datos, no se ha tocado en esta entrada).
+
+### Paso 2 -- v1.1 para los 1.246 ya archivados en legacy (con red)
+
+`bin/archive-eodhd-fundamentals-v11.php` (ya corregido en la entrada anterior: `--max-tickers` opera sobre pendientes): **1.246/1.246 archivados, 0 errores.**
+
+### Paso 3 -- hallazgo real: sufijo de bolsa de Yahoo != sufijo de bolsa de EODHD
+
+Al intentar ampliar la cobertura a los 384 simbolos configurados en `config/universes.php` que nunca tuvieron ningun archivo de EODHD (ninguna tarea de Astra los cubria explicitamente, pero A1 pide "conservar la cobertura de EODHD que todavia falta" en general), el primer intento con los tickers tal cual (estilo Yahoo, unica fuente de precios del proyecto) dio **100% de error 404**. Verificado contra la API real antes de decidir nada (`/api/exchanges-list/`, guardado en `storage/scratch/eodhd_exchanges_list_2026-09-16.json`): Reino Unido (`.L`), Alemania (`.DE`) y Australia (`.AX`) SI estan cubiertos por el plan, pero con un codigo de bolsa DISTINTO al de Yahoo (`LSE`, `XETRA`, `AU` respectivamente) -- confirmado con una peticion real por bolsa antes de lanzar el lote completo. Japon (`.T`), Italia (`.MI`), Singapur (`.SI`), Israel (`.TA`) y Nueva Zelanda (`.NZ`) **no aparecen en absoluto** en `/api/exchanges-list/` bajo el plan "Fundamentals Data Feed" actual -- no es un problema de sufijo, esas bolsas sencillamente no estan cubiertas por esta suscripcion (mismo patron ya documentado en el "Segundo bloque" de `roadmap.md` sobre el addon "All World Extended" no contratado).
+
+**Correccion permanente** (no un parche de un solo uso): `bin/archive-eodhd-fundamentals-v11.php` y `bin/archive-eodhd-calendar-earnings.php` ganan un mapa `YAHOO_TO_EODHD_EXCHANGE_SUFFIX` (`L`->`LSE`, `DE`->`XETRA`, `AX`->`AU`) en su resolucion de simbolo, mismo patron ya establecido para el caso `_OLD`. De los 384: **159 son alcanzables con el sufijo corregido (Reino Unido/Alemania/Australia), 225 no lo son bajo este plan (Japon/Italia/Singapur/Israel/Nueva Zelanda)** -- verificado con el desglose exacto por sufijo antes de gastar ninguna peticion en el lote grande.
+
+`bin/archive-eodhd-fundamentals-v11.php --tickers="<159 reachable>"`: **159/159 archivados, 0 errores**, simbolo real de EODHD confirmado en el log (`AZN.L -> AZN.LSE`, `BMW.DE -> BMW.XETRA`, `BHP.AX -> BHP.AU`, etc.).
+
+### Paso 4 -- ampliacion razonable: calendario de resultados (`calendar/earnings`) para todo lo nuevo
+
+Astra ya señalaba en la entrada anterior (A3): "Una vez cerradas A2 y A3, completar o refrescar calendarios". Con A2/A3 corregidos y el coste de este endpoint mucho menor (1 unidad/simbolo, no 10), se amplia tambien esta cobertura en el mismo hueco de suscripcion: `bin/archive-eodhd-calendar-earnings.php` sobre los 2.184 con legacy (938 ya archivados se saltan, 1.245 nuevos, 1 error transitorio HTTP 500 en `PBH` resuelto con un reintento individual) mas los 159 internacionales nuevos via `--tickers` (con el mismo mapa de sufijo). **1.405/1.405 archivados tras el reintento, 0 errores finales.** `bin/normalize-eodhd-earnings-events.php` (ejecutado dos veces: universo por defecto y `--tickers` para los 159) normaliza todo lo nuevo con la correccion de procedencia de A2: **`earnings_events` pasa de las 80.238 filas originales a 189.531 filas, de 878 a 2.281 tickers distintos.**
+
+### Cobertura final verificada (`storage/scratch/check_eodhd_coverage_2026-09-16.php`)
+
+| Conjunto | Antes de esta entrada | Despues |
+|---|---:|---:|
+| `legacy/full` versionado | 938 | **2.184 (100% del origen)** |
+| `v1.1/full` versionado | 938 | **2.343** |
+| `calendar/earnings` normalizado en `earnings_events` | 878 tickers / 80.238 filas | **2.281 tickers / 189.531 filas** |
+| Configurados en `config/universes.php` sin ningun dato de EODHD | 384 | **225** (Japon/Italia/Singapur/Israel/Nueva Zelanda, no cubiertos por el plan actual, no es un bug) |
+
+No se ha tocado `config/weights.php` ni ninguna recomendacion en produccion: esta entrada es enteramente sobre PROTEGER Y AMPLIAR el dato crudo archivado antes de que expire la suscripcion el 2026-10-01, no sobre cambiar como se usa. `PointInTimeFundamentalsBuilder`/`FundamentalChangeAssessor` ya pueden reconstruir historico point-in-time para 1.405 tickers mas que antes de esta entrada.
+
+Incluye:
+
+- `bin/archive-eodhd-fundamentals-v11.php`: mapa `YAHOO_TO_EODHD_EXCHANGE_SUFFIX` para sufijos de bolsa internacional.
+- `bin/archive-eodhd-calendar-earnings.php`: mismo mapa.
+- Datos: 2.184 tickers con `legacy/full`, 2.343 con `v1.1/full`, 2.281 tickers con calendario normalizado en `earnings_events` (todo en la base de datos, no en git).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **755 tests, 2.179 assertions, OK** (sin cambio respecto a la entrada anterior: esta entrada no añade tests nuevos, solo el mapa de sufijos, ya cubierto indirectamente por los scripts `bin/` que no tienen suite propia). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca.
