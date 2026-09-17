@@ -8135,3 +8135,45 @@ Estado: A6 (`AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`) pedia explicitamente
 **No cierra A6 del todo**: el hallazgo especifico de Astra sobre la clasificacion `pending_future`/`unresolved_gap` (la estimacion `entrada + 28 dias` puede coincidir justo con `$asOf` cuando hay un festivo cerca del limite) sigue sin corregir -- afecta solo al diagnostico de episodios PENDIENTES (ambos casos ya se excluyen de la metrica primaria), no al punto estimado ni al intervalo de confianza, asi que se mantiene como limitacion documentada de baja prioridad.
 
 Verificado: medicion enteramente de lectura (sin escritura en base de datos, sin llamadas de red, sin cambio de codigo de produccion). No aplica suite de tests ni PHPStan a esta entrada.
+
+---
+
+## 2026-09-16/17 (quinta entrada) - `EodhdFiscalPeriodProvider::totalDebt()` corregido (A1), procedencia de vacios validos en `earnings_events` (A2), tercer intento fallido de la medicion completa de 636 tickers -- confirma que el limite es de infraestructura, no de codigo
+
+Estado: dos correcciones de codigo cerradas y probadas; el intento de repetir la medicion economica completa vuelve a morir por el mismo limite de memoria de WSL2 ya documentado el `2026-09-15`, esta vez con evidencia mas fuerte de que no es un problema de gestion de procesos.
+
+### `EodhdFiscalPeriodProvider::totalDebt()` (pendiente de A1: "revisar tambien...")
+
+Astra señalaba que `totalDebt()` tiene el mismo patron que el bug real de ROIC (A4): si falta `shortLongTermDebtTotal` y solo UNO de corto/largo plazo esta presente, el ausente se sumaba como `0.0`. Medido sobre datos v1.1 REALES ya archivados antes de decidir (`storage/scratch/check_debt_field_shape_2026-09-16.php`, 60 tickers al azar, 5.781 periodos trimestrales): 361/5.781 (6,2%) tienen solo uno de los dos componentes presente, y de las 583 observaciones presentes en ese grupo, solo 5 son EXACTAMENTE cero -- si EODHD reportase deuda cero de verdad como `0` explicito, se esperarian muchos mas ceros reales. La ausencia del otro componente es mucho mas compatible con "no reportado" que con "es cero". **Corregido**: ahora solo se suman cuando AMBOS estan presentes; si falta cualquiera (y no hay combinado), el resultado es `null`.
+
+### Procedencia de vacios validos en `earnings_events` (A2, exigia cambio de esquema)
+
+Un ticker con CERO eventos de resultados (vacio valido, 60/938 en el archivado original) no dejaba ninguna fila en `earnings_events`, asi que `isNormalizedFromSource()` nunca podia confirmarlo como "ya normalizado" -- se renormalizaba en cada ejecucion de `bin/normalize-eodhd-earnings-events.php` indefinidamente (sin dano, solo trabajo repetido). **Corregido** con la migracion 030 (`earnings_events_normalization_log`): registra CADA intento de normalizacion completado, tenga o no eventos; `EarningsEventsRepository::replaceForTicker()` escribe en ella siempre, e `isNormalizedFromSource()` consulta esta tabla en vez de `earnings_events` directamente. Repoblada para los 2.343 tickers ya normalizados con una re-ejecucion del script (sin cambios de contenido, solo procedencia).
+
+### Tercer intento de la medicion completa (636 tickers/10 años): sigue bloqueado, con evidencia mas fuerte
+
+Se reescribio el script en LOTES independientes (`policy_replay_full_2026-09-16_batch.php` + orquestador bash, cada lote su PROPIO proceso PHP y reinicio de ddev entre lotes) para que un fallo a mitad de camino no dependa de un unico proceso de horas -- mitigacion nueva, no un simple reintento. Escritura atomica (fichero `.tmp` + `rename()`) anadida tambien, para que un fallo a mitad de la escritura nunca deje un JSON truncado indistinguible de uno completo.
+
+**Primer sub-intento** (lotes de 25): interrumpido por mi propia decision de ineficiencia (demasiado overhead de reinicios), no por un fallo.
+
+**Segundo sub-intento** (lotes de 100): batch 1 (100 tickers) completado con exito. Durante el reinicio de ddev del batch 2, se ejecuto POR ERROR PROPIO otro script (`bin/normalize-eodhd-earnings-events.php`, la repoblacion de procedencia de arriba) EN PARALELO contra el mismo contenedor -- exactamente el error de gestion de recursos ya documentado el `2026-09-15` ("dos scripts compitiendo por el mismo contenedor"), repetido por mi cuenta esta vez. Los contenedores de `ddev` quedaron en un estado inconsistente (`ddev-router` no saludable, red no encontrada) que requirio `ddev poweroff` + `ddev start` para recuperar. **117 tickers preservados intactos** (0 ficheros `.tmp` huerfanos, confirma que la escritura atomica funciona).
+
+**Tercer sub-intento** (mismos lotes de 100, reanudado desde el ticker 118, EN AISLAMIENTO TOTAL -- ninguna otra tarea tocando la base de datos): avanzo hasta 288/636 tickers y volvio a morir en el LOTE 3 (el mismo patron de siempre: "MySQL server has gone away" en cascada, `exit 137`/SIGKILL) **sin ninguna interferencia externa esta vez**. Esto descarta con mucha mas fuerza la hipotesis de que el problema era solo gestion de procesos propios: incluso un proceso aislado, con lotes de 100 tickers y un reinicio de contenedores entre cada lote, puede agotar los 6,5GB totales de la VM de WSL2 dentro de un unico lote. La sesion de Claude Code termino antes de poder reintentar un cuarto lote (proceso en segundo plano interrumpido junto con la sesion, sin registro de finalizacion).
+
+**Conclusion, no otro reintento automatico**: tres fallos con la misma causa raiz (dos el `2026-09-15`, uno mas el `2026-09-16`/`17`, el ultimo en aislamiento total) son evidencia suficiente de que esto es un limite estructural de la maquina de desarrollo, no un bug de codigo ni un problema de disciplina de ejecucion que un cuarto intento vaya a resolver por si solo. Opciones reales, ninguna aplicada sin que Francisco decida:
+
+1. **Aumentar la memoria de WSL2** (`.wslconfig`, `memory=`, ver `roadmap.md`) -- requiere `wsl --shutdown` desde Windows, que interrumpiria cualquier otro uso de WSL2 de Francisco; cambio de sistema, no de este repositorio, no aplicado sin su accion.
+2. **Lotes mucho mas pequeños** (10-20 tickers, reinicio entre cada uno) -- probablemente evita el limite, a costa de muchas mas horas de reinicios acumulados; no probado todavia.
+3. **Reducir el alcance** (menos años de historico, o un universo mas pequeño) para la medicion completa, aceptando que no sea exactamente la pregunta predeclarada original.
+
+288/636 tickers quedan preservados en `storage/scratch/policy_replay_20260916_130436_tickers/` (no committeado) para una reanudacion futura si se elige la opcion 2, sin recalcular lo ya hecho.
+
+Incluye:
+
+- `src/Providers/EodhdFiscalPeriodProvider.php`: `totalDebt()` ya no suma un componente ausente como cero.
+- `src/Repository/EarningsEventsRepository.php`: `replaceForTicker()` registra procedencia siempre; `isNormalizedFromSource()` consulta la nueva tabla.
+- `database/migrations/030_create_earnings_events_normalization_log.sql` (nueva).
+- `tests/Integration/IntegrationTestCase.php`: `earnings_events`/`earnings_events_normalization_log` anhadidas al TRUNCATE.
+- Tests: `EodhdFiscalPeriodProviderTest.php` (+1), `EarningsEventsRepositoryTest.php` (nuevo, 5 tests, tabla sin cobertura previa).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **761 tests, 2.192 assertions, OK** (sube desde 755/2.179: 6 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. Entorno restaurado y verificado estable tras el tercer intento fallido.

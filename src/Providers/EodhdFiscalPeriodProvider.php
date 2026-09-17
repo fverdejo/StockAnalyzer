@@ -346,6 +346,24 @@ class EodhdFiscalPeriodProvider
      * deriva de shortLongTermDebtTotal si viene numerico, o si no de la
      * suma de deuda a corto y largo plazo. Es una aproximacion.
      *
+     * **Corregido el 2026-09-16** (hallazgo de Astra,
+     * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A1: "revisar
+     * tambien... que imputa cero a un componente ausente" -- mismo patron
+     * que el bug real de ROIC, tarea A4). Medido sobre datos v1.1 reales ya
+     * archivados antes de decidir (`storage/scratch/check_debt_field_shape_2026-09-16.php`,
+     * 60 tickers al azar, 5.781 periodos trimestrales): cuando falta
+     * `shortLongTermDebtTotal` y solo UNO de los dos componentes esta
+     * presente (361/5.781 periodos, 6,2%), el valor presente es
+     * practicamente NUNCA exactamente 0 (5 casos de 583 observaciones
+     * presentes) -- si EODHD reportase deuda cero de verdad como `0`
+     * explicito, se esperarian muchos mas ceros reales. La ausencia del
+     * otro componente es mucho mas compatible con "no reportado" que con
+     * "es cero", asi que sumarlo como `0.0` sobreestimaba sistematicamente
+     * la solvencia (menos deuda total de la real) exactamente igual que el
+     * bug de ROIC. Ahora solo se suman cuando AMBOS estan presentes; si
+     * falta cualquiera de los dos (y no hay combinado), el resultado es
+     * `null` (desconocido), nunca el valor mas favorable.
+     *
      * @param array<string,mixed> $balance
      */
     private function totalDebt(array $balance): ?float
@@ -359,11 +377,11 @@ class EodhdFiscalPeriodProvider
         $short = $this->numeric($balance['shortTermDebt'] ?? null);
         $long = $this->numeric($balance['longTermDebt'] ?? null);
 
-        if ($short === null && $long === null) {
+        if ($short === null || $long === null) {
             return null;
         }
 
-        return ($short ?? 0.0) + ($long ?? 0.0);
+        return $short + $long;
     }
 
     /**

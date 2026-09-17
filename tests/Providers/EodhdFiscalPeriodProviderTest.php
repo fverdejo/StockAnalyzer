@@ -189,6 +189,36 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
         self::assertNull($periods[0]->totalDebt);
     }
 
+    /**
+     * Corregido el 2026-09-16 (hallazgo de Astra, tarea A1: mismo patron
+     * que el bug real de ROIC en A4). Medido sobre datos v1.1 reales antes
+     * de decidir (`storage/scratch/check_debt_field_shape_2026-09-16.php`):
+     * cuando falta el combinado y solo UNO de corto/largo plazo esta
+     * presente, EODHD practicamente nunca envia el otro como 0 explicito
+     * (5/583 observaciones) -- la ausencia es mucho mas compatible con "no
+     * reportado" que con "es cero". Antes esto sumaba el presente + 0.0,
+     * sobreestimando la solvencia igual que el bug de ROIC.
+     */
+    public function testTotalDebtEsNuloSiSoloUnoDeCortoOLargoPlazoEstaPresente(): void
+    {
+        $periods = $this->provider(
+            ['2025-03-31' => $this->income('2025-03-31', '2025-05-02')],
+            ['2025-03-31' => $this->balance(
+                '2025-03-31',
+                '2025-05-02',
+                shortLongTermDebtTotal: null,
+                shortTermDebt: null,
+                longTermDebt: 78_566_000_000.0
+            )],
+            ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-05-02')]
+        )->fetch('AAPL');
+
+        self::assertNull(
+            $periods[0]->totalDebt,
+            'Con solo el largo plazo presente, la deuda total es DESCONOCIDA, no 78.566M (largo + 0 de corto asumido).'
+        );
+    }
+
     public function testLosTrimestresSalenOrdenadosDeMasAntiguoAMasReciente(): void
     {
         $periods = $this->provider(

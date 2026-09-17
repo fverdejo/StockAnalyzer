@@ -57,6 +57,8 @@ abstract class IntegrationTestCase extends TestCase
         'fundamentals_history',
         'fundamentals_history_v2110',
         'eodhd_raw_fundamentals',
+        'earnings_events_normalization_log',
+        'earnings_events',
         'eodhd_raw_fundamental_version_observations',
         'eodhd_raw_fundamental_versions',
         'index_membership',

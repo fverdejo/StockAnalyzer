@@ -32,15 +32,25 @@ final class EarningsEventsRepository
     }
 
     /**
-     * Si YA hay al menos una fila de este ticker escrita desde exactamente
-     * este `sourceHash` -- es lo que hace REANUDABLE
-     * `bin/normalize-eodhd-earnings-events.php`: si el JSON crudo no ha
-     * cambiado desde la ultima normalizacion, no hace falta rehacer nada.
+     * Si YA se normalizo este ticker desde exactamente este `sourceHash` --
+     * es lo que hace REANUDABLE `bin/normalize-eodhd-earnings-events.php`:
+     * si el JSON crudo no ha cambiado desde la ultima normalizacion, no
+     * hace falta rehacer nada.
+     *
+     * **Corregido el 2026-09-16** (hallazgo de Astra,
+     * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A2): antes
+     * consultaba `earnings_events` directamente, que NO deja ninguna fila
+     * para un ticker con cero eventos (vacio valido, 60/938 en el
+     * archivado original) -- esos tickers nunca podian confirmarse como
+     * "ya normalizados", y se renormalizaban en cada ejecucion
+     * indefinidamente. Ahora consulta `earnings_events_normalization_log`
+     * (migracion 030), que registra CADA intento completado con exito,
+     * tenga o no eventos.
      */
     public function isNormalizedFromSource(string $ticker, string $sourceHash): bool
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT 1 FROM earnings_events WHERE ticker = :ticker AND source_hash = :source_hash LIMIT 1'
+            'SELECT 1 FROM earnings_events_normalization_log WHERE ticker = :ticker AND source_hash = :source_hash LIMIT 1'
         );
         $statement->execute([
             'ticker' => strtoupper($ticker),
@@ -55,7 +65,11 @@ final class EarningsEventsRepository
      * transaccion. Un ticker sin eventos (60/938 en el archivado real del
      * 2026-09-05, ver `versions.md`) simplemente se queda sin filas -- no
      * es un error, es un ticker sin historico de resultados publicado por
-     * EODHD.
+     * EODHD. Registra ademas el intento en
+     * `earnings_events_normalization_log` (migracion 030, correccion del
+     * 2026-09-16), tenga o no eventos: es lo que permite a
+     * `isNormalizedFromSource()` confirmar "ya normalizado" incluso para un
+     * vacio valido.
      *
      * @param list<CalendarEarningsEvent> $events
      * @return int cuantas filas quedaron escritas
@@ -102,6 +116,20 @@ final class EarningsEventsRepository
                     ]);
                 }
             }
+
+            $log = $pdo->prepare(
+                'INSERT INTO earnings_events_normalization_log
+                    (ticker, source_hash, captured_at, event_count, normalized_at)
+                 VALUES
+                    (:ticker, :source_hash, :captured_at, :event_count, NOW())
+                 ON DUPLICATE KEY UPDATE event_count = VALUES(event_count), normalized_at = VALUES(normalized_at)'
+            );
+            $log->execute([
+                'ticker' => $ticker,
+                'source_hash' => $sourceHash,
+                'captured_at' => $capturedAt->format('Y-m-d H:i:s'),
+                'event_count' => count($events),
+            ]);
 
             $pdo->commit();
         } catch (\Throwable $exception) {
