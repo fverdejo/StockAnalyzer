@@ -8339,3 +8339,27 @@ Incluye:
 - `storage/scratch/policy_replay_20260918_b7_summary.json` recalculado con la correccion (no committeado).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **802 tests, 2.282 assertions, OK** (sube desde 801/2.281: 1 test nuevo). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. La conclusion sobre la medicion completa (medido, no informativo) NO cambia; sus cifras exactas SI, ligeramente, hacia una version mas precisa.
+
+---
+
+## 2026-09-18 (quinta entrada) - Ampliacion del piloto de episodios (caso 6) al universo completo: 636/636 tickers, resultado ESTADISTICAMENTE INFORMATIVO por primera vez
+
+Estado: con la infraestructura ya probada a escala completa (cuarta entrada de hoy) y el simulador de episodios ya validado con un piloto de 60 tickers/2 años (`2026-09-15`), se amplia al universo completo reutilizando la MISMA infraestructura corregida (B5/B6/B7) -- no es una decision de metodologia nueva, es escalar algo ya predeclarado y validado.
+
+**Ejecucion**: `storage/scratch/policy_replay_episode_full_2026-09-18_batch.php` (mismo patron que el runner de `PolicyReplaySimulator`, adaptado a `PolicyReplayEpisodeSimulator::replay()`). **636/636 tickers, 0 errores**, 4 lotes sin reiniciar `ddev`. RSS real maximo: 75,7MB (igual de lejos del limite de 6,5GB que la medicion anterior).
+
+**Resultado, calculado con `PolicyReplayStatistics::summarize()` ya corregido (bootstrap circular, A7) -- por primera vez en este proyecto, `result_informative: true`**:
+
+- 44.967 episodios totales (cada candidata aceptada abre el suyo, incluidos solapados -- supuesto declarado del diseño), 44.728 cerrados, solo 239 pendientes al corte (0,53% -- mucho menos que el 12,11% de `PolicyReplaySimulator`, porque un episodio SIEMPRE se resuelve dentro de 20 sesiones si hay dato, no queda "corriendo" indefinidamente como una posicion sin objetivo).
+- **Diferencia pareada: -0,01pp** -- practicamente CERO. `se_naive`=0,02, `t_naive`=-0,37 (no significativo ni sin corregir).
+- Bootstrap de bloques moviles (circular): `se_bootstrap`=0,216, IC95%=[-0,33, 0,48] -- **incluye el cero** (`ci_excludes_zero: false`).
+- `block_width_days`=62 (mucho mas pequeño que los 982 dias de `PolicyReplaySimulator`, porque la exposicion de un episodio esta acotada a ~20 sesiones/28 dias por diseño, no es variable). `blocks_in_range`=57, muy por encima del minimo de 20. `effective_n`=383,5 (Kish), muy por encima del minimo de 30. **Las dos salvaguardas predeclaradas de este proyecto se superan por primera vez: `bootstrap_has_enough_resolution: true`, `result_informative: true`.**
+
+**Lectura, sin declarar conclusion de mercado**: para la pregunta concreta que mide este simulador ("de las mismas candidatas aceptadas, ¿gestionar con el stop durante exactamente 20 sesiones aporta algo frente a mantener sin gestionar esas mismas 20 sesiones?"), el resultado es que la diferencia es indistinguible de cero con una resolucion estadistica que este proyecto SI considera suficiente. Esto es DISTINTO de la pregunta de `PolicyReplaySimulator` (mantener la posicion indefinidamente, sin horizonte, gestionada solo por el stop) -- las dos preguntas pueden tener respuestas distintas sin contradecirse, tal como se declaro explicitamente al diseñar el simulador de episodios. No se declara aqui si esto es "bueno" o "malo" para la politica: es una pieza de informacion real, pendiente de que los agentes de mercado/riesgo la interpreten junto con el resultado de `PolicyReplaySimulator`.
+
+Incluye:
+
+- `storage/scratch/policy_replay_episode_full_2026-09-18_batch.php`, `storage/scratch/run_full_episode_replay.sh`, `storage/scratch/compute_full_episode_summary_2026-09-18.php` (no committeados).
+- Datos: 636 ficheros JSON por ticker + telemetria en `storage/scratch/policy_replay_episode_20260918_tickers/` (no committeado).
+
+No se ha tocado codigo de produccion en esta entrada -- solo ejecucion y medicion, reutilizando codigo ya committeado. `config/weights.php` no se toca.
