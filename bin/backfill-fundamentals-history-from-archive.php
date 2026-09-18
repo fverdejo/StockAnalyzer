@@ -9,6 +9,7 @@ use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\EodhdFiscalPeriodProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Repository\EodhdRawFundamentalsRepository;
+use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
 use StockAnalyzer\Repository\FundamentalsHistoryRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Services\PointInTimeFundamentalsBuilder;
@@ -17,8 +18,7 @@ use StockAnalyzer\Services\PointInTimeFundamentalsBuilder;
  * Rellena `fundamentals_history` (la tabla REAL, a diferencia de
  * `bin/regenerate-fundamentals-history-v2110.php` que escribe en la
  * paralela `_v2110` usada para aquella comparacion puntual) para tickers
- * que YA tienen el JSON crudo archivado en `eodhd_raw_fundamentals`
- * (`bin/archive-eodhd-fundamentals.php`). Mismo patron de reconstruccion
+ * que YA tienen el JSON crudo archivado. Mismo patron de reconstruccion
  * sin red que el script `_v2110`: lee el archivo, `parse()` local, cruza
  * con el precio historico de Yahoo (cacheado o pedido si falta) via
  * `PointInTimeFundamentalsBuilder`.
@@ -29,6 +29,20 @@ use StockAnalyzer\Services\PointInTimeFundamentalsBuilder;
  * `sp400` del 2026-09-07) -- no reprocesa tickers ya cubiertos salvo que
  * se pida `--force`, para no volver a escribir sobre datos ya correctos
  * sin necesidad.
+ *
+ * **Ampliado el 2026-09-18** (hallazgo real de Astra,
+ * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B4): antes solo
+ * leia `eodhd_raw_fundamentals` (legacy, 938/2.184 tickers). Los 159
+ * simbolos internacionales archivados durante la campaña del
+ * `2026-09-16` SOLO tienen version `v1.1` (nunca tuvieron fila legacy) --
+ * tenian archivo pero CERO snapshots reconstruibles. Ahora, si no hay
+ * legacy, se intenta `eodhd_raw_fundamental_versions` (`v1.1`/`full`)
+ * como fuente alternativa -- mismo `parse()`, EODHD no cambio la forma
+ * de `Financials` entre versiones (verificado con AZN.L/ULVR.L/BHP.AX
+ * reales antes de escribir esto). Tambien extrae la moneda de cotizacion
+ * (`EodhdFiscalPeriodProvider::extractPriceCurrencyCode()`, tarea B3) y
+ * la pasa a `PointInTimeFundamentalsBuilder` para que los ratios que
+ * mezclan precio con estados en otra moneda no se calculen mal.
  *
  * Uso:
  *   php bin/backfill-fundamentals-history-from-archive.php --universe=sp400
@@ -75,6 +89,7 @@ if ($tickers === []) {
 
 $connection = new Connection();
 $archive = new EodhdRawFundamentalsRepository($connection);
+$versionsArchive = new EodhdRawFundamentalVersionsRepository($connection);
 // apiKey vacia: parse() no toca la red, solo cruza un payload ya
 // decodificado (mismo criterio que bin/regenerate-fundamentals-history-v2110.php).
 $provider = new EodhdFiscalPeriodProvider('');
@@ -123,9 +138,17 @@ foreach ($tickers as $index => $ticker) {
     }
 
     $rawJson = $archive->find($ticker);
+    $source = 'legacy';
 
     if ($rawJson === null) {
-        echo $prefix . 'sin archivar (bin/archive-eodhd-fundamentals.php primero)' . PHP_EOL;
+        // Sin legacy: intentar v1.1 (tarea B4) -- mismos 159 simbolos
+        // internacionales que la campaña del 2026-09-16 archivo SOLO ahi.
+        $rawJson = $versionsArchive->latestFor($ticker, 'v1.1', 'full');
+        $source = 'v1.1';
+    }
+
+    if ($rawJson === null) {
+        echo $prefix . 'sin archivar (ni legacy ni v1.1)' . PHP_EOL;
         ++$notArchived;
         $notArchivedTickers[] = $ticker;
 
@@ -136,20 +159,21 @@ foreach ($tickers as $index => $ticker) {
         $decoded = json_decode($rawJson, true, 512, JSON_THROW_ON_ERROR);
 
         if (!is_array($decoded)) {
-            throw new RuntimeException($ticker . ': el JSON archivado no es un objeto.');
+            throw new RuntimeException($ticker . ': el JSON archivado (' . $source . ') no es un objeto.');
         }
 
         $periods = $provider->parse($decoded, $ticker);
 
         if ($periods === []) {
-            echo $prefix . 'sin ejercicios utilizables en el archivo' . PHP_EOL;
+            echo $prefix . "sin ejercicios utilizables en el archivo ($source)" . PHP_EOL;
             ++$failed;
             $failedTickers[] = $ticker;
 
             continue;
         }
 
-        $builder = new PointInTimeFundamentalsBuilder($periods);
+        $priceCurrencyCode = EodhdFiscalPeriodProvider::extractPriceCurrencyCode($decoded);
+        $builder = new PointInTimeFundamentalsBuilder($periods, $priceCurrencyCode);
         $firstFiling = $builder->earliestFilingDate();
         $quotes = $prices->getHistoricalQuotes($ticker);
         $written = 0;
@@ -178,12 +202,14 @@ foreach ($tickers as $index => $ticker) {
         ++$okTickers;
 
         printf(
-            '%s%d ejercicios (%s -> %s), %d dias%s%s',
+            '%s[%s] %d ejercicios (%s -> %s), %d dias%s%s%s',
             $prefix,
+            $source,
             count($periods),
             $periods[0]->endDate->format('Y-m-d'),
             $periods[array_key_last($periods)]->endDate->format('Y-m-d'),
             $written,
+            $priceCurrencyCode !== null ? " (precio en $priceCurrencyCode)" : '',
             $dryRun ? ' (simulado)' : '',
             PHP_EOL
         );

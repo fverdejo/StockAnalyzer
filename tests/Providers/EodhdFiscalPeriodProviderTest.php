@@ -97,7 +97,8 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
         string $filing,
         ?float $shortLongTermDebtTotal = 98_186_000_000.0,
         ?float $shortTermDebt = 19_620_000_000.0,
-        ?float $longTermDebt = 78_566_000_000.0
+        ?float $longTermDebt = 78_566_000_000.0,
+        ?string $currencySymbol = 'USD'
     ): array {
         return [
             'date' => $date,
@@ -109,6 +110,7 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
             'shortLongTermDebtTotal' => $shortLongTermDebtTotal,
             'shortTermDebt' => $shortTermDebt,
             'longTermDebt' => $longTermDebt,
+            'currency_symbol' => $currencySymbol,
         ];
     }
 
@@ -156,9 +158,56 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
         // shortLongTermDebtTotal viene numerico: se usa directo.
         self::assertSame(98_186_000_000.0, $p->totalDebt);
         self::assertSame(3_758_000_000.0, $p->commonDividendsPaid);
+        self::assertSame('USD', $p->statementCurrency);
         // dividendPerShare() aplica abs(), asi que el signo positivo de
         // origen de EODHD produce el mismo resultado que el negativo de FMP.
         self::assertEqualsWithDelta(3_758_000_000.0 / 14_893_000_000.0, $p->dividendPerShare(), 0.0001);
+    }
+
+    /**
+     * Hallazgo real de Astra (`REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`,
+     * tarea B3): la moneda de los estados financieros no siempre coincide
+     * con la de cotizacion -- confirmado con datos reales (AZN.L cotiza
+     * en GBX, sus estados en USD).
+     */
+    public function testStatementCurrencySeCapturaDelBalance(): void
+    {
+        $periods = $this->provider(
+            ['2025-03-31' => $this->income('2025-03-31', '2025-05-02')],
+            ['2025-03-31' => $this->balance('2025-03-31', '2025-05-02', currencySymbol: 'GBP')],
+            ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-05-02')]
+        )->fetch('AZN');
+
+        self::assertSame('GBP', $periods[0]->statementCurrency);
+    }
+
+    public function testStatementCurrencyEsNuloSiNoVieneEnNingunEstado(): void
+    {
+        $periods = $this->provider(
+            ['2025-03-31' => $this->income('2025-03-31', '2025-05-02')],
+            ['2025-03-31' => $this->balance('2025-03-31', '2025-05-02', currencySymbol: null)],
+            ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-05-02')]
+        )->fetch('AAPL');
+
+        self::assertNull($periods[0]->statementCurrency);
+    }
+
+    /**
+     * `extractPriceCurrencyCode()` lee `General.CurrencyCode` del payload
+     * completo (fuera de `Financials`), la moneda de COTIZACION, distinta
+     * de la de los estados.
+     */
+    public function testExtractPriceCurrencyCodeLeeGeneralCurrencyCode(): void
+    {
+        $payload = ['General' => ['CurrencyCode' => 'gbx']];
+
+        self::assertSame('GBX', EodhdFiscalPeriodProvider::extractPriceCurrencyCode($payload));
+    }
+
+    public function testExtractPriceCurrencyCodeEsNuloSinGeneralOSinCurrencyCode(): void
+    {
+        self::assertNull(EodhdFiscalPeriodProvider::extractPriceCurrencyCode([]));
+        self::assertNull(EodhdFiscalPeriodProvider::extractPriceCurrencyCode(['General' => ['Code' => 'AAPL.US']]));
     }
 
     public function testTotalDebtSeDerivaDeLaSumaDeCortoYLargoSiFaltaElCampoCombinado(): void

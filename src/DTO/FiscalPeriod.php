@@ -32,6 +32,14 @@ use DateTimeImmutable;
  * toda cifra de flujo cuando es trimestral, y usa el periodo tal cual
  * cuando es anual. Un `PointInTimeFundamentalsBuilder` se niega a mezclar
  * periodos de las dos periodicidades para el mismo ticker.
+ *
+ * `$statementCurrency` (añadido el 2026-09-18, hallazgo de Astra,
+ * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B3): la moneda en
+ * la que EODHD reporto ESTE estado financiero -- confirmado con datos
+ * reales que NO siempre coincide con la moneda de cotizacion (AZN.L
+ * cotiza en GBX/peniques, sus estados en USD; ULVR.L cotiza en
+ * GBX, sus estados en EUR). `PointInTimeFundamentalsBuilder` compara esto
+ * contra la moneda del precio antes de mezclar los dos en un ratio.
  */
 class FiscalPeriod
 {
@@ -59,7 +67,8 @@ class FiscalPeriod
         public readonly ?float $totalCurrentLiabilities,
         // Flujo de caja
         public readonly ?float $freeCashFlow,
-        public readonly ?float $commonDividendsPaid
+        public readonly ?float $commonDividendsPaid,
+        public readonly ?string $statementCurrency = null
     ) {
     }
 

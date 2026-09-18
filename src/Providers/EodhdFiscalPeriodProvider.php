@@ -321,7 +321,8 @@ class EodhdFiscalPeriodProvider
                 totalCurrentAssets: $this->numeric($bal['totalCurrentAssets'] ?? null),
                 totalCurrentLiabilities: $this->numeric($bal['totalCurrentLiabilities'] ?? null),
                 freeCashFlow: $this->numeric($cf['freeCashFlow'] ?? null),
-                commonDividendsPaid: $this->numeric($cf['dividendsPaid'] ?? null)
+                commonDividendsPaid: $this->numeric($cf['dividendsPaid'] ?? null),
+                statementCurrency: $this->statementCurrency($bal, $inc)
             );
         }
 
@@ -339,6 +340,58 @@ class EodhdFiscalPeriodProvider
     private function toEodhdSymbol(string $ticker): string
     {
         return str_contains($ticker, '.') ? $ticker : $ticker . '.US';
+    }
+
+    /**
+     * Moneda en la que EODHD reporto ESTE estado financiero (Astra,
+     * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B3). Preferimos
+     * el balance sobre la cuenta de resultados (verificado igual en los
+     * casos reales revisados, pero se busca en las dos por seguridad) --
+     * `PointInTimeFundamentalsBuilder::roic()`/`debtToEquity` dependen del
+     * balance, y son los primeros ratios que se romperian con una moneda
+     * equivocada.
+     *
+     * @param array<string,mixed> $balance
+     * @param array<string,mixed> $income
+     */
+    private function statementCurrency(array $balance, array $income): ?string
+    {
+        return $this->nullableString($balance['currency_symbol'] ?? null)
+            ?? $this->nullableString($income['currency_symbol'] ?? null);
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $value = strtoupper(trim($value));
+
+        return $value !== '' ? $value : null;
+    }
+
+    /**
+     * Moneda de COTIZACION (no de los estados financieros) declarada por
+     * EODHD para este ticker -- `General.CurrencyCode` del payload
+     * completo (fuera de `Financials`, por eso es estatico y no forma
+     * parte de `parse()`: no depende de ningun trimestre concreto).
+     * Confirmado con datos reales (tarea B3): puede diferir de la moneda
+     * de los estados (AZN.L cotiza en GBX/peniques, sus estados en USD).
+     *
+     * @param array<string,mixed> $payload
+     */
+    public static function extractPriceCurrencyCode(array $payload): ?string
+    {
+        $general = $payload['General'] ?? null;
+
+        if (!is_array($general)) {
+            return null;
+        }
+
+        $code = $general['CurrencyCode'] ?? null;
+
+        return is_string($code) && trim($code) !== '' ? strtoupper(trim($code)) : null;
     }
 
     /**

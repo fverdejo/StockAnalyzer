@@ -35,7 +35,8 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
         ?float $incomeBeforeTax = 132_729_000_000.0,
         ?float $incomeTaxExpense = 20_719_000_000.0,
         ?float $totalStockholdersEquity = 73_733_000_000.0,
-        ?float $totalDebt = 112_377_000_000.0
+        ?float $totalDebt = 112_377_000_000.0,
+        ?string $statementCurrency = null
     ): FiscalPeriod {
         return new FiscalPeriod(
             ticker: 'AAPL',
@@ -58,7 +59,8 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
             totalCurrentAssets: 147_957_000_000.0,
             totalCurrentLiabilities: 165_631_000_000.0,
             freeCashFlow: 98_767_000_000.0,
-            commonDividendsPaid: $dividendsPaid
+            commonDividendsPaid: $dividendsPaid,
+            statementCurrency: $statementCurrency
         );
     }
 
@@ -1111,5 +1113,121 @@ final class PointInTimeFundamentalsBuilderTest extends TestCase
                 commonDividendsPaid: 3_800_000_000.0
             ),
         ]);
+    }
+
+    // ---------------------------------------------------------------
+    // 5. Moneda: mezclar precio con estados en otra moneda fabrica un
+    //    ratio equivocado por un factor arbitrario (Astra, tarea B3)
+    // ---------------------------------------------------------------
+
+    /**
+     * Fixture LITERAL de Astra (tarea B3): la MISMA cotizacion, 1.000
+     * peniques (GBX) = 10 libras (GBP), con estados en libras. Sin
+     * corregir la subunidad, el PER sale 500 en vez de 5 -- un factor de
+     * 100 fabricado por confundir GBX con GBP, no una diferencia real de
+     * valoracion.
+     */
+    public function testGbxSeConvierteAGbpAntesDeCalcularRatiosDePrecio(): void
+    {
+        $periodo = $this->periodo(
+            '2025-09-27',
+            '2025-10-31',
+            ebit: 10.0,
+            statementCurrency: 'GBP'
+        );
+        $builder = new PointInTimeFundamentalsBuilder([$periodo], 'GBX');
+
+        // epsDiluted del fixture base es 7,46; con precio en GBX=1.000
+        // (10 GBP reales), el PER correcto es 10/7,46 ~ 1,34, no 1.000/7,46.
+        $conConversion = $builder->buildFor(new DateTimeImmutable('2025-11-05'), 1_000.0);
+
+        self::assertNotNull($conConversion);
+        self::assertNotNull($conConversion->getPer());
+        self::assertEqualsWithDelta(10.0 / 7.46, $conConversion->getPer(), 0.001);
+    }
+
+    /**
+     * Sin la correccion (moneda de precio desconocida), el mismo precio
+     * de 1.000 se usa tal cual -- documenta el comportamiento anterior a
+     * esta correccion, que sigue siendo el que se aplica cuando no se
+     * conoce la moneda de cotizacion.
+     */
+    public function testSinMonedaDeCotizacionConocidaElPrecioSeUsaTalCual(): void
+    {
+        $periodo = $this->periodo('2025-09-27', '2025-10-31', statementCurrency: 'GBP');
+        $builder = new PointInTimeFundamentalsBuilder([$periodo]); // sin $priceCurrencyCode
+
+        $sinConversion = $builder->buildFor(new DateTimeImmutable('2025-11-05'), 1_000.0);
+
+        self::assertNotNull($sinConversion);
+        self::assertEqualsWithDelta(1_000.0 / 7.46, $sinConversion->getPer(), 0.001);
+    }
+
+    /**
+     * Fixture de Astra: GBP (precio) vs USD (estados) -- monedas
+     * GENUINAMENTE distintas, no una subunidad. Sin un tipo de cambio
+     * fechado verificable, los ratios que mezclan precio con estados
+     * deben quedar `null`, no adivinar una conversion.
+     */
+    public function testGbpFrenteAUsdSinConversionVerificableDejaLosRatiosDePrecioNulos(): void
+    {
+        $periodo = $this->periodo('2025-09-27', '2025-10-31', statementCurrency: 'USD');
+        $builder = new PointInTimeFundamentalsBuilder([$periodo], 'GBP');
+
+        $f = $builder->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getPer(), 'GBP vs USD: sin conversion verificable, PER no evaluable.');
+        self::assertNull($f->getEarningsYield());
+        self::assertNull($f->getMarketCap());
+        self::assertNull($f->getPriceToBook());
+        self::assertNull($f->getEvToEbitda());
+        self::assertNull($f->getDividendYield());
+    }
+
+    /** Mismo caso que arriba con AUD (precio) vs USD (estados) -- ejemplo real de BHP.AX. */
+    public function testAudFrenteAUsdSinConversionVerificableDejaLosRatiosDePrecioNulos(): void
+    {
+        $periodo = $this->periodo('2025-09-27', '2025-10-31', statementCurrency: 'USD');
+        $builder = new PointInTimeFundamentalsBuilder([$periodo], 'AUD');
+
+        $f = $builder->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNull($f->getPer());
+    }
+
+    /** Control: EUR vs EUR (misma moneda en los dos lados) no bloquea nada. */
+    public function testEurFrenteAEurNoBloqueaLosRatiosDePrecio(): void
+    {
+        $periodo = $this->periodo('2025-09-27', '2025-10-31', statementCurrency: 'EUR');
+        $builder = new PointInTimeFundamentalsBuilder([$periodo], 'EUR');
+
+        $f = $builder->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNotNull($f->getPer());
+        self::assertEqualsWithDelta(250.0 / 7.46, $f->getPer(), 0.001);
+    }
+
+    /**
+     * Aunque los ratios de precio queden bloqueados por moneda
+     * incompatible, los ratios puramente contables (ROE, margenes,
+     * deuda/patrimonio...) siguen siendo calculables: no dependen del
+     * precio, son internamente consistentes en la moneda de los propios
+     * estados.
+     */
+    public function testLosRatiosContablesPurosSiguenCalculablesConMonedasIncompatibles(): void
+    {
+        $periodo = $this->periodo('2025-09-27', '2025-10-31', statementCurrency: 'USD');
+        $builder = new PointInTimeFundamentalsBuilder([$periodo], 'GBP');
+
+        $f = $builder->buildFor(new DateTimeImmutable('2025-11-05'), 250.0);
+
+        self::assertNotNull($f);
+        self::assertNotNull($f->getRoe());
+        self::assertNotNull($f->getNetMargin());
+        self::assertNotNull($f->getDebtToEquity());
+        self::assertNotNull($f->getRoic());
     }
 }

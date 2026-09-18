@@ -95,6 +95,40 @@ class IndexMembershipRepository implements IndexMembershipCheckerInterface
     }
 
     /**
+     * TODOS los intervalos de membresia de un `(ticker, indexCode)` en una
+     * unica consulta (Astra, tarea B7): sirve para precargar
+     * `PreloadedIndexMembershipChecker::isMemberAt()` sin repetir esta
+     * consulta por cada fecha. Normalmente una sola fila (una entrada, una
+     * salida o ninguna), pero no se asume: `storeAll()` hace UPSERT por
+     * `(ticker, index_code)` hoy, pero nada impide varios intervalos en el
+     * futuro.
+     *
+     * @return list<array{start: ?string, end: ?string}>
+     */
+    public function intervalsFor(string $ticker, string $indexCode): array
+    {
+        $statement = $this->connection->getPdo()->prepare(
+            'SELECT start_date, end_date FROM index_membership
+             WHERE ticker = :ticker AND index_code = :index_code'
+        );
+        $statement->execute([
+            'ticker' => strtoupper($ticker),
+            'index_code' => strtoupper($indexCode),
+        ]);
+
+        $intervals = [];
+
+        while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+            $intervals[] = [
+                'start' => $row['start_date'] === null ? null : (string) $row['start_date'],
+                'end' => $row['end_date'] === null ? null : (string) $row['end_date'],
+            ];
+        }
+
+        return $intervals;
+    }
+
+    /**
      * Todos los tickers que fueron miembro de $indexCode en algun momento
      * (activos hoy o no) y que YA NO estan en $currentTickers -- el
      * universo de "antiguos componentes" del punto 3 del plan. Se filtra en

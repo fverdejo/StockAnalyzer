@@ -115,11 +115,34 @@ class PointInTimeFundamentalsBuilder
     private readonly FiscalPeriodType $periodType;
 
     /**
+     * Subunidades conocidas -> [moneda base, divisor]. Confirmado con
+     * datos reales (tarea B3): EODHD cotiza acciones britanicas en GBX
+     * (peniques), no en GBP -- `AZN.L`/`ULVR.L`/etc. Ampliar este mapa
+     * solo tras confirmar un caso real nuevo, mismo criterio que el resto
+     * del proyecto.
+     *
+     * @var array<string, array{0: string, 1: float}>
+     */
+    private const CURRENCY_SUBUNITS = [
+        'GBX' => ['GBP', 100.0],
+    ];
+
+    /**
      * @param list<FiscalPeriod> $periods ejercicios del ticker, en cualquier orden,
      *                                    todos con la MISMA periodicidad
+     * @param ?string $priceCurrencyCode moneda de la cotizacion `$price` que
+     *                                   se pasa a `buildFor()` (Astra, tarea B3):
+     *                                   `EodhdFiscalPeriodProvider::extractPriceCurrencyCode()`.
+     *                                   `null` (por defecto) preserva el
+     *                                   comportamiento anterior a esta
+     *                                   correccion -- sin esta moneda no hay
+     *                                   nada que comparar, se asume compatible
+     *                                   (como ya era el caso para todo lo
+     *                                   reconstruido antes del 2026-09-18).
      */
     public function __construct(
-        private readonly array $periods
+        private readonly array $periods,
+        private readonly ?string $priceCurrencyCode = null
     ) {
         $types = [];
 
@@ -162,17 +185,39 @@ class PointInTimeFundamentalsBuilder
         $ttm = $this->ttmAggregate($filed, 0);
         $previousTtm = $this->ttmAggregate($filed, $this->windowSize());
 
+        // Corregido el 2026-09-18 (hallazgo real de Astra, tarea B3):
+        // `$price` y los estados financieros de `$current` no siempre
+        // estan en la misma moneda -- confirmado con datos reales
+        // (AZN.L cotiza en GBX/peniques con estados en USD; ULVR.L en
+        // GBX con estados en EUR). Mezclarlos sin comprobarlo antes
+        // fabrica un PER/rentabilidad por dividendo/EV-EBITDA equivocado
+        // por un factor arbitrario (el fixture de Astra: PER 500 en vez
+        // de 5, un factor de 100 por confundir GBX con GBP). Sin
+        // conversion de tipo de cambio fechado integrada todavia (exige
+        // una fuente de FX historica que este proyecto no tiene
+        // conectada), la unica correccion honesta ante una moneda
+        // GENUINAMENTE distinta es no calcular esos ratios, no adivinar
+        // un tipo de cambio. La subunidad (GBX/GBP) SI se corrige aqui
+        // porque es aritmetica exacta, no una tasa de mercado.
+        [$priceComparable, $priceInStatementCurrency] = $this->comparablePrice($price, $current->statementCurrency);
+
         $shares = $this->positive($current->sharesDiluted);
         $equity = $this->positive($current->totalStockholdersEquity);
         $revenue = $this->positive($this->figure($ttm, 'revenue'));
-        $marketCap = ($shares !== null && $price > 0.0) ? $price * $shares : null;
+        $marketCap = ($priceComparable && $shares !== null && $priceInStatementCurrency > 0.0)
+            ? $priceInStatementCurrency * $shares
+            : null;
 
         $epsTtm = $this->figure($ttm, 'epsDiluted');
-        $per = ($epsTtm !== null && $epsTtm > 0.0 && $price > 0.0) ? $price / $epsTtm : null;
+        $per = ($priceComparable && $epsTtm !== null && $epsTtm > 0.0 && $priceInStatementCurrency > 0.0)
+            ? $priceInStatementCurrency / $epsTtm
+            : null;
         // Inverso del PER, pero SIN la guarda de positividad de $per: un
         // beneficio negativo es exactamente el caso que earningsYield tiene
         // que poder representar (P3.3, ver el docblock de Fundamentals).
-        $earningsYield = ($epsTtm !== null && $price > 0.0) ? $epsTtm / $price : null;
+        $earningsYield = ($priceComparable && $epsTtm !== null && $priceInStatementCurrency > 0.0)
+            ? $epsTtm / $priceInStatementCurrency
+            : null;
         $netIncomeTtm = $this->figure($ttm, 'netIncome');
         $earningsGrowth = $this->growth($netIncomeTtm, $this->figure($previousTtm, 'netIncome'));
         $dividendPerShareTtm = $this->dividendPerShareTtm($ttm, $shares);
@@ -218,9 +263,9 @@ class PointInTimeFundamentalsBuilder
                 ? ($marketCap + $current->netDebt) / $ebitdaTtm
                 : null,
             priceToBook: ($marketCap !== null && $equity !== null) ? $marketCap / $equity : null,
-            dividendYield: ($dividendPerShareTtm === null || $price <= 0.0)
+            dividendYield: (!$priceComparable || $dividendPerShareTtm === null || $priceInStatementCurrency <= 0.0)
                 ? null
-                : $dividendPerShareTtm / $price * 100,
+                : $dividendPerShareTtm / $priceInStatementCurrency * 100,
             payoutRatio: $this->percentOf($dividendPerShareTtm, $this->positive($epsTtm)),
             grossMargin: $this->percentOf($this->figure($ttm, 'grossProfit'), $revenue),
             operatingMargin: $this->percentOf($this->figure($ttm, 'operatingIncome'), $revenue),
@@ -548,5 +593,31 @@ class PointInTimeFundamentalsBuilder
     private function positive(?float $value): ?float
     {
         return ($value === null || $value <= 0.0) ? null : $value;
+    }
+
+    /**
+     * Decide si `$price` (en `$this->priceCurrencyCode`) puede mezclarse
+     * con los estados en `$statementCurrency`, y devuelve el precio ya
+     * ajustado de subunidad si hace falta (tarea B3, ver el docblock de
+     * `buildFor()`). Sin ninguna de las dos monedas conocidas, se asume
+     * compatible (comportamiento anterior a esta correccion, para no
+     * romper ningun ticker ya reconstruido sin este dato).
+     *
+     * @return array{0: bool, 1: float} [es_comparable, precio_ajustado]
+     */
+    private function comparablePrice(float $price, ?string $statementCurrency): array
+    {
+        if ($this->priceCurrencyCode === null || $statementCurrency === null) {
+            return [true, $price];
+        }
+
+        [$priceBase, $divisor] = self::CURRENCY_SUBUNITS[$this->priceCurrencyCode] ?? [$this->priceCurrencyCode, 1.0];
+        [$statementBase] = self::CURRENCY_SUBUNITS[$statementCurrency] ?? [$statementCurrency, 1.0];
+
+        if ($priceBase !== $statementBase) {
+            return [false, $price];
+        }
+
+        return [true, $price / $divisor];
     }
 }

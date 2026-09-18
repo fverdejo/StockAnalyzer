@@ -8223,3 +8223,54 @@ Incluye:
 - Tests: `EarningsEventsRepositoryTest.php` (reescrito, fixtures literales de Astra), `EodhdRawFundamentalVersionsRepositoryTest.php` (+1), `EodhdEarningsEventsNormalizerTest.php` (+6), `OfflineOnlyMarketDataProviderTest.php` (nuevo, 10 tests).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **782 tests, 2.228 assertions, OK** (sube desde 761/2.192: 21 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. Repoblado el estado vigente para los 2.343 tickers ya normalizados (misma cobertura: 189.531 filas, 2.281 tickers -- la validacion de identidad de B2 no descarto ningun dato real).
+
+---
+
+## 2026-09-18 (segunda entrada) - B3, B4, B7 cerradas y exportacion/restauracion de EODHD verificada: cierre completo de `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`
+
+Estado: instruccion explicita de Francisco ("cuando haya tareas, hazlas todas, no dejes cosas pendientes, a no ser que no se puedan completar") -- se completan las tres tareas restantes de la auditoria (B3, B4, B7) mas la entrega de "archivo EODHD recuperable" que quedaba pendiente. Ningun bloqueo real encontrado salvo el ya conocido (tipo de cambio historico fechado, sin fuente integrada) que se documenta explicitamente, no se oculta.
+
+### B3 -- contrato de moneda: la parte alcanzable ahora, la parte genuinamente bloqueada declarada como tal
+
+Astra demostro con datos reales (AZN.L/ULVR.L: cotizan en GBX/peniques con estados en USD/EUR respectivamente; BHP.AX: cotiza en AUD con estados en USD) que mezclar precio y estados financieros de distinta moneda fabrica un ratio equivocado por un factor arbitrario (fixture: PER 500 en vez de 5, un factor de 100 por confundir GBX con GBP).
+
+**Corregido**: `FiscalPeriod` gana `statementCurrency` (capturado de `currency_symbol` del balance/cuenta de resultados en `EodhdFiscalPeriodProvider::parse()`). Nuevo `EodhdFiscalPeriodProvider::extractPriceCurrencyCode()` lee `General.CurrencyCode` (moneda de COTIZACION, confirmado que puede diferir de la de los estados). `PointInTimeFundamentalsBuilder` acepta un `?string $priceCurrencyCode` opcional (`null` preserva el comportamiento anterior, sin regresion para nada ya reconstruido): normaliza subunidades conocidas (GBX->GBP, aritmetica exacta) y, si tras normalizar las monedas siguen siendo GENUINAMENTE distintas, deja `null` los ratios que mezclan precio con estados (`per`, `earningsYield`, `marketCap`, `evToEbitda`, `priceToBook`, `dividendYield`) -- los ratios puramente contables (ROE, ROIC, margenes, deuda/patrimonio, crecimiento) siguen siendo calculables, no dependen del precio.
+
+**Genuinamente bloqueado, declarado explicitamente**: un tipo de cambio HISTORICO FECHADO (para convertir GBP/USD/AUD entre si en la fecha real del snapshot, no con el tipo de hoy) exigiria una fuente de FX historica que este proyecto no tiene integrada -- el plan de EODHD actual ya confirmo (roadmap.md, "Segundo bloque") que `/api/eod` (de donde saldrian series FOREX) devuelve 401/403 para cualquier simbolo. No se improvisa una conversion con el tipo de cambio de HOY aplicado a fechas pasadas (eso fabricaria un numero tan falso como el bug original). Mientras no exista esa fuente, los ratios que mezclan monedas genuinamente distintas quedan `null` con motivo, no adivinados.
+
+### B4 -- conectar el archivo v1.1 a los consumidores: los 159 simbolos exclusivamente-v1.1 pasan de 0 a ~2.454 snapshots cada uno
+
+`bin/backfill-fundamentals-history-from-archive.php` solo leia `eodhd_raw_fundamentals` (legacy). Los 159 simbolos internacionales de la campaña del `2026-09-16` (A1) nunca tuvieron fila legacy -- tenian archivo `v1.1` pero CERO snapshots reconstruibles en `fundamentals_history`.
+
+**Corregido**: si no hay legacy, el script intenta `eodhd_raw_fundamental_versions` (`v1.1`/`full`) como fuente alternativa. Verificado que EODHD no cambio la forma de `Financials` entre versiones (AZN.L/ULVR.L/BHP.AX reales, `parse()` funciona identico). Tambien extrae y pasa la moneda de cotizacion (B3) a `PointInTimeFundamentalsBuilder`.
+
+**Ejecutado de verdad, no solo simulado**: `bin/backfill-fundamentals-history-from-archive.php --tickers="<159 internacionales>"` -- **159/159 tickers, 0 errores, 390.173 filas nuevas escritas en `fundamentals_history`** (verificado primero en `--dry-run`, despues real).
+
+### B7 -- precarga por ticker: de 1.464 consultas por ticker a unas pocas
+
+Astra midio (fixture con el servicio real): `replayTimeline()` hace ~1.464 consultas SQL por ticker en un backtest de 10 años/`step=5` (~488 puntos): 488 a `fundamentals_history` desde `fundamentalsAt()`, 488 mas desde `FundamentalChangeAssessor::assess()`, 488 a `index_membership` desde `isMemberAt()`. Ninguna de esas consultas cambia de resultado entre puntos de un MISMO ticker salvo por la fecha, y todo el historico de un ticker cabe sobradamente en memoria.
+
+**Corregido**: `PreloadedFundamentalsHistoryRepository` (extiende `FundamentalsHistoryRepository`) y `PreloadedIndexMembershipChecker` (implementa `IndexMembershipCheckerInterface`) -- cada uno precarga TODO el historico/membresia de un ticker en una unica consulta, y resuelve `findAsOfWithDate()`/`isMemberAt()` en memoria (busqueda binaria/recorrido de intervalos) para las siguientes ~488 llamadas. Polimorficos con lo que `BacktestingService` ya esperaba: CERO cambios en `BacktestingService` para integrarlos.
+
+**Equivalencia comprobada, no solo compilada** (instruccion explicita de Astra: "comprobando equivalencia"): dos suites de integracion nuevas comparan, para un abanico de fechas reales (antes/dentro/despues de huecos), que la version precargada devuelve EXACTAMENTE lo mismo que la consulta SQL real. Ademas, el lote de validacion de 15 simbolos (B5/B6) se repitio con la precarga activada: **los 15 resultados son byte a byte identicos** a la version sin precarga, y la duracion por ticker bajo de ~1,8s a ~1,3-1,4s (~25%).
+
+### Entrega de conservacion -- "archivo EODHD recuperable", verificado con una restauracion real
+
+`bin/export-eodhd-archive.php` (nuevo): exporta TODO el archivo versionado (`eodhd_raw_fundamental_versions` + `_version_observations` -- fundamentales legacy/v1.1, calendar/earnings, calendar/trends, sec-form4, symbol-list) a un `.jsonl.gz` portable con manifiesto (conteos, cobertura, revision de codigo), sin tocar la red. **Ejecutado de verdad**: 8.530 observaciones, 2.344 tickers distintos, 308,7MB.
+
+`bin/verify-eodhd-archive-export.php` (nuevo): verifica el export exportado SIN ninguna base de datos ni red -- (1) recalcula el sha256 de cada una de las 8.530 filas contra su hash guardado (**8.530/8.530 verificadas**); (2) reconstruye `FiscalPeriod` de un simbolo exclusivamente-v1.1 (`AZN.L`, a peticion explicita de Astra) **SOLO desde el contenido del export**, comparado contra la reconstruccion desde la base de datos real: **108 periodos, JSON byte a byte identico**. Demuestra que el export por si solo basta para reconstruir historico usable, sin depender de la base de datos de la aplicacion ni de la suscripcion de EODHD.
+
+Incluye:
+
+- `src/DTO/FiscalPeriod.php`: `statementCurrency` (nuevo, opcional).
+- `src/Providers/EodhdFiscalPeriodProvider.php`: captura `statementCurrency`; `extractPriceCurrencyCode()` (nuevo, estatico).
+- `src/Services/PointInTimeFundamentalsBuilder.php`: `$priceCurrencyCode` opcional; normalizacion de subunidades; ratios de precio a `null` con moneda incompatible.
+- `bin/backfill-fundamentals-history-from-archive.php`: fallback a v1.1; pasa la moneda de cotizacion.
+- `src/Repository/FundamentalsHistoryRepository.php`: `$table`/`$connection` a `protected` (para el decorador).
+- `src/Repository/PreloadedFundamentalsHistoryRepository.php` (nuevo), `src/Repository/PreloadedIndexMembershipChecker.php` (nuevo), `IndexMembershipRepository::intervalsFor()` (nuevo).
+- `bin/export-eodhd-archive.php` (nuevo), `bin/verify-eodhd-archive-export.php` (nuevo).
+- Tests: `PointInTimeFundamentalsBuilderTest.php` (+7, sección de moneda), `EodhdFiscalPeriodProviderTest.php` (+4), `PreloadedFundamentalsHistoryRepositoryTest.php` (nuevo, 5 tests de equivalencia), `PreloadedIndexMembershipCheckerTest.php` (nuevo, 4 tests de equivalencia).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **801 tests, 2.281 assertions, OK** (sube desde 782/2.228: 19 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. El export (`storage/exports/eodhd_archive_export_2026-09-18.jsonl.gz`, 308,7MB) no se commitea (mismo convenio ya establecido en `.gitignore` para `storage/exports/`).
+
+**Con esto, `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md` queda COMPLETA (B1-B7)**, salvo el sub-punto genuinamente bloqueado de B3 (tipo de cambio historico fechado, sin fuente integrada) y la propia medicion completa de 636 tickers/10 años (bloqueada por el limite de infraestructura de WSL2, pendiente de que Francisco decida entre las tres opciones ya documentadas).

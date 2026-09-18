@@ -77,10 +77,15 @@ class FundamentalsHistoryRepository
         'cashConversion' => 'getCashConversion',
     ];
 
-    private readonly string $table;
+    /**
+     * `protected` desde el 2026-09-18 (tarea B7): `PreloadedFundamentalsHistoryRepository`
+     * necesita su propia conexion/tabla para precargar un ticker completo
+     * en una unica consulta, sin duplicar el constructor.
+     */
+    protected readonly string $table;
 
     public function __construct(
-        private readonly Connection $connection,
+        protected readonly Connection $connection,
         string $table = 'fundamentals_history'
     ) {
         if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table) !== 1) {
