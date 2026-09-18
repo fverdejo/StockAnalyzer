@@ -137,7 +137,7 @@ final class PolicyReplayStatistics
     /**
      * @param list<array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: ?float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}> $replaysByTicker
      * @param ?int $seed Semilla de `mt_srand()` para que el bootstrap sea reproducible (Entrega 2: mismo criterio que `$asOf`). `null` usa el estado ambiental del generador -- aceptable para uso exploratorio, no para una medicion que se quiera poder repetir exactamente.
-     * @return array{entries_total: int, entries_closed: int, entries_pending: int, pct_pending: ?float, pending_avg_managed_return: ?float, candidates_excluded_by_membership_total: int, cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int, revisar_tesis_events_total: int}
+     * @return array{entries_total: int, entries_closed: int, entries_pending: int, pct_pending: ?float, pending_avg_managed_return: ?float, candidates_excluded_by_membership_total: int, cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int, revisar_tesis_events_total: int}
      */
     public function summarize(array $replaysByTicker, ?int $seed = null): array
     {
@@ -251,6 +251,11 @@ final class PolicyReplayStatistics
                 ? round($naiveMean / $bootstrap['se_bootstrap'], 2)
                 : null,
             'block_width_days' => $bootstrap['block_width_days'],
+            // Expuesta el 2026-09-18 (hallazgo de `auditor-estadistico`
+            // al revisar la medicion completa): es la cifra que de
+            // verdad decide `bootstrap_has_enough_resolution`, antes solo
+            // calculada internamente sin poder verla en el resultado.
+            'blocks_in_range' => $bootstrap['blocks_in_range'] !== null ? round($bootstrap['blocks_in_range'], 1) : null,
             'bootstrap_replicates' => self::BOOTSTRAP_REPLICATES,
             'design_effect' => $designEffect !== null ? round($designEffect, 3) : null,
             'effective_n' => $effectiveN !== null ? round($effectiveN, 1) : null,
@@ -314,12 +319,6 @@ final class PolicyReplayStatistics
         $blockWidthDays = max(1, (int) round(2 * $this->percentile($exposureSpans, 0.9)));
 
         $totalRangeDays = max(1, $start->diff($end)->days);
-        // +1: un bloque que arranca en $maxStartOffset debe poder cubrir
-        // la fecha final del rango ($totalRangeDays) -- con
-        // `max(0, $totalRangeDays - $blockWidthDays)` (sin el +1) el
-        // ultimo bloque posible terminaba justo ANTES de esa fecha
-        // (intervalo semiabierto), dejandola fuera de todo sorteo posible.
-        $maxStartOffset = max(0, $totalRangeDays - $blockWidthDays + 1);
         $blockCount = max(1, (int) ceil($totalRangeDays / $blockWidthDays));
 
         // Indice ordenado por dia desde $start, para localizar por
@@ -338,14 +337,44 @@ final class PolicyReplayStatistics
 
         $replicateMeans = [];
 
+        // Bootstrap CIRCULAR de bloques (Politis & Romano 1992), no
+        // truncado: corregido el 2026-09-18 (hallazgo real de
+        // `auditor-estadistico` al revisar la medicion completa de 636
+        // tickers). La version anterior acotaba `$blockStart` a
+        // `[0, totalRangeDays - blockWidthDays]` para que ningun bloque
+        // sorteado se saliera del rango -- pero eso deja a una operacion
+        // cerca del INICIO del rango cubierta por un unico punto de
+        // arranque posible (`blockStart=0`), mientras una del CENTRO la
+        // cubren `blockWidthDays` puntos de arranque distintos: un sesgo
+        // de inclusion real y medido (verificado sobre los 2.842 pares
+        // reales de esa medicion: la primera operacion del rango cabia en
+        // 1 de 2.554 posiciones posibles frente a 982 para una del
+        // centro, ~1000x mas representada). Envolviendo el rango como un
+        // circulo (un bloque que se sale por el final continua por el
+        // principio), CADA punto de arranque en `[0, totalRangeDays)` es
+        // igual de probable y CADA operacion queda cubierta por
+        // exactamente `blockWidthDays` arranques posibles -- elimina el
+        // sesgo de inclusion sin cambiar `blocks_in_range` (la
+        // resolucion temporal real no aumenta, solo se reparte mejor
+        // quien se muestrea).
         for ($replicate = 0; $replicate < self::BOOTSTRAP_REPLICATES; $replicate++) {
             $sampledDiffs = [];
 
             for ($block = 0; $block < $blockCount; $block++) {
-                $blockStart = mt_rand(0, $maxStartOffset);
+                $blockStart = mt_rand(0, $totalRangeDays - 1);
                 $blockEndExclusive = $blockStart + $blockWidthDays;
 
-                foreach ($this->indexesInRange($entryOffsets, $blockStart, $blockEndExclusive) as $index) {
+                if ($blockEndExclusive <= $totalRangeDays) {
+                    $indexes = $this->indexesInRange($entryOffsets, $blockStart, $blockEndExclusive);
+                } else {
+                    // El bloque se sale del rango: envuelve al principio.
+                    $indexes = array_merge(
+                        $this->indexesInRange($entryOffsets, $blockStart, $totalRangeDays),
+                        $this->indexesInRange($entryOffsets, 0, $blockEndExclusive - $totalRangeDays)
+                    );
+                }
+
+                foreach ($indexes as $index) {
                     $sampledDiffs[] = $diffs[$index]['diff'];
                 }
             }
@@ -476,9 +505,21 @@ final class PolicyReplayStatistics
 
     /**
      * Descriptivo unicamente, ver el docblock de la clase: cuantas
-     * ventanas de calendario de ancho fijo (mediana de holding del brazo
-     * GESTIONADO, diseño de la ronda del `2026-09-14`) contienen al menos
-     * una operacion.
+     * ventanas de calendario de ancho fijo (mediana de la exposicion de
+     * AMBOS brazos -- `exposure_end_date`, corregida el `2026-09-16`
+     * caso 4, no solo el holding del gestionado) contienen al menos una
+     * operacion.
+     *
+     * **Nota de higiene (verificado por `auditor-estadistico` el
+     * `2026-09-18` al revisar la medicion completa)**: este metodo usa
+     * una ventana de ancho = MEDIANA de la exposicion, mientras que
+     * `bootstrapUncertainty()` usa 2xP90 de esa misma distribucion para
+     * `$blockWidthDays` -- son dos magnitudes DISTINTAS que no deben
+     * compararse entre si (un documento anterior comparo por error
+     * `block_width_days` contra `calendar_windows_observed`, que no
+     * comparten definicion). La cifra que de verdad decide
+     * `bootstrap_has_enough_resolution` es `blocks_in_range` (expuesta en
+     * el resultado de `summarize()`), no esta.
      *
      * @param list<array{entry_date: string, exposure_end_date: string, diff: float}> $diffs
      */

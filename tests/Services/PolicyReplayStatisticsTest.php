@@ -336,6 +336,49 @@ final class PolicyReplayStatisticsTest extends TestCase
     }
 
     /**
+     * Regresion del bootstrap CIRCULAR (Astra/`auditor-estadistico`,
+     * `2026-09-18`, al revisar la medicion completa de 636 tickers):
+     * antes de esta correccion, la operacion mas cercana al INICIO del
+     * rango temporal solo podia caer dentro de un unico punto de arranque
+     * de bloque posible (`blockStart=0`), mientras una operacion del
+     * centro caia dentro de `blockWidthDays` puntos distintos -- un sesgo
+     * de inclusion real, verificado sobre los 2.842 pares de esa medicion
+     * (la primera operacion, ~1000x menos representada que una del
+     * centro). Con el bootstrap envuelto como un circulo, TODAS las
+     * posiciones tienen la misma probabilidad de arranque.
+     *
+     * Fixture: la operacion MAS ANTIGUA (por `entry_date`) tiene una
+     * diferencia extrema (3.400, frente a 0 en las demas 33) -- si
+     * siguiera infrarrepresentada, el percentil 97,5 del bootstrap se
+     * quedaria pegado a 0 (la operacion casi nunca se muestrearia);
+     * con inclusion justa, algunas replicas SI la capturan y el percentil
+     * alto debe reflejarlo con un valor claramente positivo.
+     */
+    public function testLaOperacionMasAntiguaDelRangoNoQuedaInfrarrepresentadaEnElBootstrap(): void
+    {
+        $trades = [];
+
+        for ($i = 0; $i < 34; $i++) {
+            $entry = (int) round($i * (700 / 34));
+            $trades[] = $this->trade(
+                $this->dateAt($entry),
+                $this->dateAt($entry + 200),
+                $i === 0 ? 3405.0 : 5.0,
+                5.0,
+                $this->dateAt($entry + 195)
+            );
+        }
+
+        $summary = (new PolicyReplayStatistics())->summarize([$this->replay('AAA', $trades)], self::SEED);
+
+        self::assertGreaterThan(
+            20.0,
+            $summary['ci95_high'],
+            'La operacion mas antigua del rango debe poder aparecer en las replicas del bootstrap -- un percentil alto pegado a 0 indicaria que sigue infrarrepresentada.'
+        );
+    }
+
+    /**
      * `calendar_windows_observed` (el diseño de bloques por ancho fijo,
      * ya retirado como criterio de decision) se sigue calculando como
      * campo puramente descriptivo -- no decide nada, pero no desaparece.
