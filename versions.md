@@ -8273,4 +8273,37 @@ Incluye:
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **801 tests, 2.281 assertions, OK** (sube desde 782/2.228: 19 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. El export (`storage/exports/eodhd_archive_export_2026-09-18.jsonl.gz`, 308,7MB) no se commitea (mismo convenio ya establecido en `.gitignore` para `storage/exports/`).
 
-**Con esto, `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md` queda COMPLETA (B1-B7)**, salvo el sub-punto genuinamente bloqueado de B3 (tipo de cambio historico fechado, sin fuente integrada) y la propia medicion completa de 636 tickers/10 años (bloqueada por el limite de infraestructura de WSL2, pendiente de que Francisco decida entre las tres opciones ya documentadas).
+**Con esto, `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md` queda COMPLETA (B1-B7)**, salvo el sub-punto genuinamente bloqueado de B3 (tipo de cambio historico fechado, sin fuente integrada).
+
+---
+
+## 2026-09-18 (tercera entrada) - Cuarto intento de la medicion completa de 636 tickers/10 años: COMPLETADO por primera vez, sin ningun fallo de infraestructura
+
+Estado: con B5/B6/B7 corregidos, se repite la medicion economica predeclarada siguiendo la secuencia que recomendo Astra en su respuesta del `2026-09-17` -- **completa sin ningun error tecnico, la primera vez en cuatro intentos** (dos el `2026-09-15`, uno el `2026-09-16`/`17`, este el `2026-09-18`). El resultado numerico se documenta con las mismas cautelas ya establecidas para la medicion original del `2026-09-14`; no se declara una conclusion de mercado sin que los agentes especializados la revisen (mandato explicito de Francisco).
+
+### Como se ejecuto, distinto de los tres intentos anteriores
+
+Siguiendo la respuesta de Astra del `2026-09-17` ("No recomiendo reiniciar todos los contenedores por sistema tras cada lote: añade coste y puede ocultar acumulaciones que necesitamos medir"): lotes de 200 tickers, procesados por `policy_replay_full_2026-09-18_batch.php` (offline estricto, escritura validada, manifiesto congelado -- B5/B6) con precarga por ticker (B7), **sin reiniciar `ddev` entre lotes esta vez** -- para que si algo se acumulaba de verdad, se viera en la telemetria en vez de ocultarse por el reinicio.
+
+**Resultado: 636/636 tickers, 0 errores, 4 lotes, sin ningun `exit_code` distinto de cero.** RSS real (`/proc/self/status`, no `memory_get_usage()`) medido en los 636 tickers: **maximo absoluto de 74,8MB** en todo el recorrido -- un 1,1% del limite de 6,5GB de la VM de WSL2. El patron es identico al del lote de validacion de 15 simbolos: sube en los primeros 2-3 tickers de cada proceso nuevo (arranque/autoload) y luego se queda COMPLETAMENTE PLANO, sin ningun crecimiento sostenido, ni siquiera en el ultimo lote tras cientos de tickers previos.
+
+**Conclusion sobre la causa raiz de los tres fallos anteriores**: no se demuestra con certeza absoluta (Astra ya advirtio que los indicios nunca fueron concluyentes), pero la combinacion de evidencia es mucho mas fuerte ahora: (1) el PHP del lado cliente nunca fue el problema (RSS real, no solo `memory_get_usage()`, confirmado plano); (2) B5 elimino un fallo real que SI generaba trafico de red inesperado dentro de un estudio que se declaraba offline (91/88 fallos de cache seguidos de peticiones reales a Yahoo en el intento anterior); (3) B7 elimino ~1.464 consultas SQL por ticker, casi 1 millon de consultas menos en total sobre las mismas dos tablas que competian con MySQL bajo presion. Cualquiera de estas dos ultimas (o su combinacion) explica razonablemente por que el mismo hardware que fallaba tres veces con el motor sin corregir complete ahora sin ningun incidente.
+
+### El resultado numerico (con las mismas cautelas del `2026-09-14`, no una conclusion nueva)
+
+`storage/scratch/policy_replay_20260918_b7_summary.json` (no committeado). Escenario base (coste 10pb; el escenario de estres a 20pb es practicamente identico, diferencia de centesimas):
+
+- 3.238 candidatas aceptadas, 2.846 cerradas por stop-loss, **392 pendientes al corte (12,11%, retorno medio a mercado +179,4% -- sin techo de ganancia, mismo sesgo ya documentado el `2026-09-14`: las ganadoras nunca se cierran solas)**.
+- Diferencia pareada (gestionado vs comparador de 20 sesiones, solo operaciones CERRADAS): **-5,94pp** (base) / -5,93pp (estres). Mismo signo y magnitud similar a la medicion original del `2026-09-14` (-5,49pp), esta vez sobre el motor con los casos 1-4 de la primera auditoria y los casos 1/3 de la segunda ya corregidos.
+- `se_naive`=0,154, `t_naive`=-38,52 (pareceria enormemente significativo sin corregir por autocorrelacion).
+- Bootstrap de bloques moviles: `se_bootstrap`=0,494 (3,2x mayor que `se_naive`, coherente con dependencia temporal real entre operaciones cercanas), IC95%=[-7,17, -5,27] (excluye cero), `pseudo_t_bootstrap`=-12,02.
+- **`bootstrap_has_enough_resolution: false` -- la propia salvaguarda predeclarada de este proyecto marca el resultado como NO fiable** (ancho de bloque de 982 dias frente a solo 84 ventanas de calendario observadas -- insuficiente resolucion temporal para que el bootstrap de bloques moviles represente bien la dependencia real). `result_informative: false` en consecuencia. `design_effect`=10,29, tamaño efectivo (Kish)=276,2 de 2.842 cohortes.
+
+**No se declara aqui que la politica "funciona" o "no funciona"**: el numero es negativo y de magnitud similar al `2026-09-14`, lo que es consistente con que el hallazgo cualitativo original (la politica gestiona peor sus perdedoras que un plazo fijo, en la comparacion sesgada hacia cerradas) no era puramente un artefacto de los bugs ya corregidos -- pero la propia salvaguarda estadistica de este proyecto dice que la resolucion del bootstrap no alcanza para tratar el intervalo/pseudo-t como concluyente. Pendiente de consulta con `auditor-estadistico` (que ya señalo en la entrega anterior que el tratamiento de bordes del bootstrap necesitaba revision) antes de decidir si esto se reporta como hallazgo o se deja como "medido, sin resolucion suficiente".
+
+Incluye:
+
+- `storage/scratch/run_full_replay_b7.sh`, `storage/scratch/compute_full_replay_summary_2026-09-18.php` (no committeados).
+- Datos: 636 ficheros JSON por ticker + telemetria completa en `storage/scratch/policy_replay_20260918_b7_tickers/` (no committeado).
+
+No se ha tocado codigo de produccion en esta entrada -- solo ejecucion y medicion. `config/weights.php` no se toca.
