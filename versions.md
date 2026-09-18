@@ -8177,3 +8177,49 @@ Incluye:
 - Tests: `EodhdFiscalPeriodProviderTest.php` (+1), `EarningsEventsRepositoryTest.php` (nuevo, 5 tests, tabla sin cobertura previa).
 
 Verificado: `ddev exec vendor/bin/phpunit` -- **761 tests, 2.192 assertions, OK** (sube desde 755/2.179: 6 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. Entorno restaurado y verificado estable tras el tercer intento fallido.
+
+---
+
+## 2026-09-18 - `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`: estado vigente separado del historial (B1), identidad de calendario (B2), modo offline estricto y contrato de reanudacion (B5/B6) -- lote de validacion confirma resultados identicos y RSS real estable
+
+Estado: B1, B2, B5 y B6 corregidos y probados. B3 (contrato de moneda), B4 (conectar v1.1 a los consumidores) y B7 (optimizacion de consultas) quedan pendientes, documentados en `roadmap.md`. El "archivo EODHD recuperable" (exportacion/restauracion verificada) tambien queda pendiente.
+
+Astra responde a `PREGUNTA_PARA_ASTRA_2026-09-17.md` con una decision explicita (`RESPUESTA_A_CLAUDE_ASTRA_2026-09-18.md`): mantener los 636 simbolos y diez años, corregir la ejecucion y medir por lotes pequeños ANTES de decidir mas recursos; no acortar el estudio para presentarlo como completado. La auditoria tecnica (`REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`) verifica con **106 tests, 316 aserciones, OK** y reproduce siete hallazgos (B1-B7).
+
+### B1 (prioridad alta) -- un bug real en mi propia correccion del 2026-09-16
+
+`EarningsEventsRepository::isNormalizedFromSource()` preguntaba "¿este hash aparecio ALGUNA VEZ en el historial?", no "¿es el estado VIGENTE ahora?". Fixture literal de Astra: A (EPS 1) -> B (EPS 2) -> A recapturado. Como el blob de A se reutiliza (dedup por hash), la tercera captura tiene el MISMO hash que la primera -- el CLI creia estar "al dia" con A (visto en el pasado) y se saltaba la renormalizacion, dejando publicado el contenido de B indefinidamente.
+
+**Corregido**: migracion 031 separa `earnings_events_normalization_log` (historial, ahora APPEND-ONLY de verdad -- se le quita la clave unica que colapsaba reprocesos identicos) de `earnings_events_current_state` (una fila por ticker, el ESTADO VIGENTE, actualizada en la MISMA transaccion que `earnings_events`). `isNormalizedFromSource()` compara contra el estado vigente. Se añade tambien `EodhdEarningsEventsNormalizer::VERSION` (constante, ahora en 2): fuerza renormalizacion si el parseo cambia aunque el JSON crudo no lo haga -- necesario para que la propia correccion de B2 se aplique a lo ya normalizado.
+
+### B2 (prioridad alta) -- objeto vs lista, e identidad de la fila
+
+`EodhdEarningsEventsNormalizer::parse()` decodificaba con `associative: true`, que convierte TANTO `{}` como `[]` en el mismo array PHP vacio -- `{"earnings":{}}` (objeto invalido) pasaba la comprobacion `is_array()` igual que `{"earnings":[]}` (vacio valido real). Tambien se atribuia cada fila al ticker pedido sin comprobar que su `code` coincidiera con el simbolo real de EODHD.
+
+**Corregido**: una segunda decodificacion SIN `associative` (JSON objects como `stdClass`) distingue de verdad objeto de lista. Cada fila se descarta si su `code` no coincide con el simbolo esperado (parametro nuevo `?string $expectedEodhdSymbol`); si TODAS las filas se descartan por esa razon con una lista no vacia, se lanza excepcion en vez de devolver `[]`. `EodhdRawFundamentalVersionsRepository::latestObservationFor()` ampliado para devolver `source_symbol`/`request_from`/`request_to`, que faltaban.
+
+### B5/B6 (prioridad alta para el backtesting) -- modo offline estricto y contrato de exito/reanudacion
+
+Astra confirmo en el log real del intento del `2026-09-16`/`17` **91 errores de lectura de cache y 88 de escritura**, todos seguidos de una llamada real al proveedor interno -- un estudio que se declaraba "offline" estaba pidiendo datos a Yahoo en produccion bajo presion de memoria. Ademas, el runner por lotes solo comprobaba `file_exists()` para saltar un ticker (sin validar el contenido) y no comprobaba el resultado de `json_encode()` (que puede devolver `false` con NAN/INF, dejando un fichero de 0 bytes anunciado como "OK").
+
+**Corregido**:
+- `src/Providers/OfflineOnlyMarketDataProvider.php` (nuevo): NUNCA cae a un proveedor real. Distingue ausencia legitima (`MarketDataException`, sin cache para ese ticker/rango) de fallo tecnico (`RuntimeException`, una excepcion real del repositorio de cache) -- 10 tests nuevos.
+- `storage/scratch/policy_replay_full_2026-09-18_batch.php` (no committeado, reemplaza al del `2026-09-16`): usa el proveedor offline estricto; un fallo tecnico DETIENE el lote entero (salida no-cero) en vez de continuar en silencio; un fichero existente solo cuenta como "ya hecho" si decodifica, tiene los dos brazos y la identidad de ticker correcta; `json_encode()` se comprueba antes de escribir; escribe un `manifest.json` con la configuracion congelada en la primera invocacion sobre un directorio, y RECHAZA (salida 2) cualquier invocacion posterior con configuracion distinta. Bug real propio detectado y corregido durante las pruebas: la comparacion del manifiesto fallaba por una diferencia int/float tras el viaje por JSON (`10.0` se decodifica como `int(10)`) -- corregido normalizando ambos lados por el mismo `json_encode`/`json_decode` antes de comparar.
+
+**Lote de validacion fijo (15 simbolos: AAPL, MSFT, NVDA, TSLA, META, AMZN, JPM, XOM, KO, BA, DIS, LEG, FISV, GE, AAL -- incluye los dos tickers con hueco conocido)**, tal como pidio Astra antes de repetir el estudio completo:
+
+- **Ejecucion continua vs interrumpida/reanudada**: los 15 resultados son **byte a byte identicos** entre las dos rutas (comparado con `diff`) -- confirma que la reanudacion no introduce ninguna inconsistencia propia.
+- **Telemetria de RSS real** (no `memory_get_usage()`, que Astra señalo repetidamente que no demuestra nada sobre el consumo real frente al limite de la VM): cada proceso nuevo arranca en ~57MB y se estabiliza en ~64-65MB tras el segundo o tercer ticker, SIN crecimiento sostenido a lo largo de los 15 -- sin evidencia de fuga de memoria dentro de un proceso a esta escala. Cada invocacion nueva de `ddev exec php` vuelve a arrancar en ~57MB (confirmado comparando el primer ticker de dos procesos distintos): el aislamiento entre procesos funciona como se esperaba.
+- **No resuelve la causa raiz de los fallos anteriores** (esta escala, 15 tickers, nunca se acerco al limite de 6,5GB) -- es evidencia real pero parcial, coherente con la peticion explicita de Astra de medir antes de escalar, no una conclusion sobre el estudio completo.
+
+Incluye:
+
+- `database/migrations/031_create_earnings_events_current_state.sql` (nueva).
+- `src/Repository/EarningsEventsRepository.php`: estado vigente separado del historial; nuevos parametros (`normalizerVersion`, `sourceSymbol`, `requestFrom`, `requestTo`).
+- `src/Repository/EodhdRawFundamentalVersionsRepository.php`: `latestObservationFor()` devuelve el contexto completo de la observacion.
+- `src/Services/EodhdEarningsEventsNormalizer.php`: distincion objeto/lista, identidad de fila, `VERSION`.
+- `src/Providers/OfflineOnlyMarketDataProvider.php` (nuevo).
+- `bin/normalize-eodhd-earnings-events.php`: usa la version del normalizador y el contexto de la observacion.
+- Tests: `EarningsEventsRepositoryTest.php` (reescrito, fixtures literales de Astra), `EodhdRawFundamentalVersionsRepositoryTest.php` (+1), `EodhdEarningsEventsNormalizerTest.php` (+6), `OfflineOnlyMarketDataProviderTest.php` (nuevo, 10 tests).
+
+Verificado: `ddev exec vendor/bin/phpunit` -- **782 tests, 2.228 assertions, OK** (sube desde 761/2.192: 21 tests nuevos). `ddev exec vendor/bin/phpstan analyse` -- **sin errores**. `config/weights.php` no se toca. Repoblado el estado vigente para los 2.343 tickers ya normalizados (misma cobertura: 189.531 filas, 2.281 tickers -- la validacion de identidad de B2 no descarto ningun dato real).

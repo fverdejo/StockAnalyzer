@@ -204,12 +204,20 @@ class EodhdRawFundamentalVersionsRepository
      * verdad para ambas cosas a la vez, resuelta siempre por observacion
      * (igual que `latestFor()`), para que no puedan volver a desincronizarse.
      *
-     * @return array{payload: string, payload_hash: string, observed_at_utc: string}|null
+     * **Ampliado el 2026-09-18** (hallazgo de Astra,
+     * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B2): el
+     * contexto de la observacion (`source_symbol`, `request_from`,
+     * `request_to`) faltaba aqui -- un consumidor no podia saber que
+     * simbolo real de EODHD ni que ventana de fechas produjo el contenido
+     * devuelto.
+     *
+     * @return array{payload: string, payload_hash: string, observed_at_utc: string, source_symbol: ?string, request_from: ?string, request_to: ?string}|null
      */
     public function latestObservationFor(string $ticker, string $apiVersion, string $section): ?array
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT v.payload_compressed, v.payload_hash, o.observed_at_utc
+            'SELECT v.payload_compressed, v.payload_hash, o.observed_at_utc,
+                    o.source_symbol, o.request_from, o.request_to
              FROM eodhd_raw_fundamental_version_observations o
              INNER JOIN eodhd_raw_fundamental_versions v ON v.id = o.version_id
              WHERE o.ticker = :ticker AND o.api_version = :api_version AND o.section = :section
@@ -231,6 +239,9 @@ class EodhdRawFundamentalVersionsRepository
             'payload' => $this->decompress($row['payload_compressed']),
             'payload_hash' => (string) $row['payload_hash'],
             'observed_at_utc' => (string) $row['observed_at_utc'],
+            'source_symbol' => $row['source_symbol'] === null ? null : (string) $row['source_symbol'],
+            'request_from' => $row['request_from'] === null ? null : (string) $row['request_from'],
+            'request_to' => $row['request_to'] === null ? null : (string) $row['request_to'],
         ];
     }
 

@@ -422,6 +422,36 @@ final class EodhdRawFundamentalVersionsRepositoryTest extends IntegrationTestCas
         self::assertSame('{"v":"A"}', $observation['payload']);
         self::assertSame(hash('sha256', '{"v":"A"}'), $observation['payload_hash']);
         self::assertSame('2026-09-20 10:00:00', $observation['observed_at_utc']);
+        self::assertNull($observation['source_symbol']);
+        self::assertNull($observation['request_from']);
+        self::assertNull($observation['request_to']);
+    }
+
+    /**
+     * Ampliado el 2026-09-18 (hallazgo de Astra, tarea B2): el contexto de
+     * la observacion (simbolo real de EODHD, ventana de fechas pedida)
+     * faltaba -- un consumidor no podia saber que produjo el contenido.
+     */
+    public function testLatestObservationForIncluyeElContextoDeLaObservacion(): void
+    {
+        $this->repository->store(
+            'AZN.L',
+            '{"earnings":[]}',
+            'calendar',
+            'earnings',
+            new DateTimeImmutable('2026-09-01 10:00:00'),
+            200,
+            'AZN.LSE',
+            new DateTimeImmutable('1970-01-01'),
+            new DateTimeImmutable('2028-01-01')
+        );
+
+        $observation = $this->repository->latestObservationFor('AZN.L', 'calendar', 'earnings');
+
+        self::assertNotNull($observation);
+        self::assertSame('AZN.LSE', $observation['source_symbol']);
+        self::assertSame('1970-01-01', $observation['request_from']);
+        self::assertSame('2028-01-01', $observation['request_to']);
     }
 
     public function testLatestObservationForDevuelveNuloSinVersiones(): void

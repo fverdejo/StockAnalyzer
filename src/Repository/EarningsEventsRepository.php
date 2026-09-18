@@ -32,32 +32,37 @@ final class EarningsEventsRepository
     }
 
     /**
-     * Si YA se normalizo este ticker desde exactamente este `sourceHash` --
-     * es lo que hace REANUDABLE `bin/normalize-eodhd-earnings-events.php`:
-     * si el JSON crudo no ha cambiado desde la ultima normalizacion, no
-     * hace falta rehacer nada.
+     * Si el ESTADO VIGENTE de este ticker (no su historial) ya proviene
+     * exactamente de este `sourceHash` y de esta version del normalizador
+     * -- es lo que hace REANUDABLE `bin/normalize-eodhd-earnings-events.php`.
      *
-     * **Corregido el 2026-09-16** (hallazgo de Astra,
-     * `AUDITORIA_Y_TAREAS_EODHD_ASTRA_2026-09-16.md`, tarea A2): antes
-     * consultaba `earnings_events` directamente, que NO deja ninguna fila
-     * para un ticker con cero eventos (vacio valido, 60/938 en el
-     * archivado original) -- esos tickers nunca podian confirmarse como
-     * "ya normalizados", y se renormalizaban en cada ejecucion
-     * indefinidamente. Ahora consulta `earnings_events_normalization_log`
-     * (migracion 030), que registra CADA intento completado con exito,
-     * tenga o no eventos.
+     * **Corregido el 2026-09-18** (hallazgo real de Astra,
+     * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B1): la version
+     * del 2026-09-16 consultaba `earnings_events_normalization_log`
+     * preguntando "¿este hash aparece ALGUNA VEZ en el historial de este
+     * ticker?" -- en una secuencia A->B->A recapturado, el hash de A YA
+     * estaba en el historial desde la PRIMERA captura, asi que el CLI
+     * creia estar "al dia" con A y se saltaba la renormalizacion, aunque
+     * el contenido publicado en `earnings_events` fuera todavia B (de la
+     * segunda captura). Reproducido por Astra exactamente con ese
+     * fixture. Ahora compara contra `earnings_events_current_state`
+     * (migracion 031, una fila por ticker, sustituida en la misma
+     * transaccion que `earnings_events`), que representa el estado
+     * VIGENTE, no "visto alguna vez". `$normalizerVersion` fuerza tambien
+     * la renormalizacion si el propio parseo cambia, aunque el JSON crudo
+     * no lo haya hecho.
      */
-    public function isNormalizedFromSource(string $ticker, string $sourceHash): bool
+    public function isNormalizedFromSource(string $ticker, string $sourceHash, int $normalizerVersion): bool
     {
         $statement = $this->connection->getPdo()->prepare(
-            'SELECT 1 FROM earnings_events_normalization_log WHERE ticker = :ticker AND source_hash = :source_hash LIMIT 1'
+            'SELECT source_hash, normalizer_version FROM earnings_events_current_state WHERE ticker = :ticker LIMIT 1'
         );
-        $statement->execute([
-            'ticker' => strtoupper($ticker),
-            'source_hash' => $sourceHash,
-        ]);
+        $statement->execute(['ticker' => strtoupper($ticker)]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
 
-        return $statement->fetchColumn() !== false;
+        return $row !== false
+            && $row['source_hash'] === $sourceHash
+            && (int) $row['normalizer_version'] === $normalizerVersion;
     }
 
     /**
@@ -65,11 +70,16 @@ final class EarningsEventsRepository
      * transaccion. Un ticker sin eventos (60/938 en el archivado real del
      * 2026-09-05, ver `versions.md`) simplemente se queda sin filas -- no
      * es un error, es un ticker sin historico de resultados publicado por
-     * EODHD. Registra ademas el intento en
-     * `earnings_events_normalization_log` (migracion 030, correccion del
-     * 2026-09-16), tenga o no eventos: es lo que permite a
-     * `isNormalizedFromSource()` confirmar "ya normalizado" incluso para un
-     * vacio valido.
+     * EODHD.
+     *
+     * **Ampliado el 2026-09-18** (tarea B1): cada llamada deja SIEMPRE una
+     * fila NUEVA en `earnings_events_normalization_log` (historial
+     * append-only, sin colapsar reprocesos identicos -- migracion 031 le
+     * quito la clave unica que lo hacia) y ACTUALIZA la unica fila de
+     * `earnings_events_current_state` para este ticker (estado vigente).
+     * Ambas escrituras, mas el reemplazo de `earnings_events`, ocurren en
+     * la MISMA transaccion: no puede quedar el estado vigente
+     * desincronizado del contenido real.
      *
      * @param list<CalendarEarningsEvent> $events
      * @return int cuantas filas quedaron escritas
@@ -78,7 +88,11 @@ final class EarningsEventsRepository
         string $ticker,
         array $events,
         string $sourceHash,
-        DateTimeImmutable $capturedAt
+        DateTimeImmutable $capturedAt,
+        int $normalizerVersion,
+        ?string $sourceSymbol = null,
+        ?DateTimeImmutable $requestFrom = null,
+        ?DateTimeImmutable $requestTo = null
     ): int {
         $ticker = strtoupper($ticker);
         $pdo = $this->connection->getPdo();
@@ -117,17 +131,46 @@ final class EarningsEventsRepository
                 }
             }
 
+            $capturedAtSql = $capturedAt->format('Y-m-d H:i:s');
+            $requestFromSql = $requestFrom?->format('Y-m-d');
+            $requestToSql = $requestTo?->format('Y-m-d');
+
             $log = $pdo->prepare(
                 'INSERT INTO earnings_events_normalization_log
                     (ticker, source_hash, captured_at, event_count, normalized_at)
                  VALUES
-                    (:ticker, :source_hash, :captured_at, :event_count, NOW())
-                 ON DUPLICATE KEY UPDATE event_count = VALUES(event_count), normalized_at = VALUES(normalized_at)'
+                    (:ticker, :source_hash, :captured_at, :event_count, NOW())'
             );
             $log->execute([
                 'ticker' => $ticker,
                 'source_hash' => $sourceHash,
-                'captured_at' => $capturedAt->format('Y-m-d H:i:s'),
+                'captured_at' => $capturedAtSql,
+                'event_count' => count($events),
+            ]);
+
+            $state = $pdo->prepare(
+                'INSERT INTO earnings_events_current_state
+                    (ticker, source_hash, captured_at, source_symbol, request_from, request_to, normalizer_version, event_count, normalized_at)
+                 VALUES
+                    (:ticker, :source_hash, :captured_at, :source_symbol, :request_from, :request_to, :normalizer_version, :event_count, NOW())
+                 ON DUPLICATE KEY UPDATE
+                    source_hash = VALUES(source_hash),
+                    captured_at = VALUES(captured_at),
+                    source_symbol = VALUES(source_symbol),
+                    request_from = VALUES(request_from),
+                    request_to = VALUES(request_to),
+                    normalizer_version = VALUES(normalizer_version),
+                    event_count = VALUES(event_count),
+                    normalized_at = VALUES(normalized_at)'
+            );
+            $state->execute([
+                'ticker' => $ticker,
+                'source_hash' => $sourceHash,
+                'captured_at' => $capturedAtSql,
+                'source_symbol' => $sourceSymbol,
+                'request_from' => $requestFromSql,
+                'request_to' => $requestToSql,
+                'normalizer_version' => $normalizerVersion,
                 'event_count' => count($events),
             ]);
 

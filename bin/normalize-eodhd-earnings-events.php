@@ -36,6 +36,17 @@ use StockAnalyzer\Services\EodhdEarningsEventsNormalizer;
  * `latestObservationFor()`, que resuelve contenido, hash y fecha SIEMPRE
  * por la misma observacion.
  *
+ * Corregido el 2026-09-18 (hallazgo real de Astra,
+ * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B1): la
+ * comprobacion de "ya normalizado" ahora compara contra el ESTADO
+ * VIGENTE (`earnings_events_current_state`), no contra "este hash se vio
+ * alguna vez" -- ver el docblock de
+ * `EarningsEventsRepository::isNormalizedFromSource()`. Tambien incluye
+ * `EodhdEarningsEventsNormalizer::VERSION`, para forzar renormalizacion
+ * si el parseo cambia sin que el JSON crudo lo haga, y pasa el simbolo
+ * real de EODHD (`source_symbol`) al normalizador para la comprobacion
+ * de identidad de la tarea B2.
+ *
  * Uso:
  *   php bin/normalize-eodhd-earnings-events.php
  *   php bin/normalize-eodhd-earnings-events.php --tickers="AAPL MSFT"
@@ -104,8 +115,9 @@ foreach ($tickers as $index => $ticker) {
 
     $sourceHash = $observation['payload_hash'];
     $capturedAt = new DateTimeImmutable($observation['observed_at_utc']);
+    $normalizerVersion = EodhdEarningsEventsNormalizer::VERSION;
 
-    if (!$force && $repository->isNormalizedFromSource($ticker, $sourceHash)) {
+    if (!$force && $repository->isNormalizedFromSource($ticker, $sourceHash, $normalizerVersion)) {
         echo $prefix . 'ya normalizado desde esta captura, se salta' . PHP_EOL;
         ++$skippedUpToDate;
 
@@ -113,8 +125,17 @@ foreach ($tickers as $index => $ticker) {
     }
 
     try {
-        $events = $normalizer->parse($ticker, $observation['payload']);
-        $written = $repository->replaceForTicker($ticker, $events, $sourceHash, $capturedAt);
+        $events = $normalizer->parse($ticker, $observation['payload'], $observation['source_symbol']);
+        $written = $repository->replaceForTicker(
+            $ticker,
+            $events,
+            $sourceHash,
+            $capturedAt,
+            $normalizerVersion,
+            $observation['source_symbol'],
+            $observation['request_from'] !== null ? new DateTimeImmutable($observation['request_from']) : null,
+            $observation['request_to'] !== null ? new DateTimeImmutable($observation['request_to']) : null
+        );
 
         if ($written === 0) {
             echo $prefix . '0 eventos (calendario archivado vacio para este ticker)' . PHP_EOL;

@@ -64,13 +64,38 @@ use StockAnalyzer\DTO\CalendarEarningsEvent;
  * explicita ANTES de llegar a `replaceForTicker()` -- el llamador
  * (`bin/normalize-eodhd-earnings-events.php`) ya trata cualquier excepcion
  * de este metodo como error de ticker sin tocar las filas existentes.
+ *
+ * **Corregido el 2026-09-18** (hallazgo real de Astra,
+ * `REVISION_EODHD_Y_REPLAY_ASTRA_2026-09-17.md`, tarea B2): la correccion
+ * anterior comprobaba `is_array($earnings)` sobre un JSON decodificado
+ * con `associative: true`, que convierte TANTO `{}` como `[]` en el mismo
+ * array PHP vacio -- `{"earnings":{}}` (un objeto, forma invalida) pasaba
+ * la comprobacion igual que `{"earnings":[]}` (vacio valido real).
+ * Tambien se atribuia cada fila al `$ticker` pedido por el llamador sin
+ * comprobar que el campo `code` de esa fila coincidiera con el simbolo
+ * real de EODHD -- una respuesta mal recortada que mezclase el ticker
+ * equivocado se habria aceptado en silencio. Ahora: (1) una segunda
+ * decodificacion SIN `associative` (JSON objects como `stdClass`, JSON
+ * arrays como listas) distingue de verdad `{}` de `[]`; (2) cada fila se
+ * descarta si su `code` no coincide con el simbolo esperado, y si TODAS
+ * las filas se descartan por esa razon con una lista no vacia, se lanza
+ * excepcion en vez de devolver `[]` (que se leeria como vacio valido).
  */
 final class EodhdEarningsEventsNormalizer
 {
     /**
+     * Version del parseo, no del dato de origen: subir este numero fuerza
+     * la renormalizacion de todo lo ya normalizado (via
+     * `EarningsEventsRepository::isNormalizedFromSource()`) aunque el JSON
+     * crudo de EODHD no haya cambiado -- necesario cuando la LOGICA de
+     * esta clase cambia (como en esta misma correccion).
+     */
+    public const VERSION = 2;
+
+    /**
      * @return list<CalendarEarningsEvent>
      */
-    public function parse(string $ticker, string $payloadJson): array
+    public function parse(string $ticker, string $payloadJson, ?string $expectedEodhdSymbol = null): array
     {
         $ticker = strtoupper(trim($ticker));
 
@@ -95,26 +120,47 @@ final class EodhdEarningsEventsNormalizer
             ));
         }
 
-        $earnings = $payload['earnings'] ?? null;
+        // Segunda decodificacion SIN `associative` (JSON objects se
+        // convierten en `stdClass`, no en array): es la UNICA forma de
+        // distinguir `{"earnings":{}}` (objeto, invalido) de
+        // `{"earnings":[]}` (lista vacia, valido) -- con `associative:
+        // true` los dos producen el mismo array PHP vacio.
+        $strict = json_decode($payloadJson, false, 512, JSON_THROW_ON_ERROR);
+        $earningsStrict = is_object($strict) ? ($strict->earnings ?? null) : null;
 
-        if (!is_array($earnings)) {
+        if (!is_array($earningsStrict)) {
             // Vacio valido es EXCLUSIVAMENTE {"earnings": []} (clave
-            // presente, tipo lista). Cualquier otra forma -- clave ausente,
-            // tipo distinto (p.ej. `"unavailable"`), o un cuerpo de error
-            // sin esa clave -- es una captura que no se puede normalizar
+            // presente, JSON ARRAY, posiblemente vacio). Cualquier otra
+            // forma -- clave ausente, tipo distinto, un objeto `{}` o
+            // `{"error":...}` -- es una captura que no se puede normalizar
             // con confianza: mejor fallar aqui que devolver un vacio
             // indistinguible del real (ver docblock de la clase).
             throw new InvalidArgumentException(sprintf(
-                'El payload de calendar/earnings de EODHD para %s no tiene una seccion "earnings" valida (clave ausente o de tipo distinto a lista) -- no se trata como vacio valido.',
+                'El payload de calendar/earnings de EODHD para %s no tiene una seccion "earnings" valida (clave ausente, tipo distinto a lista, u objeto en vez de lista) -- no se trata como vacio valido.',
                 $ticker
             ));
         }
 
+        $earnings = $payload['earnings']; // ya validado como lista JSON real arriba
+        $expectedSymbol = strtoupper($expectedEodhdSymbol ?? $this->toEodhdSymbol($ticker));
+
         /** @var array<string,CalendarEarningsEvent> $eventsByFiscalPeriod */
         $eventsByFiscalPeriod = [];
+        $rejectedByIdentity = 0;
 
         foreach ($earnings as $row) {
             if (!is_array($row)) {
+                continue;
+            }
+
+            $code = $this->nullableString($row['code'] ?? null);
+
+            if ($code !== null && strtoupper($code) !== $expectedSymbol) {
+                // Fila de un simbolo DISTINTO al pedido -- una respuesta
+                // mal recortada o mezclada entre tickers no debe
+                // atribuirse en silencio al ticker equivocado.
+                $rejectedByIdentity++;
+
                 continue;
             }
 
@@ -144,6 +190,14 @@ final class EodhdEarningsEventsNormalizer
                 $this->epsSurprisePercent($epsActual, $epsEstimate),
                 $this->nullableString($row['currency'] ?? null)
             );
+        }
+
+        if ($earnings !== [] && $rejectedByIdentity === count($earnings)) {
+            throw new InvalidArgumentException(sprintf(
+                'Todas las filas de calendar/earnings para %s tienen un "code" distinto del simbolo esperado (%s) -- posible mezcla de tickers, se rechaza la captura completa en vez de publicarla como vacia.',
+                $ticker,
+                $expectedSymbol
+            ));
         }
 
         $events = array_values($eventsByFiscalPeriod);
@@ -222,5 +276,17 @@ final class EodhdEarningsEventsNormalizer
         $value = trim($value);
 
         return $value !== '' ? $value : null;
+    }
+
+    /**
+     * Fallback cuando el llamador no conoce el simbolo real de EODHD
+     * (p.ej. un ticker `_OLD` o internacional con sufijo remapeado):
+     * mismo criterio que `EodhdCalendarProvider`/`EodhdFiscalPeriodProvider`
+     * (duplicado a proposito, ver su docblock -- familias de endpoints que
+     * no evolucionan juntas).
+     */
+    private function toEodhdSymbol(string $ticker): string
+    {
+        return str_contains($ticker, '.') ? $ticker : $ticker . '.US';
     }
 }

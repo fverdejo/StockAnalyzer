@@ -188,6 +188,103 @@ final class EodhdEarningsEventsNormalizerTest extends TestCase
         (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
     }
 
+    /**
+     * Fixture literal de Astra (tarea B2): `{"earnings":{}}` decodificado
+     * con `associative: true` produce el MISMO array PHP vacio que
+     * `{"earnings":[]}` -- indistinguibles sin una segunda decodificacion
+     * estricta. Un objeto no es una lista, aunque este vacio.
+     */
+    public function testEarningsComoObjetoVacioLanzaExcepcionAunqueSeaIndistinguibleTrasDecodificarAsociativo(): void
+    {
+        $payload = '{"earnings":{}}';
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
+    }
+
+    /** Fixture literal de Astra (tarea B2): un objeto de error, no una lista. */
+    public function testEarningsComoObjetoDeErrorLanzaExcepcion(): void
+    {
+        $payload = '{"earnings":{"error":"unavailable"}}';
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
+    }
+
+    /**
+     * Fixture literal de Astra (tarea B2): un objeto que contiene UNA fila
+     * en vez de una LISTA de filas -- tampoco es la forma valida.
+     */
+    public function testEarningsComoUnaSolaFilaSinListaLanzaExcepcion(): void
+    {
+        $payload = json_encode([
+            'earnings' => ['report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('ANR', $payload);
+    }
+
+    /**
+     * Hallazgo real de Astra (tarea B2): una fila con `code` distinto del
+     * simbolo esperado no puede atribuirse en silencio al ticker pedido
+     * -- una respuesta mal recortada o mezclada entre tickers debe
+     * rechazarse, no aceptarse como si fuera del ticker correcto.
+     */
+    public function testUnaFilaConCodeDistintoDelSimboloEsperadoSeDescarta(): void
+    {
+        $payload = json_encode([
+            'earnings' => [
+                ['code' => 'MSFT.US', 'report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+                ['code' => 'AAPL.US', 'report_date' => '2026-05-01', 'date' => '2026-03-31', 'actual' => 1.65, 'estimate' => 1.60],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $events = (new EodhdEarningsEventsNormalizer())->parse('AAPL', $payload);
+
+        self::assertCount(1, $events, 'Solo la fila con code=AAPL.US pertenece al ticker pedido.');
+        self::assertSame('2026-03-31', $events[0]->fiscalPeriodEnd->format('Y-m-d'));
+    }
+
+    /**
+     * Si TODAS las filas tienen un `code` distinto del esperado (mezcla
+     * total, no un caso aislado), no puede devolverse `[]` -- se leeria
+     * como vacio valido. Debe fallar de forma explicita.
+     */
+    public function testSiTodasLasFilasTienenCodeDistintoSeLanzaExcepcion(): void
+    {
+        $payload = json_encode([
+            'earnings' => [
+                ['code' => 'MSFT.US', 'report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        (new EodhdEarningsEventsNormalizer())->parse('AAPL', $payload);
+    }
+
+    /**
+     * El simbolo esperado puede pasarse explicitamente (tickers `_OLD` o
+     * internacionales con sufijo remapeado, donde el simbolo real de
+     * EODHD no coincide con el ticker interno).
+     */
+    public function testElSimboloEsperadoExplicitoSustituyeElFallbackPorDefecto(): void
+    {
+        $payload = json_encode([
+            'earnings' => [
+                ['code' => 'AZN.LSE', 'report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $events = (new EodhdEarningsEventsNormalizer())->parse('AZN.L', $payload, 'AZN.LSE');
+
+        self::assertCount(1, $events);
+    }
+
     public function testConservaDosFilasConLaMismaFechaDeReporteYDistintoPeriodoFiscal(): void
     {
         $payload = json_encode([
