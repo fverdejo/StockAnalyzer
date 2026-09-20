@@ -8517,3 +8517,53 @@ Cohorte H=45: 3.214 de 3.238 entradas. Span de exposicion truncado a 45 sesiones
 - Tercil de G3 = tercil por NUMERO de entradas de la cohorte ordenada por `(entry_date, ticker, entry_index)`. Bloques de G4 = particion consecutiva de 136 dias desde la primera fecha de entrada de la cohorte. Regimen de G4 = cierre del S&P 500 (`^GSPC`, cache offline de 10 años) del ultimo dia ESTRICTAMENTE anterior a `entry_date` frente a su SMA200 a esa fecha (sin look-ahead); entradas sin SMA200 disponible (primeros ~200 dias de la serie) quedan fuera de G4 y se cuentan. "Contribucion absoluta" de un ticker = `|suma de D_i|` de sus entradas. `MFE` de un brazo con rango vacio (salida el mismo dia de la entrada) = 0. Cadencia 10: mismas entradas, actualizacion solo en las revisiones 1ª, 3ª, 5ª... posteriores a la entrada. El fijo se genera con `PolicyReplaySimulator` (canonico) y sus precios de salida SIN redondear se toman de `PolicyReplayTrailingSimulator` con `trailingEnabled = false` (verificado identico por el assert 3).
 
 Incluye (a continuacion, en esta misma ronda): el codigo de la medicion (`PolicyReplayHorizonComparison`, extraccion de `summarizePairedDiffs()`/bootstrap generico, cadencia parametrizable del trailing) y sus tests. **La medicion en si NO se ha ejecutado al escribir esta entrada.**
+
+---
+
+## 2026-09-20 (cuarta entrada) - RESULTADO de la medicion completa de trailing (fase 1, 636 tickers/10 años, H=45): **INDET** con resolucion suficiente. Ni GO ni NO-GO; el trailing cuesta ≈ -0,30pp a 45 sesiones y es casi todo "tiempo fuera del mercado", no mal timing
+
+Estado: ejecutada tal cual la predeclaracion de la entrada anterior (codigo commiteado y arbol limpio antes de arrancar; `code_revision` 8ceedbf). **Ningun resultado de esta medicion autoriza proponer un nivel de stop ni tocar produccion**, `config/weights.php` ni `AlertService`; el veredicto solo fija la prioridad de una fase 2.
+
+### Contabilidad (todos los asserts pasaron ANTES de mirar ningun resultado)
+
+- **Assert 8**: dos ejecuciones completas (A y B, 636 tickers cada una, ~25 min por ejecucion) con hash SHA-256 identico de los ficheros por entrada (`76e82e88...b1309`).
+- **Assert 4**: 0 revisiones sin candidato de 15.108 (0,000%). **Assert 6**: la cohorte es la misma en los tres brazos. **Asserts 1, 2, 3, 5, 12**: los comprueba el constructor de filas y detienen el lote (ninguno se disparo). **Assert 7**: el piloto reproduce 117 entradas y S91 32,71%/1,87% con el codigo nuevo. **Assert 10**: la Medicion 1 sigue dando -5,94pp/`blocks_in_range` 3,6 tras extraer el bootstrap generico.
+- **Assert 9** (fijo regenerado == archivo `b7`): el comparador estricto del lote (`!==`) marco 60 tickers (62 diferencias), **TODAS de representacion**: `b7=43 regenerado=43`, es decir entero tras decodificar JSON frente a float en memoria (el mismo tipo de falso positivo que ya dio el manifiesto, 10.0 -> 10). Se detecto ANTES de leer ningun resultado (el analisis se niega a calcular nada si un assert falla) y se recomprobo NUMERICAMENTE desde las filas persistidas: **0 diferencias reales** en 636 tickers y 3.238 entradas (las mismas que `b7`); ultima fecha del historico congelado 2026-09-11 (589 tickers; 46 acaban el 09-09 y 1 el 08-27 por delistados). El riesgo que señalo el auditor (el `regenerate-fundamentals-history-v2110.php` sin commitear alterando el timeline) NO se materializo.
+
+### Resultado primario (cohorte comun: 3.214 de 3.238 entradas)
+
+`blocks_in_range` = **26,0** (ancho de bloque 136 dias, exactamente lo que verifico el auditor), `effective_n` = 743,4 (DEFF 4,32): **resultado informativo**.
+
+| Estimador | Punto (pp) | IC95% (sin redondear) |
+|---|---:|---:|
+| **P** = trailing - fijo a H=45, caja al 0% | **-0,298** | [-0,716, +0,127] |
+| P_drift = -r̄ x media(Δx) (r̄=0,0423%/sesion, media Δx=7,1 sesiones) | -0,301 | -- |
+| **P_T** = P - P_drift (timing, cota optimista) | **+0,003** | [-0,230, +0,249] |
+| cuota de reentrada (salida trailing < salida fija y <= H) | 50,9% | -- |
+| **T** = P_T - 0,40pp x cuota | **-0,200** | **[-0,434, +0,043]** |
+| P penalizado (G2) | -0,501 | [-0,921, -0,081] |
+
+**Veredicto predeclarado: INDET.** GO exigia `ci95_low(T) >= 0` (es -0,434); NO-GO exigia `ci95_high(P) < -1,0` Y `ci95_high(P_T) < 0` (son +0,127 y +0,249). Fase 2 (con reentradas por la misma regla de entrada vigente) se aplaza tras el backlog y solo se lanza si no hay nada de mayor prioridad. INDET era el resultado esperado segun la predeclaracion (potencia de un GO limpio ≈5-15%).
+
+### Puertas descriptivas de prioridad (no autorizan nada)
+
+- **G1** (give-back medio baja >= 15%): NO -- fijo 6,55pp, trailing 6,01pp (-8,2%).
+- **G2** (P penalizado, limite inferior >= -δ): SI (-0,92 >= -1,0).
+- **G3** (terciles por numero de entradas): SI -- 2017-01..2019-01: +0,01pp; 2019-02..2021-09: -0,68pp; 2021-09..2026-07: -0,22pp (ninguno < -2,0; los 3 >= -1,0).
+- **G4** (regimen bajista): NO evaluable -- 296 entradas bajistas (faltaron 4 para el minimo de 300; 4 bloques con >= 20 cada uno), y **465 entradas sin regimen** (2017-2018: la serie ^GSPC de 10 años no tiene aun 200 sesiones); media de D en regimen bajista -0,34pp. Con la regla predeclarada, INDET.
+- **G5** (robustez): SI las tres -- media recortada 1%/99% a 0,15pp de la media; sin los 10 tickers de mayor contribucion (PLTR, NVDA, DELL, TPR, COF, ALGN, OXY, VST, DVA, BXP) la media es -0,12pp; cadencia 10: P=-0,246, limite inferior -0,569 (>= -1,5) y a 0,05pp del de cadencia 5.
+
+### Descriptivo, SIN decision
+
+- Horizontes secundarios (cada uno con su resolucion): **H=21**: -0,06pp [-0,21, +0,10] (informativo, 55 bloques); **H=90**: -0,76pp [-1,82, +0,43] (no informativo, 13,3 bloques); **H=250**: **-3,89pp [-6,64, -1,17] (no informativo, 4,9 bloques -- no debe leerse como hallazgo)**. La diferencia crece con el horizonte, como es de esperar en una decada alcista donde el fijo sigue en las ganadoras.
+- Sensibilidad sin el primer bloque de 2017: P=-0,306, P_T=-0,010 (practicamente igual).
+- Whipsaw (1.636 salidas trailing anteriores a la del fijo y <= H): en 691 (42%) el precio a H estaba >2% POR ENCIMA del precio de salida (se perdio ese tramo); en 531 (32%) estaba >2% POR DEBAJO (el trailing evito esa caida); 414 dentro de ±2%.
+- Ciclo de vida completo (con pendientes): S91 del fijo 40,9% frente a **7,37%** del trailing; exposicion P50/P90/max 56/1.100/3.535 dias frente a 31/81/264; pendientes al corte 12,11% frente a 0,40%; media de 2,68 subidas de stop por operacion. Diferencia media sobre mantener-20 con pendientes a mercado: fijo +15,7pp frente a trailing +0,02pp (secundario de continuidad; el fijo deja abiertas las ganadoras de una decada alcista, con supervivencia).
+
+### Lectura honesta, sin declarar conclusion de mercado
+
+A 45 sesiones el trailing raise-only cuesta ≈0,3pp por operacion (IC incluye el cero) y ese coste **es casi exactamente tiempo fuera del mercado** (deriva perdida -0,30pp; componente de timing +0,00pp con IC ±0,24): en media, salir por el trailing no fue peor ni mejor momento que aguantar con el stop fijo, dentro de este horizonte. Tampoco reduce de forma material el give-back (-8%, por debajo del 15% pedido). Lo que la medicion **no puede decir** (y por diseño no se predeclaro decirlo): (a) nada a horizontes largos, donde el descriptivo (no informativo) apunta a un coste creciente en una decada mayoritariamente alcista y con supervivencia; (b) nada sobre el coste real de reentrar (fase 1 no simula reentradas: caja al 0%); (c) el estimando es "entradas tras un stop-out del fijo" (83% de las entradas). La ventaja del trailing es mecanica y ya conocida (S91 40,9% -> 7,4%: mide con resolucion, cierra la cola larga); la pregunta economica sigue abierta y depende de la fase 2.
+
+Incluye:
+
+- `storage/scratch/trailing_full_2026-09-20_batch.php`, `run_trailing_full.sh`, `trailing_full_analysis_2026-09-20.php`, `trailing_full_20260920_A/` y `_B/` (636 ficheros por entrada cada una), `trailing_full_20260920_results.json` (no committeados). No se ha tocado `config/weights.php` ni ningun codigo de produccion.
