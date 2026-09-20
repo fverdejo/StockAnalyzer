@@ -201,6 +201,36 @@ final class PolicyReplayStatistics
             }
         }
 
+        return array_merge(
+            [
+                'entries_total' => $entriesTotal,
+                'entries_closed' => $entriesClosed,
+                'entries_pending' => $entriesPending,
+                'pct_pending' => $entriesTotal > 0 ? round($entriesPending / $entriesTotal * 100, 2) : null,
+                'pending_avg_managed_return' => $this->average($pendingManagedReturns),
+                'candidates_excluded_by_membership_total' => $excludedByMembershipTotal,
+            ],
+            $this->summarizePairedDiffs($pairedDiffs, $seed),
+            ['revisar_tesis_events_total' => $revisarTesisEventsTotal]
+        );
+    }
+
+    /**
+     * Estadistica pareada (media, error estandar ingenuo, bootstrap circular
+     * de bloques de calendario, efecto de diseño, resolucion) sobre una
+     * lista de diferencias YA construidas, sin saber de donde vienen.
+     * Extraida de `summarize()` el `2026-09-20` (sin cambiar ningun numero:
+     * `summarize()` la llama con exactamente las mismas diferencias que
+     * calculaba antes) para que una medicion con OTRA definicion de
+     * diferencia y de ventana de exposicion -- p.ej. la del trailing a un
+     * horizonte comun `H` -- reutilice el MISMO bootstrap y las MISMAS
+     * salvaguardas (`blocks_in_range`, `effective_n`) en vez de copiarlos.
+     *
+     * @param list<array{entry_date: string, exposure_end_date: string, diff: float}> $pairedDiffs no hace falta que esten ordenadas
+     * @return array{cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int}
+     */
+    public function summarizePairedDiffs(array $pairedDiffs, ?int $seed = null): array
+    {
         usort($pairedDiffs, static fn (array $a, array $b): int => $a['entry_date'] <=> $b['entry_date']);
 
         $diffValues = array_column($pairedDiffs, 'diff');
@@ -234,12 +264,6 @@ final class PolicyReplayStatistics
             && $effectiveN >= self::MIN_EFFECTIVE_N;
 
         return [
-            'entries_total' => $entriesTotal,
-            'entries_closed' => $entriesClosed,
-            'entries_pending' => $entriesPending,
-            'pct_pending' => $entriesTotal > 0 ? round($entriesPending / $entriesTotal * 100, 2) : null,
-            'pending_avg_managed_return' => $this->average($pendingManagedReturns),
-            'candidates_excluded_by_membership_total' => $excludedByMembershipTotal,
             'cohorts' => count($diffValues),
             'avg_diff' => $naiveMean,
             'se_naive' => $naiveStderr,
@@ -269,7 +293,6 @@ final class PolicyReplayStatistics
             // la etiqueta concluyente por una descripcion de suficiencia de
             // grupos".
             'calendar_windows_observed' => $this->countCalendarWindows($pairedDiffs),
-            'revisar_tesis_events_total' => $revisarTesisEventsTotal,
         ];
     }
 

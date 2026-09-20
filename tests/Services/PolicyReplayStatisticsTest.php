@@ -84,6 +84,38 @@ final class PolicyReplayStatisticsTest extends TestCase
         ];
     }
 
+    /**
+     * `summarizePairedDiffs()` (extraido de `summarize()` el `2026-09-20` para
+     * la medicion de trailing a horizonte comun) debe dar EXACTAMENTE los
+     * mismos numeros que `summarize()` para las mismas diferencias, y no
+     * depender del orden en que se le pasen.
+     */
+    public function testSummarizePairedDiffsReproduceLosCamposPareadosDeSummarize(): void
+    {
+        $trades = [];
+        $diffs = [];
+
+        for ($i = 0; $i < 60; $i++) {
+            $entry = $this->dateAt($i * 7);
+            $exit = $this->dateAt($i * 7 + 20);
+            $managed = 3.0 + ($i % 5);
+            $baseline = 1.0 + ($i % 3);
+            $trades[] = $this->trade($entry, $exit, $managed, $baseline, $exit);
+            $diffs[] = ['entry_date' => $entry, 'exposure_end_date' => $exit, 'diff' => $managed - $baseline];
+        }
+
+        $stats = new PolicyReplayStatistics();
+        $summary = $stats->summarize([$this->replay('AAA', $trades)], self::SEED);
+        $paired = $stats->summarizePairedDiffs(array_reverse($diffs), self::SEED);
+
+        foreach ($paired as $key => $value) {
+            self::assertSame($summary[$key], $value, "campo {$key}");
+        }
+
+        self::assertSame(60, $paired['cohorts']);
+        self::assertNotNull($paired['se_bootstrap']);
+    }
+
     public function testSinOperacionesTodoSaleNulo(): void
     {
         $summary = (new PolicyReplayStatistics())->summarize([]);
