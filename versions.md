@@ -8562,8 +8562,60 @@ Estado: ejecutada tal cual la predeclaracion de la entrada anterior (codigo comm
 
 ### Lectura honesta, sin declarar conclusion de mercado
 
-A 45 sesiones el trailing raise-only cuesta ≈0,3pp por operacion (IC incluye el cero) y ese coste **es casi exactamente tiempo fuera del mercado** (deriva perdida -0,30pp; componente de timing +0,00pp con IC ±0,24): en media, salir por el trailing no fue peor ni mejor momento que aguantar con el stop fijo, dentro de este horizonte. Tampoco reduce de forma material el give-back (-8%, por debajo del 15% pedido). Lo que la medicion **no puede decir** (y por diseño no se predeclaro decirlo): (a) nada a horizontes largos, donde el descriptivo (no informativo) apunta a un coste creciente en una decada mayoritariamente alcista y con supervivencia; (b) nada sobre el coste real de reentrar (fase 1 no simula reentradas: caja al 0%); (c) el estimando es "entradas tras un stop-out del fijo" (83% de las entradas). La ventaja del trailing es mecanica y ya conocida (S91 40,9% -> 7,4%: mide con resolucion, cierra la cola larga); la pregunta economica sigue abierta y depende de la fase 2.
+*(Redaccion CORREGIDA el mismo `2026-09-20` tras la interpretacion de `gestor-riesgo` y `analista-mercado`, quinta entrada: la version anterior de este parrafo sobreinterpretaba en varios puntos.)*
+
+A 45 sesiones el trailing raise-only cuesta ≈0,3pp por operacion (IC95% incluye el cero) y **ese coste se explica por el tiempo fuera del mercado, no por mal timing**: el componente de timing es **estadisticamente indistinguible de cero** (+0,00pp, IC ±0,24), lo que NO equivale a "ni mejor ni peor momento". Cuidado con las tres lecturas de ese numero: (1) la deriva perdida (-0,30pp) es proporcional a `r̄`=0,042%/sesion, que es el de una decada alcista con supervivencia; con `r̄`≈0 ese coste desapareceria: **no es una propiedad de la regla**. (2) El give-back medio baja solo un 8% (6,01 frente a 6,55pp), pero la puerta G1 (-15%) estaba **mal escalada para H=45**: con un stop inicial mediano del 5,3% del precio de entrada, cualquier stop concede ≈1 distancia de stop por construccion, asi que el margen maximo era ≈1pp -- el -8% no prueba un mecanismo debil, es un artefacto del truncamiento. (3) La unica mirada al regimen bajista (G4, n=296, no evaluable) dio D=-0,34pp y el tercil que contiene 2020 es el mas costoso (-0,68pp): ninguna de las dos miradas muestra que el trailing "compre seguro", **con la salvedad de que G4 clasifica por el regimen EN LA ENTRADA**, y una posicion abierta en regimen alcista que luego cae queda como "alcista" (por eso se pide el diagnostico A, abajo). Whipsaw: de las 1.636 salidas tempranas, 42% perdieron un tramo >2%, 32% evitaron una caida >2% y 25% quedaron dentro de ±2% -- coherente con deriva mas ausencia de habilidad de timing (una linea, sin mas peso). Lo que la medicion **no puede decir** (y por diseño no se predeclaro decirlo): (a) nada sobre horizontes largos -- H=250 (-3,89pp) es no informativo en AMBOS sentidos (4,9 bloques) y su signo lo garantiza la deriva alcista para cualquier regla que salga antes; (b) nada sobre el coste real de reentrar (fase 1: caja al 0%); (c) el estimando es "entradas tras un stop-out del fijo" (83%); (d) **mide la prima del seguro (retorno medio en una decada alcista con supervivencia), no su prestacion**; y (e) H=45 se eligio por resolucion y trunca justo donde el trailing actua, las ganadoras longevas: la ventana medible es la que menos tiene que dar. **La "ventaja mecanica" (S91 40,9% -> 7,4%) es una propiedad de MEDIBILIDAD, no un beneficio**: exposicion larga no es riesgo; una ventaja de riesgo real seria acotar el riesgo abierto, y eso no se midio aqui (ver diagnostico B).
 
 Incluye:
 
 - `storage/scratch/trailing_full_2026-09-20_batch.php`, `run_trailing_full.sh`, `trailing_full_analysis_2026-09-20.php`, `trailing_full_20260920_A/` y `_B/` (636 ficheros por entrada cada una), `trailing_full_20260920_results.json` (no committeados). No se ha tocado `config/weights.php` ni ningun codigo de produccion.
+
+---
+
+## 2026-09-20 (quinta entrada) - Interpretacion de la medicion de trailing por `gestor-riesgo` y `analista-mercado`, y cuatro diagnosticos descriptivos: el criterio de estres (A) SI se cumple y el riesgo abierto (B) supera el umbral de aviso; nada en produccion, pendiente de consenso
+
+### Consenso de los dos agentes (consultas independientes, mismo brief)
+
+Ninguno recomienda tocar produccion. **Fase 2 (reentradas + curvas de equity por ticker): sin prioridad** por coste alto (simulador de reentradas, solapes, equity por ticker, otra auditoria), misma resolucion (~18 bloques efectivos) y porque el stop es una alerta y decide el humano; resultado esperado T entre -0,3 y -0,5pp por operacion. `gestor-riesgo` la retoma solo si (i) el diagnostico A o el B supera su umbral (fijado ANTES de calcular), (ii) hay un caso real propio de Francisco (una posicion que devolvio >30% del pico sin alerta), o (iii) el backlog esta vacio. **Ambos corrigen la redaccion previa de la lectura honesta** (ya corregida arriba, cuarta entrada).
+
+### Mecanismo segun `analista-mercado` (calculos EXPLORATORIOS y post hoc suyos sobre las filas, NO predeclarados y no reproducidos aqui: no se usan como base de decision)
+
+- **Su diagnostico de give-back de la Medicion 1 era demasiado optimista**: condicionaba en "acabo cerrada por el stop" y media el pico hasta el final de un episodio largo. Con un paseo aleatorio y el stop a ~3σ diarias, la probabilidad de no pasar nunca por encima de la entrada antes de tocarlo es ≈15-17% y lo observado fue 15,4%: el 84,6% "llego a cerrar por encima" **no era señal**.
+- **El stop es una banda de ruido** (distancia inicial mediana 5,3%, P10-P90 3,5-8,3%) frente a un horizonte de 45 sesiones: el trailing salta en el 84,3% de las operaciones y el fijo en el 53,3% (paseo aleatorio simulado: ~81% y ~50%). Salir por ruido no cambia el rendimiento esperado (opcion de parada; Kaminski & Lo 2014) -> `P_T`≈0. Tras salir, la accion rinde +0,053%/sesion frente a `r̄`=0,042%: se comporta como una accion media.
+- **La cohorte no explica el resultado**: primeras entradas por ticker (n=562) P=-0,19/`P_T`=+0,12; entradas tras stop-out P=-0,32/`P_T`=-0,02. La cadencia 10 tampoco lo cambia (-0,246).
+- **H=250** (no informativo): de los -3,89pp, -2,71 son deriva (caja al 0%) y -1,18 timing; las entradas de 2020 (mayo-dic) y 2025 (14% de la muestra) aportan -1,85pp (rebotes en V); el fijo aun abierto a 250 sesiones (24%) tiene V medio +37,7 y aporta -7,2pp; entre los tickers que mas contribuyen hay compounders ex post (NVDA, PLTR, VST). Estima que ≥70% es artefacto de caja al 0% mas rebotes y que lo genuino son ≈0,5-1,2pp a 250 sesiones (estimacion, no medicion).
+- Si se prueba otra familia, debe llevar informacion distinta del ruido de precio: (1) salir al perder la tendencia que exigio la entrada (2 cierres < SMA50) o (2) "dinero muerto" (sin +1 ATR a las 20 sesiones). **Cualquiera necesita su propia predeclaracion.**
+
+### Diagnosticos descriptivos (scripts `trailing_diagnostics_2026-09-20.php`, sobre las filas ya generadas y `^GSPC` en cache; convenciones fijadas antes de calcular, en el docblock del script)
+
+**A -- pago del seguro por estres ex post** (pedido por `gestor-riesgo`; umbral suyo: D medio agregado >= +0,5pp Y D>0 en >=3 episodios y >=60% -> fase 2 a prioridad media con criterio de estres; D<=0 en la mayoria -> se cierra). Entradas cuya ventana [entrada, sesion entry+45] contiene una caida pico-a-valle del S&P 500 >= 10% (278 entradas; 19 descartadas por ventana mas alla del final de `^GSPC` en cache, 2026-08-10):
+
+| Episodio (fechas de entrada) | n | caida max S&P | D(45) medio | D(90) medio |
+|---|---:|---:|---:|---:|
+| 2017-12-04 .. 2018-01-26 | 75 | 10,2% | +2,82pp | +3,56pp |
+| 2018-09-21 .. 2018-12-11 | 34 | 16,4% | +1,39pp | +1,12pp |
+| 2019-12-20 .. 2020-03-06 | 52 | 33,9% | +2,58pp | +3,75pp |
+| 2021-12-16 .. 2022-09-12 | 83 | 17,8% | -0,07pp | -0,19pp |
+| 2025-01-13 .. 2025-04-02 | 34 | 18,9% | +2,82pp | +2,32pp |
+
+**D(45) agregado +1,74pp (D(90) +2,02pp), positivo en 4 de 5 episodios: el criterio de `gestor-riesgo` SE CUMPLE** -> segun su regla, fase 2 sube a prioridad media "con criterio de estres". **Cautelas**: con 5 episodios solo vale el signo, no un IC; condiciona en el camino FUTURO del S&P (mide cuanto habria pagado el seguro en las caidas, no una señal operable); el primer episodio (n=75) esta justo sobre el umbral del 10% de caida; el episodio mas largo (2022, n=83) es el unico ≈0. El resultado no contradice la medicion primaria (P=-0,30pp): el trailing cuesta ≈0,3pp de media y paga ≈+1,7pp en las ventanas de caida (278 de 3.214 entradas, el 8,6%).
+
+**B -- riesgo abierto en multiplos de R del brazo FIJO** (pedido por `gestor-riesgo`; umbral suyo a H=90: >=25% con R_open >=3 -> el presupuesto de riesgo se viola de forma sistematica, justifica un AVISO no una regla de salida; <10% cierra el tema). `R_open = (cierre_H - stop inicial) / (open de entrada - stop inicial)` para las entradas fijas aun abiertas a H:
+
+| H | abiertas a H | R_open P50 | P90 | max | % con R_open >= 3 |
+|---:|---:|---:|---:|---:|---:|
+| 45 | 1.501 | 2,46 | 4,44 | 18,97 | 34,2% |
+| 90 | 1.098 | 3,52 | 6,63 | 20,33 | **61,0%** |
+| 250 | 750 | 6,97 | 14,21 | 55,82 | 87,2% |
+
+**A H=90 el 61,0% supera el umbral del 25%: segun la regla de `gestor-riesgo`, el aviso esta justificado.** Cautelas: (1) condiciona en las posiciones que SIGUEN abiertas (las ganadoras ex post), asi que un R_open alto es en parte el reflejo de haber ganado; (2) R_open mide cuanta distancia hay entre el precio y un stop que **nunca sube**, en unidades del riesgo inicial (lo que esta "en juego"), no pierde nada por si mismo -- el hecho mecanico ya confirmado en `AlertService`; (3) la distancia inicial del stop es mediana 5,3% (P10 3,5, P90 8,3).
+
+**(b) G1 recalibrada** (`analista-mercado`; solo operaciones cerradas por stop antes de H): give-back medio del fijo 8,54pp y del trailing 6,75pp; **restando UNA distancia de stop**, 3,00pp frente a 1,08pp: casi todo el give-back de ambos brazos es el "suelo" mecanico de una distancia de stop (la G1 original pedia un -15% sobre un total mayormente suelo). **No es una comparacion emparejada**: cada brazo usa SUS operaciones cerradas por stop antes de H (n=1.713 el fijo, n=2.708 el trailing, que cierra mas operaciones), asi que la diferencia de 1,9pp no se puede leer como un efecto del trailing.
+
+**(a) exceso post-salida de las 1.628 salidas trailing tempranas sobre el S&P 500** (`analista-mercado`; media e IC95% por bloques de 136 dias): todas -0,48pp [-1,24, +0,21]; fijo aun vivo a H (n=988) **+2,25pp [+1,67, +2,95]** (se perdio ese tramo); fijo tambien salio <=H (n=640) **-4,70pp [-5,68, -3,82]** (el trailing evito esa caida); regimen bajista (n=137) -0,21pp [-1,68, +2,57]; no bajista (n=1.301) -0,59pp [-1,42, +0,22]. **Advertencia**: la particion por "el fijo sigue vivo o no" condiciona en el OTRO brazo y es mecanica (que se cancelen es lo esperable); solo la fila "todas" y el desglose por regimen no lo son, y ninguno excluye el cero.
+
+### Estado y pendiente (delegado en agentes, sin tocar produccion)
+
+Por la regla predeclarada de `gestor-riesgo`, A y B ambos superan su umbral. **Eso NO cambia produccion**: (i) lo que sube a prioridad media es una FASE 2 que necesitaria su propia predeclaracion y auditoria; (ii) un "aviso" de riesgo abierto seria un cambio en lo que la app muestra en produccion y requiere, ademas del consenso de los agentes, la autorizacion explicita de Francisco. Se remite a `gestor-riesgo` y `auditor-estadistico` la pregunta de si estas dos lecturas (con las cautelas de arriba) sostienen esos dos pasos y como.
+
+Incluye: `storage/scratch/trailing_diagnostics_2026-09-20.php` y `trailing_diagnostics_output.txt` (no committeados). No se ha tocado `config/weights.php` ni ningun codigo de produccion.
