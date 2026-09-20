@@ -2353,7 +2353,13 @@ class BacktestingService
      * `PositionDecisionAdvisor`, inventarla aqui seria una politica nueva
      * sin declarar.
      *
-     * @return list<array{date: string, index: int, recommendation: string, stop_loss: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float, eligible: bool}>
+     * `candidate_stop` (`2026-09-20`, piloto de trailing predeclarado por
+     * `gestor-riesgo`): el mismo calculo de `stop_loss` pero en TODOS los
+     * puntos, con independencia de la recomendacion, para que un simulador
+     * pueda "recolocar el stop donde se pondria si se entrara hoy" durante
+     * una posicion abierta. `stop_loss` no cambia (sigue `null` salvo BUY).
+     *
+     * @return list<array{date: string, index: int, recommendation: string, stop_loss: ?float, candidate_stop: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float, eligible: bool}>
      */
     public function replayTimeline(string $ticker, int $step = 5, ?DateTimeImmutable $asOf = null, ?string $indexCode = null): array
     {
@@ -2369,12 +2375,14 @@ class BacktestingService
             $technical = $this->technicalAnalyzer->analyze(array_slice($history, 0, $index + 1));
             $recommendation = $this->scoreCalculator->calculate($synthetic, $technical)->getScore()->getRecommendation();
 
-            $stopLoss = null;
-
-            if ($recommendation === 'BUY') {
-                $riskLevels = $this->riskLevelsCalculator->compute($technical, $current->getClose());
-                $stopLoss = $riskLevels?->getStopLoss();
-            }
+            // Mismo calculo para TODOS los puntos, sea BUY o no: `stop_loss`
+            // sigue siendo el de siempre (solo con BUY), `candidate_stop` es
+            // el nivel que `compute()` daria HOY con los datos hasta esta
+            // sesion inclusive -- lo consume unicamente
+            // `PolicyReplayTrailingSimulator` (piloto de trailing,
+            // `2026-09-20`); el simulador de politica vigente lo ignora.
+            $candidateStop = $this->riskLevelsCalculator->compute($technical, $current->getClose())?->getStopLoss();
+            $stopLoss = $recommendation === 'BUY' ? $candidateStop : null;
 
             $fundamentalChange = null;
 
@@ -2396,6 +2404,7 @@ class BacktestingService
                 'index' => $index,
                 'recommendation' => $recommendation,
                 'stop_loss' => $stopLoss,
+                'candidate_stop' => $candidateStop,
                 'fundamental_change' => $fundamentalChange,
                 'entry_price' => $index + 1 < count($history) ? $history[$index + 1]->getOpen() : null,
                 'eligible' => !$membershipActive || $this->indexMembership->isMemberAt($ticker, (string) $indexCode, $current->getDate()),

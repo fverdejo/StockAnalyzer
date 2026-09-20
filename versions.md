@@ -8411,3 +8411,56 @@ Incluye:
 - `storage/scratch/giveback_diagnostic_2026-09-20.php`, `storage/scratch/episode_stop_subset_summary_2026-09-20.php` (no committeados).
 
 No se ha tocado codigo de produccion en esta entrada. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-20 (segunda entrada) - Piloto de trailing-stop (regla A) implementado y ejecutado tal cual lo predeclaro `gestor-riesgo`: veredicto **GO de viabilidad** (S91 32,7% -> 1,9%)
+
+Estado: `gestor-riesgo` reconcilio en una sola especificacion cerrada las dos reglas de trailing propuestas (elige la suya, **regla (A)**; no se prueba ninguna otra, ni otro `k`, ni cadencia diaria, ni reentradas, ni objetivo/take-profit, ni filtro de entrada). Esta entrada implementa esa especificacion sin desviarse y documenta el resultado del piloto. **No es una conclusion de mercado y no cambia produccion**: el criterio del piloto es solo si el diseño puede llegar a resolverse estadisticamente, ningun contraste de retorno decide nada aqui.
+
+### Lo implementado (codigo de simulacion, no de produccion)
+
+- `BacktestingService::replayTimeline()` devuelve un campo nuevo `candidate_stop` en TODOS los puntos: el stop que `RiskLevelsCalculator::compute()` daria hoy (ATR14 x 2,5) con datos hasta esa sesion inclusive. `stop_loss` no cambia (sigue nulo salvo BUY, y coincide con `candidate_stop` en los BUY -- test nuevo). El simulador de politica vigente ignora el campo.
+- `Services\PolicyReplayTrailingSimulator` (nuevo): PARTE de las entradas de `PolicyReplaySimulator::replay()` y solo re-recorre la SALIDA de cada operacion con `stopActivo = max(stopActivo, candidate_stop)` en cada punto del timeline (cada 5 sesiones). Sin look-ahead: el tramo hasta `point['index']` inclusive se vigila con el stop viejo, el nuevo rige desde la apertura de `index + 1` (test explicito). Sin candidato calculable (nulo, <= 0, o campo ausente) el stop se mantiene y la revision se cuenta. Como el stop del trailing es >= el fijo, sale el mismo dia o antes: no hay solape con la entrada siguiente y los campos del comparador (`baseline_*`) se copian tal cual. Las pendientes se valoran a mercado al ultimo cierre (`pending_at_cutoff`). Con `trailingEnabled: false` el mismo re-recorrido reproduce EXACTAMENTE el brazo fijo (test con 0 y 10pb).
+- `Services\PolicyReplayExposureMetrics` (nuevo): **S91** = % de entradas cuya exposicion supera 91 dias naturales (exposicion = entrada -> la fecha mas tardia entre la salida gestionada, o el corte si sigue pendiente, y la salida del comparador). Cohorte: solo entradas con >= 91 dias hasta el corte, para que el estado a 91 dias sea observable sin censura. Se descarto `blocks_in_range >= 20` como criterio del piloto: en una ventana de 2 años exigiria un P90 de exposicion <= ~18 dias, imposible por construccion para una politica sin horizonte (su `result_informative: false` no seria un fallo del trailing).
+- Tests: 13 nuevos (815 en total, 2.485 aserciones, 1 skip; PHPStan limpio).
+
+### Paso 0 (gratuito): S91 del brazo fijo sobre el archivo congelado de la medicion 1 (636 tickers/10 años)
+
+S91 = **40,9%** (1.310 de 3.203 entradas de la cohorte; 2 pendientes en el limite exacto de 91 dias, que no cuentan como ">91" y se anotan). Restringido a entradas de los ultimos 2 años del mismo archivo: 40,6% (313 de cohorte). P50/P90/max de exposicion incluyendo pendientes: 56/1.100/3.535 dias -- el P90 de 491 citado antes correspondia solo a cerradas emparejadas (las pendientes de cola larga no estaban), ambos numeros son correctos para su definicion.
+
+### Piloto: 60 tickers (semilla 20260913, la de los pilotos anteriores), ventana 2024-09-18..2026-09-18, coste 10pb/lado, historico offline de 10 años (indicadores calentados con todo el historico, solo se filtran los PUNTOS del timeline a la ventana)
+
+**Validez (predeclarada: S91 fijo >= 20% y >= 40 entradas en la cohorte): cumplida** -- S91 fijo 32,71%, 107 entradas en cohorte (117 entradas totales en ambos brazos).
+
+| | Cohorte | Superan 91 dias | **S91** |
+|---|---:|---:|---:|
+| Brazo fijo | 107 | 35 | **32,71%** |
+| Trailing (regla A) | 107 | 2 | **1,87%** |
+
+**Veredicto predeclarado: GO** (S91 trailing <= 10% y <= 50% del fijo). Se lanza la medicion completa, pero con su PROPIA predeclaracion revisada por `auditor-estadistico` (no la de este piloto).
+
+**Contabilidad (todas las comprobaciones predeclaradas, cero violaciones)**: mismo numero de entradas en ambos brazos (117 = 117); salida del trailing <= salida del fijo y stop final >= stop inicial en todas las operaciones; trailing desactivado reproduce el fijo exacto (campo a campo, 60 tickers); 0% de revisiones sin candidato (0 de 466; el umbral de "contabilidad dudosa" era 5%). Se procesaron los 60 tickers (ninguno ausente; VGNT solo aporta 8 puntos en la ventana, 0 entradas).
+
+### Descriptivo, SIN decision (declarado asi de antemano)
+
+| | Fijo | Trailing |
+|---|---:|---:|
+| Exposicion P50 / P90 / max (dias) | 36 / 462 / 717 | 29 / 71 / 160 |
+| Pendientes al corte | 27 (23,1%, +31,8% medio a mercado) | 4 (3,4%, -1,87% medio) |
+| Subidas medias de stop por operacion | -- | 2,24 |
+| Dif. media (gestionado - mantener-20), TODAS las operaciones, pendientes a mercado (n=114) | **+2,95pp** | **+0,14pp** |
+| Dif. media, solo cerradas (sesgada hacia perdedoras) | -4,47pp (n=90) | +0,11pp (n=113) |
+
+Operaciones del trailing con MFE (maximo cierre) >= 10%: n=25; el 100% salio por encima del precio de entrada; captura media de MFE 0,54; retorno medio +12,71%.
+
+**Lectura honesta, sin sobreinterpretar**: (1) el piloto solo responde a "¿el trailing acorta la cola de exposicion lo bastante para poder medirse con resolucion?" -- SI (P90 de 462 a 71 dias, bloque estimado de ~142 dias, `blocks_in_range` ~ 25 sobre 10 años). (2) **Lo que el piloto NO dice, y los propios numeros descriptivos apuntan en direccion contraria a la version "solo cerradas"**: al valorar las pendientes a mercado, el fijo (+2,95pp) SUPERA al trailing (+0,14pp) en esta ventana; la mejora aparente del trailing en "solo cerradas" (-4,47 -> +0,11) es en buena parte la desaparicion del sesgo de censura (el fijo deja abiertas sus ganadoras, el trailing las cierra), justo el riesgo de hindsight que `gestor-riesgo` señalo al predeclarar ("el trailing tambien corta a las pendientes de +179%, puede empeorar el total"). Ademas es UNA sola ventana de 2 años (un solo regimen, mayoritariamente alcista, donde aguantar ganadoras pesa mucho) y el trailing no simula reentradas: no paga el doble coste ni el whipsaw de volver a entrar tras salir antes. Ningun IC de este piloto es informativo (`blocks_in_range` 2,7 y 5,0), y ninguno entra en el criterio.
+
+Siguiente paso, delegado en agentes (mismo protocolo que los pilotos anteriores): `gestor-riesgo` redacta la predeclaracion de la medicion completa (636 tickers/10 años, ancla, tratamiento del sesgo de hindsight, coste de reentrada, criterios GO/NO-GO para PROPONER un cambio) y `auditor-estadistico` la revisa antes de implementar nada.
+
+Incluye:
+
+- `src/Services/PolicyReplayTrailingSimulator.php`, `src/Services/PolicyReplayExposureMetrics.php`, campo `candidate_stop` en `BacktestingService::replayTimeline()`, y sus tests.
+- `storage/scratch/trailing_step0_s91_fixed_2026-09-20.php`, `storage/scratch/trailing_pilot_2026-09-20.php`, `run_trailing_pilot.sh` y `trailing_pilot_2026-09-20_results.json` (no committeados).
+
+No se ha tocado `config/weights.php` ni ningun codigo de produccion (`AlertService`, motor de recomendacion); el trailing existe solo como simulador.

@@ -116,6 +116,27 @@ final class BacktestingServiceReplayTimelineTest extends TestCase
         }
     }
 
+    /**
+     * `candidate_stop` (piloto de trailing, `2026-09-20`): calculado en TODOS
+     * los puntos con el cierre de esa sesion, e IGUAL a `stop_loss` cuando
+     * este existe (mismo `compute()`), de modo que la politica vigente no
+     * cambia.
+     */
+    public function testCandidateStopSeCalculaEnTodosLosPuntosYCoincideConStopLossEnLosBuy(): void
+    {
+        $timeline = $this->service()->replayTimeline('AAA', step: 5);
+
+        foreach ($timeline as $point) {
+            self::assertArrayHasKey('candidate_stop', $point);
+            self::assertIsFloat($point['candidate_stop']);
+            self::assertLessThan($this->historyCloseAt($point['index']), $point['candidate_stop']);
+
+            if ($point['recommendation'] === 'BUY') {
+                self::assertSame($point['stop_loss'], $point['candidate_stop']);
+            }
+        }
+    }
+
     private function historyCloseAt(int $index): float
     {
         return $this->risingHistory()[$index]->getClose();
