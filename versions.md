@@ -8363,3 +8363,51 @@ Incluye:
 - Datos: 636 ficheros JSON por ticker + telemetria en `storage/scratch/policy_replay_episode_20260918_tickers/` (no committeado).
 
 No se ha tocado codigo de produccion en esta entrada -- solo ejecucion y medicion, reutilizando codigo ya committeado. `config/weights.php` no se toca.
+
+---
+
+## 2026-09-20 - Interpretacion por `gestor-riesgo` y `analista-mercado` de las dos mediciones completas, y los dos diagnosticos baratos que ambos pidieron antes de tocar nada
+
+Estado: los dos agentes de mercado/riesgo (consultados el `2026-09-18`, mismo brief, respuestas independientes) coinciden en la recomendacion: **no cambiar nada en produccion**, y hacer primero diagnosticos DESCRIPTIVOS sobre datos ya generados. Ambos diagnosticos se ejecutan hoy. `config/weights.php` y cualquier señal en produccion quedan intactos.
+
+### Lo que confirma el codigo (verificado por ambos agentes contra `AlertService::checkStopLossBreach()`, no solo contra el backtest)
+
+El stop se calcula UNA vez, el dia de la señal (`precio - 2,5 x ATR14`), y **nunca sube** durante la vida de la posicion: la rama de comparacion de `AlertService` solo LEE el stop activo. El `target` (ratio 2,0) es un dato de referencia de la ficha, nunca una regla de salida. Es un hecho mecanico del codigo, no una hipotesis a contrastar -- ya señalado cualitativamente el `2026-09-13` (`versions.md`, "Ideas adicionales", tarea asignada entonces a `gestor-riesgo` y pendiente hasta ahora). `gestor-riesgo` apunta ademas que la distribucion de duracion de exposicion de la medicion 1 (mediana 42 dias, P90 491, maximo 3.376 = 9,25 años) es en si la firma numerica de "el stop nunca sube": sin mecanismo que cierre ganadoras, la cola se extiende hasta el limite del historico -- la razon MECANICA por la que `blocks_in_range` colapsa a 3,6.
+
+**Advertencia unanime, la mas importante de la consulta**: leer "episodios ~0" + "indefinido -5,94pp" como "se gestiona bien a corto y mal a largo por falta de trailing-stop" NO esta soportado por ninguna de las dos mediciones. La medicion 2 es miope por diseño (solo ve 20 sesiones: no puede confirmar ni refutar un coste a horizonte largo). La medicion 1 ni tiene la magnitud correcta (mide la subcohorte de CERRADAS, sesgada hacia perdedoras, no el efecto de las ganadoras censuradas) ni la resolucion estadistica (`blocks_in_range`=3,6 << 20). La coincidencia de signo con la medicion invalida del `2026-09-14` no es confirmacion independiente (misma decada de mercado, ~3,6 unidades de informacion cuasi-independiente).
+
+### Diagnostico 1 (pedido por `analista-mercado`) -- partición de la medicion 2, con la maquinaria OFICIAL
+
+`analista-mercado` hizo una comprobacion exploratoria propia sobre los 636 ficheros: 25.595 episodios (57,2%) se resuelven sin tocar el stop (`valuation_close`, `managed_return` IDENTICO a `baseline_return` por construccion, diferencia exactamente cero) y **19.133 (42,8%) SI tocan el stop** dentro de las 20 sesiones -- una tasa de "fallo rapido" alta para una señal que exige tendencia confirmada. Podia pensarse que el "~0" global fuera solo dilucion mecanica. Comprobado hoy con `PolicyReplayStatistics::summarize()` restringido al subconjunto que SI toco el stop: **19.133 episodios, diferencia -0,02pp, IC95%=[-0,81, +1,02] (incluye el cero), `blocks_in_range`=57, `effective_n`=176,8, `result_informative: true`.** Es decir: incluso donde el stop realmente actuo, "salir ahi" y "aguantar hasta el dia 20" son indistinguibles con resolucion suficiente. El complemento (`valuation_close`) da 0,00 exacto por construccion, como debe.
+
+### Diagnostico 2 (pedido por `analista-mercado`) -- "give-back" de la medicion 1
+
+Para cada una de las 2.846 operaciones cerradas por stop de `PolicyReplaySimulator`: ¿cuanta ganancia flotante (maximo CIERRE desde la entrada hasta el dia previo a la salida, MFE) llego a tener antes de que el stop fijo la cerrara? Puramente descriptivo (sin bootstrap, sin hipotesis), sobre el mismo historico congelado, sin red. Consistencia: la diferencia media de las 2.842 emparejadas sale exactamente **-5,94pp**, igual que la medicion oficial.
+
+| Tramo de MFE (cierre) | n | % | ret. gestionado | ret. comparador | aporte a la diferencia |
+|---|---:|---:|---:|---:|---:|
+| <= 0% (nunca cerro sobre la entrada) | 439 | 15,4% | -5,80% | -5,72% | -0,01pp |
+| 0-5% | 991 | 34,8% | -5,90% | -4,23% | -0,58pp |
+| 5-10% | 458 | 16,1% | -6,24% | +0,85% | -1,14pp |
+| 10-20% | 392 | 13,8% | -6,37% | +5,12% | -1,58pp |
+| 20-50% | 392 | 13,8% | -6,70% | +6,18% | -1,78pp |
+| > 50% | 174 | 6,1% | -6,83% | +6,98% | -0,85pp |
+
+- El **84,6%** de las operaciones cerradas por stop llego en algun momento a cerrar por encima del precio de entrada; el 15,4% restante cayo sin pasar nunca por ganancia.
+- **33,7% (958) llego a >= +10% de ganancia flotante y aun asi acabo cerrada por el stop original, con retorno final medio de -6,59%**; 19,9% (566) llego a >= +20% y acabo en -6,74%. MFE mediana 4,96%, P90 37,4%, maximo 635,8%.
+- **Descomposicion de los -5,94pp: ~90% (-5,35pp) viene de operaciones que llegaron a >5% de ganancia flotante, ~71% (-4,21pp) de las que llegaron a >10%.** El retorno gestionado es casi el mismo en todos los tramos (-5,8% a -6,8%: el stop fijo esta a ~2,5xATR de la entrada); lo que cambia es lo que el comparador captura.
+
+**Lectura honesta, sin sobreinterpretar**: cumple el criterio que fijo `analista-mercado` ("si una fraccion grande viene de trades muy por encima de la entrada antes de revertir, es la evidencia que justificaria disenar un trailing-stop, y no antes") -- hay give-back sistematico, no un problema de entrada. PERO es una condicion NECESARIA, no suficiente: (1) condiciona en haber acabado cerrada por el stop (hindsight: no incluye las que nunca revirtieron, y un trailing tambien cortaria antes a algunas de esas 392 pendientes que acumulan +179%); (2) el comparador es "mantener 20 sesiones", no una salida optima, y el stop de la medicion 1 cierra en mediana a los 29 dias -- muchas salidas ocurren DESPUES del dia 20, tramo que la medicion 2 (20 sesiones) no puede ver; es coherente que a 20 sesiones la diferencia sea ~0 y aqui sea grande, no una contradiccion. Si un trailing mejora el retorno TOTAL (ganadoras incluidas) solo lo puede decir una medicion nueva, no este diagnostico.
+
+### Recomendaciones aplicables de los agentes
+
+1. **No tocar produccion.** Ninguna de las dos mediciones despeja la pregunta de diseño del stop.
+2. `gestor-riesgo` propone una regla concreta de trailing (sin implementarla): en cada revision, `nuevoStop = max(stopActivoDeLaRacha, stopCandidatoDeHoy)` con la formula ya existente (ATR14 x 2,5, **sin parametros nuevos**), nunca a la baja; encajaria en `AlertService` ~linea 239. `analista-mercado` sugiere una variante "chandelier" (`max(stop fijo, maximo cierre desde la entrada - k x ATR)`). Las dos difieren en el nivel de referencia (precio de hoy vs maximo desde la entrada) -- **pendiente de reconciliar en una unica especificacion predeclarada** antes de implementar nada.
+3. Cualquier variante con trailing hereda el riesgo de duraciones de exposicion dispersas que dejo no informativa a la medicion 1 (aunque un trailing CIERRA a las ganadoras y podria acortar la cola derecha, hipotesis a comprobar): **piloto barato de 60 tickers/2 años comprobando `blocks_in_range` ANTES de una medicion completa**, mismo protocolo ya seguido dos veces. Igual para el diseño de "retorno a corte comun" (riesgo ya señalado por `auditor-estadistico`).
+4. Candidato de diagnostico adicional de `analista-mercado`, NO acordado y NO ejecutado (exige predeclaracion, para no pescar comparaciones multiples): cruzar la posicion en Bollinger/RSI del dia de entrada contra las candidatas que tocan el stop en < 20 sesiones (42,8% de las candidatas BUY) -- ¿estan sistematicamente mas "sobrecompradas" al entrar? Territorio de `gestor-riesgo`/`trader-tendencia`.
+
+Incluye:
+
+- `storage/scratch/giveback_diagnostic_2026-09-20.php`, `storage/scratch/episode_stop_subset_summary_2026-09-20.php` (no committeados).
+
+No se ha tocado codigo de produccion en esta entrada. `config/weights.php` no se toca.
