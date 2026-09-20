@@ -116,6 +116,61 @@ final class PolicyReplayStatisticsTest extends TestCase
         self::assertNotNull($paired['se_bootstrap']);
     }
 
+    /**
+     * Motor generico (`2026-09-20`): varios estadisticos sobre EXACTAMENTE los
+     * mismos sorteos, reproducible con semilla, y exige el orden por fecha.
+     */
+    public function testBlockBootstrapReplicatesEntregaLosMismosSorteosATodosLosEstadisticosYEsReproducible(): void
+    {
+        $items = [];
+
+        for ($i = 0; $i < 80; $i++) {
+            $items[] = ['entry_date' => $this->dateAt($i * 5), 'exposure_end_date' => $this->dateAt($i * 5 + 20)];
+        }
+
+        $stats = new PolicyReplayStatistics();
+        $statistic = static fn (array $indexes): array => [
+            'mean_index' => array_sum($indexes) / count($indexes),
+            'double' => 2 * array_sum($indexes) / count($indexes),
+        ];
+
+        $first = $stats->blockBootstrapReplicates($items, $statistic, self::SEED);
+        $second = $stats->blockBootstrapReplicates($items, $statistic, self::SEED);
+
+        self::assertSame($first, $second);
+        self::assertCount(5000, $first['replicates']['mean_index']);
+
+        foreach ($first['replicates']['mean_index'] as $k => $value) {
+            self::assertEqualsWithDelta(2 * $value, $first['replicates']['double'][$k], 1e-9);
+        }
+
+        self::assertGreaterThan(0.0, $first['blocks_in_range']);
+    }
+
+    public function testBlockBootstrapReplicatesRechazaElementosSinOrdenar(): void
+    {
+        $items = [
+            ['entry_date' => $this->dateAt(10), 'exposure_end_date' => $this->dateAt(30)],
+            ['entry_date' => $this->dateAt(0), 'exposure_end_date' => $this->dateAt(20)],
+        ];
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        (new PolicyReplayStatistics())->blockBootstrapReplicates($items, static fn (array $i): array => ['x' => 1.0], self::SEED);
+    }
+
+    public function testReplicateIntervalDevuelvePercentilesSinRedondear(): void
+    {
+        $values = array_map(static fn (int $i): float => $i / 11, range(1, 101));
+
+        $interval = (new PolicyReplayStatistics())->replicateInterval($values);
+
+        // Percentiles 2,5 y 97,5 con interpolacion lineal sobre 101 puntos: posiciones 2,5 y 97,5.
+        self::assertEqualsWithDelta(3.5 / 11, $interval['ci95_low'], 1e-12);
+        self::assertEqualsWithDelta(98.5 / 11, $interval['ci95_high'], 1e-12);
+        self::assertNotSame(round($interval['ci95_low'], 2), $interval['ci95_low']);
+    }
+
     public function testSinOperacionesTodoSaleNulo(): void
     {
         $summary = (new PolicyReplayStatistics())->summarize([]);

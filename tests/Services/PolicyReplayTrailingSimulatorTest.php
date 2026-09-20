@@ -138,6 +138,36 @@ final class PolicyReplayTrailingSimulatorTest extends TestCase
         self::assertSame(100.0, $trade['exit_price'], 'Apertura 100 <= 115: hueco bajista, se ejecuta a la apertura.');
     }
 
+    /**
+     * Cadencia 10 (`reviewStride: 2`): solo se actualiza en las revisiones
+     * 1ª, 3ª, 5ª... posteriores a la entrada. En `rallyThenDrop` las
+     * revisiones son 15 (95), 20 (115), 25 (118): con cadencia 10 se aplican
+     * la 1ª y la 3ª (dos subidas), no la del 20.
+     */
+    public function testConCadenciaDiezSoloSeActualizaEnLasRevisionesImpares(): void
+    {
+        [$history, $timeline] = $this->rallyThenDrop();
+
+        $every = $this->simulator()->replay('ACME', $timeline, $history)['trades'][0];
+        $odd = $this->simulator()->replay('ACME', $timeline, $history, reviewStride: 2)['trades'][0];
+
+        self::assertSame(3, $every['stop_raises']);
+        self::assertSame(2, $odd['stop_raises']);
+        self::assertSame(118.0, $odd['final_stop']);
+        self::assertSame(26, $odd['exit_index']);
+        self::assertSame(118.0, $odd['exit_price_raw']);
+        self::assertSame([], $this->simulator()->accountingViolations(['ticker' => 'ACME', 'trades' => [$odd]]));
+    }
+
+    public function testUnaCadenciaInferiorAUnoSeRechaza(): void
+    {
+        [$history, $timeline] = $this->rallyThenDrop();
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->simulator()->replay('ACME', $timeline, $history, reviewStride: 0);
+    }
+
     public function testUnCandidatoMasBajoNuncaBajaElStop(): void
     {
         $history = $this->history();

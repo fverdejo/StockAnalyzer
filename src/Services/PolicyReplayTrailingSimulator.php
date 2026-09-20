@@ -73,8 +73,12 @@ final class PolicyReplayTrailingSimulator
      * @param list<HistoricalQuote> $history
      * @return array{ticker: string, trades: list<array<string, mixed>>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int, reviews_total: int, reviews_without_candidate: int}
      */
-    public function replay(string $ticker, array $timeline, array $history, bool $trailingEnabled = true): array
+    public function replay(string $ticker, array $timeline, array $history, bool $trailingEnabled = true, int $reviewStride = 1): array
     {
+        if ($reviewStride < 1) {
+            throw new \InvalidArgumentException('reviewStride debe ser >= 1.');
+        }
+
         $fixed = $this->fixedSimulator->replay($ticker, $timeline, $history);
 
         $initialStopByEntryIndex = [];
@@ -106,6 +110,7 @@ final class PolicyReplayTrailingSimulator
                 $timeline,
                 $history,
                 $trailingEnabled,
+                $reviewStride,
                 $reviewsTotal,
                 $reviewsWithoutCandidate
             );
@@ -163,6 +168,7 @@ final class PolicyReplayTrailingSimulator
         array $timeline,
         array $history,
         bool $trailingEnabled,
+        int $reviewStride,
         int &$reviewsTotal,
         int &$reviewsWithoutCandidate
     ): array {
@@ -174,6 +180,7 @@ final class PolicyReplayTrailingSimulator
         $activeStop = $initialStop;
         $cursor = $entryIndex;
         $raises = 0;
+        $reviewNumber = 0;
         $breach = null;
 
         foreach ($timeline as $point) {
@@ -192,6 +199,7 @@ final class PolicyReplayTrailingSimulator
 
             $cursor = $to + 1;
             $reviewsTotal++;
+            $reviewNumber++;
             $candidate = $point['candidate_stop'] ?? null;
 
             if ($candidate === null || $candidate <= 0.0) {
@@ -200,7 +208,10 @@ final class PolicyReplayTrailingSimulator
                 continue;
             }
 
-            if ($trailingEnabled && $candidate > $activeStop) {
+            // Cadencia mas lenta (`$reviewStride` = 2 -> cadencia 10): solo se
+            // actualiza en las revisiones 1ª, 3ª, 5ª... posteriores a la
+            // entrada (las demas se vigilan con el stop vigente).
+            if ($trailingEnabled && ($reviewNumber - 1) % $reviewStride === 0 && $candidate > $activeStop) {
                 $activeStop = (float) $candidate;
                 $raises++;
             }
@@ -231,6 +242,9 @@ final class PolicyReplayTrailingSimulator
             'exit_date' => $history[$exitIndex]->getDate()->format('Y-m-d'),
             'exit_index' => $exitIndex,
             'exit_price' => round($exitPrice, 4),
+            // Sin redondear: la medicion de horizonte comun persiste este
+            // valor (el de arriba, a 4 decimales, es el del brazo fijo).
+            'exit_price_raw' => $exitPrice,
             'exit_reason' => $pending ? 'pending_at_cutoff' : 'stop_loss',
             'pending' => $pending,
             'holding_days' => $exitIndex - $entryIndex,

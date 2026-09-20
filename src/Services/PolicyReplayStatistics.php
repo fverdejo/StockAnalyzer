@@ -307,112 +307,25 @@ final class PolicyReplayStatistics
      */
     private function bootstrapUncertainty(array $diffs, ?int $seed): array
     {
-        $n = count($diffs);
+        $result = $this->blockBootstrapReplicates(
+            $diffs,
+            static function (array $sampledIndexes) use ($diffs): array {
+                $sum = 0.0;
 
-        if ($n < 2) {
+                foreach ($sampledIndexes as $index) {
+                    $sum += $diffs[$index]['diff'];
+                }
+
+                return ['mean' => $sum / count($sampledIndexes)];
+            },
+            $seed
+        );
+
+        if ($result['blocks_in_range'] === null) {
             return ['se_bootstrap' => null, 'ci95_low' => null, 'ci95_high' => null, 'block_width_days' => null, 'blocks_in_range' => null];
         }
 
-        $entryDates = array_map(static fn (array $item): DateTimeImmutable => new DateTimeImmutable($item['entry_date']), $diffs);
-        $exposureEndDates = array_map(static fn (array $item): DateTimeImmutable => new DateTimeImmutable($item['exposure_end_date']), $diffs);
-
-        $start = $entryDates[0];
-
-        foreach ($entryDates as $date) {
-            if ($date < $start) {
-                $start = $date;
-            }
-        }
-
-        $end = $exposureEndDates[0];
-
-        foreach ($exposureEndDates as $date) {
-            if ($date > $end) {
-                $end = $date;
-            }
-        }
-
-        $exposureSpans = [];
-
-        foreach ($diffs as $index => $item) {
-            $exposureSpans[] = $entryDates[$index]->diff($exposureEndDates[$index])->days;
-        }
-
-        sort($exposureSpans);
-        $blockWidthDays = max(1, (int) round(2 * $this->percentile($exposureSpans, 0.9)));
-
-        $totalRangeDays = max(1, $start->diff($end)->days);
-        $blockCount = max(1, (int) ceil($totalRangeDays / $blockWidthDays));
-
-        // Indice ordenado por dia desde $start, para localizar por
-        // busqueda binaria (en vez de recorrer las N operaciones en cada
-        // uno de los `BOOTSTRAP_REPLICATES x $blockCount` sorteos) que
-        // operaciones caen dentro de un bloque sorteado.
-        $entryOffsets = [];
-
-        foreach ($entryDates as $date) {
-            $entryOffsets[] = $start->diff($date)->days;
-        }
-
-        if ($seed !== null) {
-            mt_srand($seed);
-        }
-
-        $replicateMeans = [];
-
-        // Bootstrap CIRCULAR de bloques (Politis & Romano 1992), no
-        // truncado: corregido el 2026-09-18 (hallazgo real de
-        // `auditor-estadistico` al revisar la medicion completa de 636
-        // tickers). La version anterior acotaba `$blockStart` a
-        // `[0, totalRangeDays - blockWidthDays]` para que ningun bloque
-        // sorteado se saliera del rango -- pero eso deja a una operacion
-        // cerca del INICIO del rango cubierta por un unico punto de
-        // arranque posible (`blockStart=0`), mientras una del CENTRO la
-        // cubren `blockWidthDays` puntos de arranque distintos: un sesgo
-        // de inclusion real y medido (verificado sobre los 2.842 pares
-        // reales de esa medicion: la primera operacion del rango cabia en
-        // 1 de 2.554 posiciones posibles frente a 982 para una del
-        // centro, ~1000x mas representada). Envolviendo el rango como un
-        // circulo (un bloque que se sale por el final continua por el
-        // principio), CADA punto de arranque en `[0, totalRangeDays)` es
-        // igual de probable y CADA operacion queda cubierta por
-        // exactamente `blockWidthDays` arranques posibles -- elimina el
-        // sesgo de inclusion sin cambiar `blocks_in_range` (la
-        // resolucion temporal real no aumenta, solo se reparte mejor
-        // quien se muestrea).
-        for ($replicate = 0; $replicate < self::BOOTSTRAP_REPLICATES; $replicate++) {
-            $sampledDiffs = [];
-
-            for ($block = 0; $block < $blockCount; $block++) {
-                $blockStart = mt_rand(0, $totalRangeDays - 1);
-                $blockEndExclusive = $blockStart + $blockWidthDays;
-
-                if ($blockEndExclusive <= $totalRangeDays) {
-                    $indexes = $this->indexesInRange($entryOffsets, $blockStart, $blockEndExclusive);
-                } else {
-                    // El bloque se sale del rango: envuelve al principio.
-                    $indexes = array_merge(
-                        $this->indexesInRange($entryOffsets, $blockStart, $totalRangeDays),
-                        $this->indexesInRange($entryOffsets, 0, $blockEndExclusive - $totalRangeDays)
-                    );
-                }
-
-                foreach ($indexes as $index) {
-                    $sampledDiffs[] = $diffs[$index]['diff'];
-                }
-            }
-
-            if ($sampledDiffs === []) {
-                // Sorteo sin ninguna operacion cubierta (posible solo con
-                // muestras muy pequeñas y $blockCount bajo): se repite ese
-                // replica en vez de contar una media indefinida.
-                $replicate--;
-
-                continue;
-            }
-
-            $replicateMeans[] = array_sum($sampledDiffs) / count($sampledDiffs);
-        }
+        $replicateMeans = $result['replicates']['mean'];
 
         // Correccion del 2026-09-15/16 (hallazgo real de Astra,
         // `REVISION_MOTOR_BACKTESTING_ASTRA_2026-09-15.md`, caso 1,
@@ -444,13 +357,171 @@ final class PolicyReplayStatistics
             'se_bootstrap' => $seBootstrap,
             'ci95_low' => round($this->percentile($replicateMeans, 0.025), 2),
             'ci95_high' => round($this->percentile($replicateMeans, 0.975), 2),
-            'block_width_days' => $blockWidthDays,
+            'block_width_days' => $result['block_width_days'],
             // Cuantas anchuras de bloque caben en el rango temporal total
-            // (SIN redondear a entero ni forzar un minimo de 1, a
-            // diferencia de $blockCount, que es para decidir cuantos
-            // bloques SORTEAR por replica): la resolucion real que tiene
-            // el bootstrap para variar de una replica a otra. Ver
-            // `MIN_BLOCKS_FOR_RELIABLE_BOOTSTRAP`.
+            // (SIN redondear a entero ni forzar un minimo de 1): la
+            // resolucion real que tiene el bootstrap para variar de una
+            // replica a otra. Ver `MIN_BLOCKS_FOR_RELIABLE_BOOTSTRAP`.
+            'blocks_in_range' => $result['blocks_in_range'],
+        ];
+    }
+
+    /**
+     * Desviacion tipica e IC95% (percentiles 2,5/97,5, SIN redondear) de una
+     * lista de valores de replicas -- para quien necesite decidir con el
+     * valor exacto en vez del redondeado a 2 decimales de `summarize()`.
+     *
+     * @param list<float> $replicates no vacia
+     * @return array{se: ?float, ci95_low: float, ci95_high: float}
+     */
+    public function replicateInterval(array $replicates): array
+    {
+        $se = $this->standardDeviation($replicates);
+        sort($replicates);
+
+        return [
+            'se' => $se,
+            'ci95_low' => $this->percentile($replicates, 0.025),
+            'ci95_high' => $this->percentile($replicates, 0.975),
+        ];
+    }
+
+    /**
+     * Motor generico del bootstrap circular de bloques de calendario
+     * (Politis & Romano 1992; ver el docblock de la clase): sortea bloques de
+     * calendario y, en cada replica, entrega a `$statistics` las posiciones
+     * de `$items` muestreadas para que calcule LOS estadisticos que quiera
+     * (varios a la vez, sobre exactamente los mismos sorteos). Extraido de
+     * `bootstrapUncertainty()` el `2026-09-20` sin cambiar el orden de
+     * llamadas a `mt_rand()` -- la Medicion 1 se reproduce identica -- para
+     * que la medicion de trailing pueda recalcular un estadistico COMPUESTO
+     * (`P_T`, que depende de medias de varias columnas) dentro de cada
+     * replica.
+     *
+     * @param list<array{entry_date: string, exposure_end_date: string}> $items YA ordenados por entry_date (se comprueba)
+     * @param callable(list<int>): array<string, float> $statistics recibe las posiciones muestreadas (no vacias) de una replica
+     * @return array{replicates: array<string, list<float>>, block_width_days: ?int, blocks_in_range: ?float} sin `replicates` ni anchura con menos de dos elementos
+     */
+    public function blockBootstrapReplicates(array $items, callable $statistics, ?int $seed): array
+    {
+        $n = count($items);
+
+        if ($n < 2) {
+            return ['replicates' => [], 'block_width_days' => null, 'blocks_in_range' => null];
+        }
+
+        for ($i = 1; $i < $n; $i++) {
+            if ($items[$i]['entry_date'] < $items[$i - 1]['entry_date']) {
+                throw new \InvalidArgumentException('blockBootstrapReplicates() exige los elementos ordenados por entry_date.');
+            }
+        }
+
+        $entryDates = array_map(static fn (array $item): DateTimeImmutable => new DateTimeImmutable($item['entry_date']), $items);
+        $exposureEndDates = array_map(static fn (array $item): DateTimeImmutable => new DateTimeImmutable($item['exposure_end_date']), $items);
+
+        $start = $entryDates[0];
+
+        foreach ($entryDates as $date) {
+            if ($date < $start) {
+                $start = $date;
+            }
+        }
+
+        $end = $exposureEndDates[0];
+
+        foreach ($exposureEndDates as $date) {
+            if ($date > $end) {
+                $end = $date;
+            }
+        }
+
+        $exposureSpans = [];
+
+        foreach (array_keys($items) as $index) {
+            $exposureSpans[] = $entryDates[$index]->diff($exposureEndDates[$index])->days;
+        }
+
+        sort($exposureSpans);
+        $blockWidthDays = max(1, (int) round(2 * $this->percentile($exposureSpans, 0.9)));
+
+        $totalRangeDays = max(1, $start->diff($end)->days);
+        $blockCount = max(1, (int) ceil($totalRangeDays / $blockWidthDays));
+
+        // Indice ordenado por dia desde $start, para localizar por
+        // busqueda binaria (en vez de recorrer las N operaciones en cada
+        // uno de los `BOOTSTRAP_REPLICATES x $blockCount` sorteos) que
+        // operaciones caen dentro de un bloque sorteado.
+        $entryOffsets = [];
+
+        foreach ($entryDates as $date) {
+            $entryOffsets[] = $start->diff($date)->days;
+        }
+
+        if ($seed !== null) {
+            mt_srand($seed);
+        }
+
+        $replicates = [];
+
+        // Bootstrap CIRCULAR de bloques (Politis & Romano 1992), no
+        // truncado: corregido el 2026-09-18 (hallazgo real de
+        // `auditor-estadistico` al revisar la medicion completa de 636
+        // tickers). La version anterior acotaba `$blockStart` a
+        // `[0, totalRangeDays - blockWidthDays]` para que ningun bloque
+        // sorteado se saliera del rango -- pero eso deja a una operacion
+        // cerca del INICIO del rango cubierta por un unico punto de
+        // arranque posible (`blockStart=0`), mientras una del CENTRO la
+        // cubren `blockWidthDays` puntos de arranque distintos: un sesgo
+        // de inclusion real y medido (verificado sobre los 2.842 pares
+        // reales de esa medicion: la primera operacion del rango cabia en
+        // 1 de 2.554 posiciones posibles frente a 982 para una del
+        // centro, ~1000x mas representada). Envolviendo el rango como un
+        // circulo (un bloque que se sale por el final continua por el
+        // principio), CADA punto de arranque en `[0, totalRangeDays)` es
+        // igual de probable y CADA operacion queda cubierta por
+        // exactamente `blockWidthDays` arranques posibles -- elimina el
+        // sesgo de inclusion sin cambiar `blocks_in_range` (la
+        // resolucion temporal real no aumenta, solo se reparte mejor
+        // quien se muestrea).
+        for ($replicate = 0; $replicate < self::BOOTSTRAP_REPLICATES; $replicate++) {
+            $sampledIndexes = [];
+
+            for ($block = 0; $block < $blockCount; $block++) {
+                $blockStart = mt_rand(0, $totalRangeDays - 1);
+                $blockEndExclusive = $blockStart + $blockWidthDays;
+
+                if ($blockEndExclusive <= $totalRangeDays) {
+                    $indexes = $this->indexesInRange($entryOffsets, $blockStart, $blockEndExclusive);
+                } else {
+                    // El bloque se sale del rango: envuelve al principio.
+                    $indexes = array_merge(
+                        $this->indexesInRange($entryOffsets, $blockStart, $totalRangeDays),
+                        $this->indexesInRange($entryOffsets, 0, $blockEndExclusive - $totalRangeDays)
+                    );
+                }
+
+                foreach ($indexes as $index) {
+                    $sampledIndexes[] = $index;
+                }
+            }
+
+            if ($sampledIndexes === []) {
+                // Sorteo sin ninguna operacion cubierta (posible solo con
+                // muestras muy pequeñas y $blockCount bajo): se repite ese
+                // replica en vez de contar una media indefinida.
+                $replicate--;
+
+                continue;
+            }
+
+            foreach ($statistics($sampledIndexes) as $name => $value) {
+                $replicates[$name][] = $value;
+            }
+        }
+
+        return [
+            'replicates' => $replicates,
+            'block_width_days' => $blockWidthDays,
             'blocks_in_range' => $totalRangeDays / $blockWidthDays,
         ];
     }
