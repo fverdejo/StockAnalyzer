@@ -7,6 +7,7 @@ require __DIR__ . '/../vendor/autoload.php';
 use StockAnalyzer\Config\ProviderConfig;
 use StockAnalyzer\Exceptions\MarketDataException;
 use StockAnalyzer\Infrastructure\Database\Connection;
+use StockAnalyzer\Providers\EodhdSymbolEquivalences;
 use StockAnalyzer\Providers\EodhdFiscalPeriodProvider;
 use StockAnalyzer\Repository\EodhdRawFundamentalsRepository;
 use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
@@ -139,32 +140,7 @@ $provider = new EodhdFiscalPeriodProvider($apiKey);
  * bolsas no estan cubiertas por esta suscripcion (ver `roadmap.md`), y este
  * mapa NO intenta adivinar un codigo para ellas.
  */
-const YAHOO_TO_EODHD_EXCHANGE_SUFFIX = [
-    'L' => 'LSE',
-    'DE' => 'XETRA',
-    'AX' => 'AU',
-];
-
-$symbolFor = static function (string $ticker): ?string {
-    if (preg_match('/^(.+)_OLD(\d*)$/', $ticker, $matches) === 1) {
-        $base = $matches[1];
-        $suffix = 'old' . $matches[2];
-        $eodhdBase = str_contains($base, '.') ? $base : $base . '.US';
-
-        return str_ends_with($eodhdBase, '.US')
-            ? substr($eodhdBase, 0, -3) . '_' . $suffix . '.US'
-            : $eodhdBase . '_' . $suffix;
-    }
-
-    if (
-        preg_match('/^(.+)\.([A-Za-z]+)$/', $ticker, $matches) === 1
-        && isset(YAHOO_TO_EODHD_EXCHANGE_SUFFIX[strtoupper($matches[2])])
-    ) {
-        return $matches[1] . '.' . YAHOO_TO_EODHD_EXCHANGE_SUFFIX[strtoupper($matches[2])];
-    }
-
-    return null;
-};
+$symbolFor = static fn (string $ticker): ?string => EodhdSymbolEquivalences::symbolFor($ticker);
 
 printf(
     'Archivado de EODHD Fundamentals v1.1: %d tickers%s%s',

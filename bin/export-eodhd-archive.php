@@ -5,6 +5,9 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use StockAnalyzer\Infrastructure\Database\Connection;
+use StockAnalyzer\Providers\EodhdSymbolEquivalences;
+use StockAnalyzer\Services\EodhdArchiveExportWriter;
+use StockAnalyzer\Services\EodhdEarningsEventsNormalizer;
 
 /**
  * Exporta el archivo versionado COMPLETO de EODHD
@@ -24,12 +27,29 @@ use StockAnalyzer\Infrastructure\Database\Connection;
  * (`payload_hash`, del JSON ORIGINAL sin comprimir) viaja en cada fila
  * para poder verificar integridad sin descomprimir hasta que haga falta.
  *
+ * Reescrito el 2026-09-22 (encargo C1 de
+ * `REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`):
+ * - PUBLICACION ATOMICA: se escribe a temporales, se VERIFICA el fichero
+ *   recien escrito con la misma validacion autonoma que se usara despues
+ *   (`bin/verify-eodhd-archive-export.php`) y solo entonces se renombra al
+ *   destino final; una exportacion interrumpida o con un fallo de escritura
+ *   conserva la ultima copia valida y no deja ficheros parciales.
+ * - IDENTIDAD Y ORDEN: cada fila lleva `observation_id`/`version_id` y el
+ *   orden es binario (`ticker, api_version, section, observed_at_utc, id`),
+ *   declarado en el manifiesto, para poder reconstruir tambien el estado
+ *   VIGENTE (la observacion mas reciente) exactamente como
+ *   `EodhdRawFundamentalVersionsRepository::latestFor()`.
+ * - PAQUETE AUTOSUFICIENTE: el manifiesto lleva el esquema (`SHOW CREATE
+ *   TABLE` y el sha256 de las migraciones), las equivalencias de simbolos
+ *   (Yahoo -> EODHD) y la version del normalizador, ademas del hash de la
+ *   lista de tickers y el rango de identificadores.
+ *
  * Este script NUNCA toca la red ni pide nada a EODHD: es una lectura pura
  * de lo que ya esta en `eodhd_raw_fundamental_versions`.
  *
  * Uso:
  *   php bin/export-eodhd-archive.php
- *   php bin/export-eodhd-archive.php --out=storage/exports/eodhd_export_2026-09-18.jsonl.gz
+ *   php bin/export-eodhd-archive.php --out=storage/exports/eodhd_export_2026-09-22.jsonl.gz
  *
  * Por defecto escribe en `storage/exports/` (ya excluido de git en
  * `.gitignore`, mismo convenio que el resto de exportaciones del
@@ -49,100 +69,78 @@ $outPath = is_string($options['out'] ?? null) && trim((string) $options['out']) 
 $connection = new Connection();
 $pdo = $connection->getPdo();
 
-// Las filas se escriben primero a un temporal SIN manifiesto: el
-// manifiesto necesita los totales, que solo se conocen al terminar de
-// recorrer las filas. Combinar los dos en el fichero final es una unica
-// pasada de copia, no una reescritura completa.
-$dataTmpPath = $outPath . '.data.tmp';
-$gz = gzopen($dataTmpPath, 'wb9');
+// Esquema y migraciones: SE LEEN ANTES de abrir la consulta sin buffer (no se
+// puede lanzar otra consulta mientras un cursor sin buffer sigue abierto).
+$tables = ['eodhd_raw_fundamental_versions', 'eodhd_raw_fundamental_version_observations'];
+$schemaTables = [];
 
-if ($gz === false) {
-    fwrite(STDERR, "No se pudo abrir $dataTmpPath para escritura.\n");
-    exit(1);
+foreach ($tables as $table) {
+    $create = $pdo->query('SHOW CREATE TABLE ' . $table)->fetch(PDO::FETCH_NUM);
+    $schemaTables[$table] = is_array($create) ? (string) $create[1] : '';
 }
 
-$manifest = [
-    'generated_at' => (new DateTimeImmutable())->format(DATE_ATOM),
+$migrationHashes = [];
+
+foreach (['025_create_eodhd_raw_fundamental_versions.sql', '027_create_eodhd_raw_fundamental_version_observations.sql'] as $migration) {
+    $migrationPath = __DIR__ . '/../database/migrations/' . $migration;
+    $migrationHashes[$migration] = is_file($migrationPath) ? hash_file('sha256', $migrationPath) : null;
+}
+
+$manifestExtras = [
     'code_revision' => trim((string) shell_exec('git rev-parse HEAD 2>&1')),
-    'source' => 'eodhd_raw_fundamental_versions + eodhd_raw_fundamental_version_observations',
-    'schema_migrations' => ['025_create_eodhd_raw_fundamental_versions.sql', '027_create_eodhd_raw_fundamental_version_observations.sql'],
-    'row_count' => 0,
-    'by_api_version_section' => [],
-    'distinct_tickers' => 0,
+    'schema_migrations' => array_keys($migrationHashes),
+    'schema' => [
+        'create_table' => $schemaTables,
+        'migrations_sha256' => $migrationHashes,
+        'note' => 'observation_id/version_id son las claves primarias originales; payload_hash es el sha256 del JSON ORIGINAL sin comprimir; payload_compressed_base64 es el blob gzip tal cual estaba en la tabla.',
+    ],
+    'symbol_equivalences' => [
+        'ticker' => 'ticker del proyecto (convencion Yahoo); source_symbol de cada fila es el simbolo realmente pedido a EODHD (null = el mismo ticker + .US)',
+        'exchange_suffix_map' => EodhdSymbolEquivalences::EXCHANGE_SUFFIX_MAP,
+        'old_suffix_rule' => 'TICKER_OLD[n] -> TICKER_old[n].US (minusculas, antes del sufijo de bolsa)',
+        'uncovered_by_plan' => ['.T (Japon)', '.MI (Italia)', '.SI (Singapur)', '.TA (Israel)', '.NZ (Nueva Zelanda)'],
+    ],
+    'normalizers' => ['earnings_events_normalizer_version' => EodhdEarningsEventsNormalizer::VERSION],
+    'restore_howto' => 'php bin/verify-eodhd-archive-export.php --file=<este fichero> --restore-check  (valida, restaura en SQLite aislado y reconstruye un simbolo exclusivamente v1.1 sin red ni base de datos)',
 ];
 
-// La primera linea del .jsonl.gz es SIEMPRE el manifiesto -- un
-// consumidor lee esa linea primero para saber que esperar del resto,
-// sin tener que contar filas antes de empezar.
-$manifestPlaceholderWritten = false;
-
+// Cursor SIN buffer: el archivo pesa cientos de MB y no debe cargarse entero.
+$pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
 $statement = $pdo->query(
-    'SELECT o.ticker, o.api_version, o.section, o.observed_at_utc,
+    'SELECT o.id AS observation_id, o.version_id, o.ticker, o.api_version, o.section, o.observed_at_utc,
             o.source_symbol, o.request_from, o.request_to,
             v.payload_hash, v.payload_compressed
      FROM eodhd_raw_fundamental_version_observations o
      INNER JOIN eodhd_raw_fundamental_versions v ON v.id = o.version_id
-     ORDER BY o.ticker, o.api_version, o.section, o.observed_at_utc'
+     ORDER BY o.ticker COLLATE utf8mb4_bin, o.api_version COLLATE utf8mb4_bin, o.section COLLATE utf8mb4_bin,
+              o.observed_at_utc, o.id'
 );
 
-$rowCount = 0;
-$byApiVersionSection = [];
-$distinctTickers = [];
+$rows = (static function () use ($statement): Generator {
+    $count = 0;
 
-while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
-    $key = $row['api_version'] . '/' . $row['section'];
-    $byApiVersionSection[$key] = ($byApiVersionSection[$key] ?? 0) + 1;
-    $distinctTickers[$row['ticker']] = true;
+    while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+        $row['observation_id'] = (int) $row['observation_id'];
+        $row['version_id'] = (int) $row['version_id'];
 
-    $line = json_encode([
-        'ticker' => $row['ticker'],
-        'api_version' => $row['api_version'],
-        'section' => $row['section'],
-        'observed_at_utc' => $row['observed_at_utc'],
-        'source_symbol' => $row['source_symbol'],
-        'request_from' => $row['request_from'],
-        'request_to' => $row['request_to'],
-        'payload_hash' => $row['payload_hash'],
-        'payload_compressed_base64' => base64_encode((string) $row['payload_compressed']),
-    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        yield $row;
 
-    gzwrite($gz, $line . "\n");
-    ++$rowCount;
-
-    if ($rowCount % 500 === 0) {
-        echo "... $rowCount filas exportadas\n";
+        if (++$count % 5000 === 0) {
+            echo "... $count filas exportadas\n";
+        }
     }
-}
+})();
 
-$manifest['row_count'] = $rowCount;
-$manifest['by_api_version_section'] = $byApiVersionSection;
-$manifest['distinct_tickers'] = count($distinctTickers);
-
-gzclose($gz);
-
-// Manifiesto + datos ya recogidos, en UNA pasada de copia hacia el
-// fichero final.
-$manifestLine = json_encode(['__manifest__' => $manifest], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-
-$in = gzopen($dataTmpPath, 'rb');
-$out = gzopen($outPath, 'wb9');
-gzwrite($out, $manifestLine . "\n");
-
-while (!gzeof($in)) {
-    gzwrite($out, gzread($in, 1_048_576));
-}
-
-gzclose($in);
-gzclose($out);
-unlink($dataTmpPath);
+$manifest = (new EodhdArchiveExportWriter())->write($outPath, $rows, $manifestExtras);
 
 printf(
-    "Exportadas %d observaciones (%d tickers distintos) a %s (%s)\n",
-    $rowCount,
-    count($distinctTickers),
+    "Exportadas %d observaciones (%d tickers distintos) a %s (%s), verificadas antes de publicar.\n",
+    $manifest['row_count'],
+    $manifest['distinct_tickers'],
     $outPath,
     number_format((float) (filesize($outPath) / 1_048_576), 1) . 'MB'
 );
-foreach ($byApiVersionSection as $key => $count) {
+
+foreach ($manifest['by_api_version_section'] as $key => $count) {
     printf("  %-20s %d\n", $key, $count);
 }
