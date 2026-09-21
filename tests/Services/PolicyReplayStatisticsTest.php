@@ -171,6 +171,104 @@ final class PolicyReplayStatisticsTest extends TestCase
         self::assertNotSame(round($interval['ci95_low'], 2), $interval['ci95_low']);
     }
 
+    /**
+     * Muestra de Astra (C3, `REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`):
+     * 20 fechas con dos operaciones identicas cada una (la dependencia que el
+     * DEFF debe detectar). Escalar TODOS los retornos por una constante
+     * positiva no puede cambiar DEFF, tamaño efectivo, suficiencia ni la
+     * exclusion de cero. Antes, el redondeo de los errores estandar a 3
+     * decimales hacia que x0,003 pasara de "no informativo" a "informativo".
+     *
+     * @return list<array{entry_date: string, exposure_end_date: string, diff: float}>
+     */
+    private function clusteredDiffs(float $scale): array
+    {
+        $rows = [];
+
+        for ($i = 0; $i < 20; $i++) {
+            $entry = $this->dateAt(200 * $i);
+
+            for ($j = 0; $j < 2; $j++) {
+                $rows[] = ['entry_date' => $entry, 'exposure_end_date' => $this->dateAt(200 * $i + 20), 'diff' => $scale * (float) ($i % 5)];
+            }
+        }
+
+        return $rows;
+    }
+
+    public function testEscalarLosRetornosNoCambiaDeffTamanoEfectivoSuficienciaNiExclusionDeCero(): void
+    {
+        $stats = new PolicyReplayStatistics();
+        $baseline = $stats->summarizePairedDiffsPrecise($this->clusteredDiffs(1.0), self::SEED);
+
+        self::assertNotNull($baseline['design_effect']);
+        self::assertNotNull($baseline['effective_n']);
+
+        foreach ([0.003, 1e-6, 1000.0, 1e6] as $scale) {
+            $scaled = $stats->summarizePairedDiffsPrecise($this->clusteredDiffs($scale), self::SEED);
+
+            self::assertEqualsWithDelta($baseline['design_effect'], $scaled['design_effect'], 1e-9 * $baseline['design_effect'], "DEFF con escala {$scale}");
+            self::assertEqualsWithDelta($baseline['effective_n'], $scaled['effective_n'], 1e-9 * $baseline['effective_n'], "tamaño efectivo con escala {$scale}");
+            self::assertSame($baseline['result_informative'], $scaled['result_informative'], "suficiencia con escala {$scale}");
+            self::assertSame($baseline['bootstrap_has_enough_resolution'], $scaled['bootstrap_has_enough_resolution']);
+            self::assertSame($baseline['ci_excludes_zero'], $scaled['ci_excludes_zero'], "exclusion de cero con escala {$scale}");
+            self::assertEqualsWithDelta($scale * $baseline['avg_diff'], $scaled['avg_diff'], 1e-9 * $scale * abs($baseline['avg_diff']));
+            self::assertEqualsWithDelta($scale * $baseline['ci95_low'], $scaled['ci95_low'], 1e-9 * $scale * max(1.0, abs($baseline['ci95_low'])));
+        }
+    }
+
+    /**
+     * La version de PRESENTACION redondea, pero las decisiones salen de la
+     * precisa: mismos booleanos y mismo tamaño efectivo (redondeado) con
+     * cualquier escala.
+     */
+    public function testLaVersionRedondeadaTomaLasMismasDecisionesQueLaPrecisa(): void
+    {
+        $stats = new PolicyReplayStatistics();
+
+        foreach ([1.0, 0.003] as $scale) {
+            $precise = $stats->summarizePairedDiffsPrecise($this->clusteredDiffs($scale), self::SEED);
+            $shown = $stats->summarizePairedDiffs($this->clusteredDiffs($scale), self::SEED);
+
+            self::assertSame($precise['result_informative'], $shown['result_informative']);
+            self::assertSame($precise['ci_excludes_zero'], $shown['ci_excludes_zero']);
+            self::assertSame(round($precise['effective_n'], 1), $shown['effective_n']);
+            self::assertSame(round($precise['design_effect'], 3), $shown['design_effect']);
+            self::assertSame(round($precise['ci95_low'], 2), $shown['ci95_low']);
+        }
+    }
+
+    public function testUnaVarianzaRealmenteNulaSeDistingueDeUnaMuyPequena(): void
+    {
+        $stats = new PolicyReplayStatistics();
+        $constant = [];
+        $tiny = [];
+
+        for ($i = 0; $i < 30; $i++) {
+            $entry = $this->dateAt(60 * $i);
+            // 0,1 repetido: la media con coma flotante NO es exactamente 0,1.
+            $constant[] = ['entry_date' => $entry, 'exposure_end_date' => $this->dateAt(60 * $i + 20), 'diff' => 0.1];
+            $tiny[] = ['entry_date' => $entry, 'exposure_end_date' => $this->dateAt(60 * $i + 20), 'diff' => 1e-12 * (1 + ($i % 3))];
+        }
+
+        $zero = $stats->summarizePairedDiffsPrecise($constant, self::SEED);
+
+        self::assertSame(0.0, $zero['se_naive']);
+        self::assertSame(0.0, $zero['se_bootstrap']);
+        self::assertNull($zero['t_stat_naive'], 'Sin variabilidad no hay t.');
+        self::assertNull($zero['design_effect']);
+        self::assertFalse($zero['result_informative']);
+
+        $small = $stats->summarizePairedDiffsPrecise($tiny, self::SEED);
+        $reference = array_map(static fn (array $row): array => array_replace($row, ['diff' => $row['diff'] * 1e12]), $tiny);
+        $scaledBack = $stats->summarizePairedDiffsPrecise($reference, self::SEED);
+
+        self::assertGreaterThan(0.0, $small['se_naive'], 'Un valor pequeño NO es varianza nula.');
+        self::assertNotNull($small['design_effect']);
+        self::assertEqualsWithDelta($scaledBack['design_effect'], $small['design_effect'], 1e-9 * $scaledBack['design_effect']);
+        self::assertSame($scaledBack['result_informative'], $small['result_informative']);
+    }
+
     public function testSinOperacionesTodoSaleNulo(): void
     {
         $summary = (new PolicyReplayStatistics())->summarize([]);

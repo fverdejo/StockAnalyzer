@@ -231,6 +231,50 @@ final class PolicyReplayStatistics
      */
     public function summarizePairedDiffs(array $pairedDiffs, ?int $seed = null): array
     {
+        $precise = $this->summarizePairedDiffsPrecise($pairedDiffs, $seed);
+
+        // Redondeo SOLO de presentacion (encargo C3 de
+        // `REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`): todos los
+        // estimadores, errores estandar, intervalos y criterios de decision
+        // (DEFF, tamaño efectivo, suficiencia, exclusion de cero) se calculan
+        // con precision completa en `summarizePairedDiffsPrecise()`.
+        $round = static fn (?float $value, int $decimals): ?float => $value === null ? null : round($value, $decimals);
+
+        return [
+            'cohorts' => $precise['cohorts'],
+            'avg_diff' => $round($precise['avg_diff'], 2),
+            'se_naive' => $round($precise['se_naive'], 3),
+            't_stat_naive' => $round($precise['t_stat_naive'], 2),
+            'se_bootstrap' => $round($precise['se_bootstrap'], 3),
+            'ci95_low' => $round($precise['ci95_low'], 2),
+            'ci95_high' => $round($precise['ci95_high'], 2),
+            'pseudo_t_bootstrap' => $round($precise['pseudo_t_bootstrap'], 2),
+            'block_width_days' => $precise['block_width_days'],
+            'blocks_in_range' => $round($precise['blocks_in_range'], 1),
+            'bootstrap_replicates' => $precise['bootstrap_replicates'],
+            'design_effect' => $round($precise['design_effect'], 3),
+            'effective_n' => $round($precise['effective_n'], 1),
+            'bootstrap_has_enough_resolution' => $precise['bootstrap_has_enough_resolution'],
+            'result_informative' => $precise['result_informative'],
+            'ci_excludes_zero' => $precise['ci_excludes_zero'],
+            'calendar_windows_observed' => $precise['calendar_windows_observed'],
+        ];
+    }
+
+    /**
+     * Mismos campos que `summarizePairedDiffs()` SIN ningun redondeo: es la
+     * version sobre la que se decide (DEFF, tamaño efectivo, suficiencia,
+     * exclusion de cero). Escalar todos los retornos por una constante
+     * positiva NO cambia ninguna de esas decisiones (regresion en
+     * `PolicyReplayStatisticsTest`): antes, el redondeo intermedio de los
+     * errores estandar a 3 decimales hacia que un multiplicador de 0,003 sobre
+     * la MISMA muestra pasara de `result_informative=false` a `true`.
+     *
+     * @param list<array{entry_date: string, exposure_end_date: string, diff: float}> $pairedDiffs no hace falta que esten ordenadas
+     * @return array{cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int}
+     */
+    public function summarizePairedDiffsPrecise(array $pairedDiffs, ?int $seed = null): array
+    {
         usort($pairedDiffs, static fn (array $a, array $b): int => $a['entry_date'] <=> $b['entry_date']);
 
         $diffValues = array_column($pairedDiffs, 'diff');
@@ -272,17 +316,17 @@ final class PolicyReplayStatistics
             'ci95_low' => $bootstrap['ci95_low'],
             'ci95_high' => $bootstrap['ci95_high'],
             'pseudo_t_bootstrap' => $bootstrap['se_bootstrap'] !== null && $bootstrap['se_bootstrap'] > 0.0 && $naiveMean !== null
-                ? round($naiveMean / $bootstrap['se_bootstrap'], 2)
+                ? $naiveMean / $bootstrap['se_bootstrap']
                 : null,
             'block_width_days' => $bootstrap['block_width_days'],
             // Expuesta el 2026-09-18 (hallazgo de `auditor-estadistico`
             // al revisar la medicion completa): es la cifra que de
             // verdad decide `bootstrap_has_enough_resolution`, antes solo
             // calculada internamente sin poder verla en el resultado.
-            'blocks_in_range' => $bootstrap['blocks_in_range'] !== null ? round($bootstrap['blocks_in_range'], 1) : null,
+            'blocks_in_range' => $bootstrap['blocks_in_range'],
             'bootstrap_replicates' => self::BOOTSTRAP_REPLICATES,
-            'design_effect' => $designEffect !== null ? round($designEffect, 3) : null,
-            'effective_n' => $effectiveN !== null ? round($effectiveN, 1) : null,
+            'design_effect' => $designEffect,
+            'effective_n' => $effectiveN,
             'bootstrap_has_enough_resolution' => $bootstrapHasEnoughResolution,
             'result_informative' => $resultInformative,
             'ci_excludes_zero' => $ciExcludesZero,
@@ -310,13 +354,18 @@ final class PolicyReplayStatistics
         $result = $this->blockBootstrapReplicates(
             $diffs,
             static function (array $sampledIndexes) use ($diffs): array {
+                // Media desplazada por una referencia FIJA: con valores
+                // identicos da EXACTAMENTE la referencia (`sum/count` de 0,1
+                // repetido no es exactamente 0,1 y dejaba una desviacion
+                // bootstrap de ~1e-14 donde la varianza es de verdad nula, C3).
+                $reference = $diffs[0]['diff'];
                 $sum = 0.0;
 
                 foreach ($sampledIndexes as $index) {
-                    $sum += $diffs[$index]['diff'];
+                    $sum += $diffs[$index]['diff'] - $reference;
                 }
 
-                return ['mean' => $sum / count($sampledIndexes)];
+                return ['mean' => $reference + $sum / count($sampledIndexes)];
             },
             $seed
         );
@@ -355,8 +404,8 @@ final class PolicyReplayStatistics
 
         return [
             'se_bootstrap' => $seBootstrap,
-            'ci95_low' => round($this->percentile($replicateMeans, 0.025), 2),
-            'ci95_high' => round($this->percentile($replicateMeans, 0.975), 2),
+            'ci95_low' => $this->percentile($replicateMeans, 0.025),
+            'ci95_high' => $this->percentile($replicateMeans, 0.975),
             'block_width_days' => $result['block_width_days'],
             // Cuantas anchuras de bloque caben en el rango temporal total
             // (SIN redondear a entero ni forzar un minimo de 1): la
@@ -684,10 +733,18 @@ final class PolicyReplayStatistics
             return null;
         }
 
+        // Varianza REALMENTE nula (todos los valores iguales) frente a una
+        // pequeña: con valores identicos la media puede salir con un error
+        // de coma flotante y dar una varianza ~1e-34 que no es cero.
+        if (min($values) === max($values)) {
+            return 0.0;
+        }
+
         $mean = array_sum($values) / $n;
         $variance = array_sum(array_map(static fn (float $v): float => ($v - $mean) ** 2, $values)) / ($n - 1);
 
-        return round(sqrt($variance), 3);
+        // SIN redondear (C3): se usa en DEFF/tamaño efectivo.
+        return sqrt($variance);
     }
 
     /**
@@ -705,14 +762,18 @@ final class PolicyReplayStatistics
         $mean = array_sum($values) / $n;
 
         if ($n < 2) {
-            return [round($mean, 2), null, null];
+            return [$mean, null, null];
         }
 
-        $variance = array_sum(array_map(static fn (float $v): float => ($v - $mean) ** 2, $values)) / ($n - 1);
+        // Varianza realmente nula (valores identicos) frente a una pequeña.
+        $variance = min($values) === max($values)
+            ? 0.0
+            : array_sum(array_map(static fn (float $v): float => ($v - $mean) ** 2, $values)) / ($n - 1);
         $stderr = sqrt($variance) / sqrt($n);
         $t = $stderr > 0.0 ? $mean / $stderr : null;
 
-        return [round($mean, 2), round($stderr, 3), $t !== null ? round($t, 2) : null];
+        // SIN redondear (C3): el redondeo es solo de presentacion.
+        return [$mean, $stderr, $t];
     }
 
     /**
