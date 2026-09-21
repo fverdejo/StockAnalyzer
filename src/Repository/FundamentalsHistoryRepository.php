@@ -7,6 +7,7 @@ namespace StockAnalyzer\Repository;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use PDO;
+use StockAnalyzer\Exceptions\InvalidFundamentalsPayloadException;
 use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Models\Fundamentals;
 
@@ -84,9 +85,20 @@ class FundamentalsHistoryRepository
      */
     protected readonly string $table;
 
+    /**
+     * `$strictPayloads` (C7, 2026-09-22): que hacer cuando el snapshot que
+     * corresponde a una fecha tiene un payload que no es un objeto JSON
+     * valido (literal `null`, un numero, una lista, JSON malformado). Por
+     * defecto (`false`, produccion) se devuelve `null` -- como siempre -- y
+     * NUNCA se rescata un snapshot anterior. Con `true` (recorridos de
+     * medicion) se lanza `InvalidFundamentalsPayloadException`, para que un
+     * dato invalido no pase por "ausencia de dato". Los DOS lectores (este y
+     * `PreloadedFundamentalsHistoryRepository`) se comportan igual.
+     */
     public function __construct(
         protected readonly Connection $connection,
-        string $table = 'fundamentals_history'
+        string $table = 'fundamentals_history',
+        protected readonly bool $strictPayloads = false
     ) {
         if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $table) !== 1) {
             throw new InvalidArgumentException(sprintf('Nombre de tabla invalido: %s', $table));
@@ -171,16 +183,50 @@ class FundamentalsHistoryRepository
             return null;
         }
 
-        $decoded = json_decode($row['fundamentals_payload'], true);
+        $decoded = self::decodePayload($row['fundamentals_payload']);
 
-        if (!is_array($decoded)) {
-            return null;
+        if ($decoded === null) {
+            return $this->invalidPayload($ticker, $row['snapshot_date']);
         }
 
         return [
             'payload' => $decoded,
             'snapshotDate' => new DateTimeImmutable($row['snapshot_date']),
         ];
+    }
+
+    /**
+     * Payload valido = objeto JSON (array asociativo, o vacio). `null` si el
+     * JSON no decodifica o decodifica a un escalar (`null`, `7`, `"x"`) o a
+     * una lista (`[1,2]`). Compartido por los dos lectores para que decidan
+     * IGUAL.
+     *
+     * @return array<string,mixed>|null
+     */
+    protected static function decodePayload(string $json): ?array
+    {
+        $decoded = json_decode($json, true);
+
+        if (!is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) {
+            return null;
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Comportamiento ante un payload invalido del snapshot SELECCIONADO:
+     * estricto lanza; tolerante devuelve `null` (sin rescatar un snapshot
+     * anterior).
+     *
+     */
+    protected function invalidPayload(string $ticker, string $snapshotDate): null
+    {
+        if ($this->strictPayloads) {
+            throw InvalidFundamentalsPayloadException::forSnapshot(strtoupper($ticker), $snapshotDate);
+        }
+
+        return null;
     }
 
     /**

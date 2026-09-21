@@ -37,7 +37,16 @@ use PDO;
  */
 final class PreloadedFundamentalsHistoryRepository extends FundamentalsHistoryRepository
 {
-    /** @var list<array{date: string, payload: array<string,float|null>}> */
+    /**
+     * TODAS las filas almacenadas del ticker, en orden de fecha; `payload` es
+     * `null` cuando el contenido NO es un objeto JSON valido (C7): esas filas
+     * se conservan para que la precarga decida igual que la consulta SQL
+     * (que selecciona la ultima fila <= fecha y, si es invalida, NO rescata
+     * una anterior) y para que `countSnapshots()` cuente lo mismo que
+     * `COUNT(*)`.
+     *
+     * @var list<array{date: string, payload: array<string,float|null>|null}>
+     */
     private array $sortedSnapshots = [];
 
     private ?string $preloadedTicker = null;
@@ -65,13 +74,11 @@ final class PreloadedFundamentalsHistoryRepository extends FundamentalsHistoryRe
         $sorted = [];
 
         while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
-            $decoded = json_decode((string) $row['fundamentals_payload'], true);
-
-            if (!is_array($decoded)) {
-                continue;
-            }
-
-            $sorted[] = ['date' => (string) $row['snapshot_date'], 'payload' => $decoded];
+            // Antes se DESCARTABA la fila invalida y la busqueda devolvia el
+            // snapshot anterior (7,5 en el ejemplo de Astra) mientras el
+            // lector SQL devolvia ausencia: dos comportamientos distintos
+            // segun el camino (C7). Ahora se conserva con `payload = null`.
+            $sorted[] = ['date' => (string) $row['snapshot_date'], 'payload' => self::decodePayload((string) $row['fundamentals_payload'])];
         }
 
         $this->sortedSnapshots = $sorted;
@@ -112,6 +119,12 @@ final class PreloadedFundamentalsHistoryRepository extends FundamentalsHistoryRe
 
         $row = $this->sortedSnapshots[$foundIndex];
 
+        if ($row['payload'] === null) {
+            // Igual que el lector SQL: el snapshot SELECCIONADO es invalido ->
+            // ausencia (o excepcion en modo estricto), nunca un snapshot anterior.
+            return $this->invalidPayload($ticker, $row['date']);
+        }
+
         return [
             'payload' => $row['payload'],
             'snapshotDate' => new DateTimeImmutable($row['date']),
@@ -129,6 +142,22 @@ final class PreloadedFundamentalsHistoryRepository extends FundamentalsHistoryRe
             return parent::countSnapshots($ticker);
         }
 
+        // Filas ALMACENADAS, igual que `COUNT(*)` del lector SQL (incluye las
+        // de payload invalido): ver `countUsableSnapshots()` para las validas.
         return count($this->sortedSnapshots);
+    }
+
+    /**
+     * Snapshots UTILIZABLES (payload objeto JSON valido) del ticker
+     * precargado, frente a `countSnapshots()` (filas almacenadas): C7,
+     * "distinguir filas almacenadas de snapshots utilizables".
+     */
+    public function countUsableSnapshots(string $ticker): int
+    {
+        if (strtoupper($ticker) !== $this->preloadedTicker) {
+            return 0;
+        }
+
+        return count(array_filter($this->sortedSnapshots, static fn (array $snapshot): bool => $snapshot['payload'] !== null));
     }
 }
