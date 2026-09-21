@@ -181,6 +181,48 @@ final class EodhdFiscalPeriodProviderTest extends TestCase
         self::assertSame('GBP', $periods[0]->statementCurrency);
     }
 
+    /**
+     * C2 (Astra 2026-09-21): la moneda de CADA estado se conserva por separado,
+     * cada una de su propio payload (antes solo la del balance, o resultados).
+     */
+    public function testConservaLaMonedaDeCadaEstadoPorSeparado(): void
+    {
+        $income = $this->income('2025-03-31', '2025-05-02');
+        $income['currency_symbol'] = 'EUR';
+        $cashFlow = $this->cashFlow('2025-03-31', '2025-05-02');
+        $cashFlow['currency_symbol'] = 'USD';
+
+        $periods = $this->provider(
+            ['2025-03-31' => $income],
+            ['2025-03-31' => $this->balance('2025-03-31', '2025-05-02', currencySymbol: 'GBP')],
+            ['2025-03-31' => $cashFlow]
+        )->fetch('AZN');
+
+        self::assertSame('EUR', $periods[0]->incomeCurrency);
+        self::assertSame('GBP', $periods[0]->balanceCurrency);
+        self::assertSame('USD', $periods[0]->cashFlowCurrency);
+        // El accesor cae en la moneda propia del estado; statementCurrency sigue siendo la del balance.
+        self::assertSame('GBP', $periods[0]->statementCurrency);
+        self::assertSame('EUR', $periods[0]->incomeStatementCurrency());
+        self::assertSame('USD', $periods[0]->cashFlowStatementCurrency());
+    }
+
+    public function testUnEstadoSinMonedaCaeEnLaMonedaDelPeriodoYNoEnUnaInventada(): void
+    {
+        $periods = $this->provider(
+            ['2025-03-31' => $this->income('2025-03-31', '2025-05-02')],
+            ['2025-03-31' => $this->balance('2025-03-31', '2025-05-02', currencySymbol: 'GBP')],
+            ['2025-03-31' => $this->cashFlow('2025-03-31', '2025-05-02')]
+        )->fetch('AZN');
+
+        self::assertNull($periods[0]->incomeCurrency);
+        self::assertNull($periods[0]->cashFlowCurrency);
+        self::assertSame('GBP', $periods[0]->balanceCurrency);
+        // Accesores: sin moneda propia -> la del periodo (compatibilidad con proveedores de una sola moneda).
+        self::assertSame('GBP', $periods[0]->incomeStatementCurrency());
+        self::assertSame('GBP', $periods[0]->cashFlowStatementCurrency());
+    }
+
     public function testStatementCurrencyEsNuloSiNoVieneEnNingunEstado(): void
     {
         $periods = $this->provider(

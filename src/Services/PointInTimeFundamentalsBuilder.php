@@ -92,7 +92,8 @@ use StockAnalyzer\Models\Fundamentals;
  *     incomeTaxExpense: ?float,
  *     epsDiluted: ?float,
  *     freeCashFlow: ?float,
- *     commonDividendsPaid: ?float
+ *     commonDividendsPaid: ?float,
+ *     currencies: array{income: ?string, cashFlow: ?string, incomeConflict: bool, cashFlowConflict: bool}
  * }
  */
 class PointInTimeFundamentalsBuilder
@@ -171,6 +172,33 @@ class PointInTimeFundamentalsBuilder
      */
     public function buildFor(DateTimeImmutable $date, float $price): ?Fundamentals
     {
+        return $this->buildWithReasons($date, $price)['fundamentals'];
+    }
+
+    /**
+     * Igual que `buildFor()`, pero ademas devuelve el MOTIVO INTERNO de cada
+     * ratio que quedo no evaluable por una incompatibilidad de moneda
+     * (C2, `REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`): clave =
+     * nombre del ratio (`roe`, `cashConversion`, `per`...), valor = texto. Los
+     * ratios que SI son comparables se conservan.
+     *
+     * Contrato de moneda (C2): cada estado financiero conserva SU moneda por
+     * periodo (`FiscalPeriod::incomeStatementCurrency()`/`balanceSheetCurrency()`/
+     * `cashFlowStatementCurrency()`); una ventana TTM solo suma periodos con la
+     * MISMA moneda (una moneda CONOCIDA distinta dentro de la ventana la
+     * invalida), y cada operacion entre importes de estados distintos (ROE:
+     * resultados/balance; FCF/beneficio: flujos/resultados; crecimientos: TTM
+     * actual/anterior) exige monedas compatibles. Sin una conversion fechada
+     * acreditada (el proyecto no tiene fuente de FX historica) la unica
+     * correccion honesta ante una moneda genuinamente distinta es dejar el
+     * ratio en `null`, no adivinar un tipo de cambio. Moneda DESCONOCIDA
+     * (`null`) se asume compatible, igual que antes de esta correccion: solo
+     * una discrepancia PROBADA entre dos monedas conocidas invalida.
+     *
+     * @return array{fundamentals: ?Fundamentals, not_evaluable: array<string, string>}
+     */
+    public function buildWithReasons(DateTimeImmutable $date, float $price): array
+    {
         // Solo entran aqui trimestres/ejercicios con filingDate <= $date:
         // es la unica fuente de la que se construyen "current" y las dos
         // ventanas TTM, asi que la regla point-in-time no se puede saltar
@@ -178,48 +206,109 @@ class PointInTimeFundamentalsBuilder
         $filed = $this->orderedFiledBefore($date);
 
         if ($filed === []) {
-            return null;
+            return ['fundamentals' => null, 'not_evaluable' => []];
         }
+
+        /** @var array<string, string> $reasons */
+        $reasons = [];
+        $block = static function (array $ratios, string $reason) use (&$reasons): void {
+            foreach ($ratios as $ratio) {
+                $reasons[$ratio] ??= $reason;
+            }
+        };
 
         $current = $filed[0];
         $ttm = $this->ttmAggregate($filed, 0);
         $previousTtm = $this->ttmAggregate($filed, $this->windowSize());
 
+        // Monedas de cada grupo de cifras (una sola moneda CONOCIDA por
+        // grupo, o `null` si no hay ninguna conocida): resultados y flujos de
+        // caja del TTM actual, y balance del periodo vigente.
+        $incomeCurrency = $ttm['currencies']['income'] ?? null;
+        $cashFlowCurrency = $ttm['currencies']['cashFlow'] ?? null;
+        $balanceCurrency = $current->balanceSheetCurrency();
+
+        if ($ttm !== null && $ttm['currencies']['incomeConflict']) {
+            $block(
+                ['per', 'peg', 'roe', 'roic', 'eps', 'evToEbitda', 'earningsYield', 'payoutRatio', 'grossMargin', 'operatingMargin', 'netMargin', 'revenueGrowth', 'cashConversion'],
+                'la ventana TTM de la cuenta de resultados mezcla monedas conocidas distintas'
+            );
+        }
+
+        if ($ttm !== null && $ttm['currencies']['cashFlowConflict']) {
+            $block(
+                ['freeCashFlow', 'dividendYield', 'payoutRatio', 'cashConversion'],
+                'la ventana TTM del flujo de caja mezcla monedas conocidas distintas'
+            );
+        }
+
+        $incomeVsBalance = $this->currenciesCompatible($incomeCurrency, $balanceCurrency);
+        $cashVsIncome = $this->currenciesCompatible($cashFlowCurrency, $incomeCurrency);
+
+        if (!$incomeVsBalance) {
+            $block(['roe', 'roic', 'evToEbitda'], sprintf('resultados (%s) y balance (%s) en monedas distintas', $incomeCurrency, $balanceCurrency));
+        }
+
+        if (!$cashVsIncome) {
+            $block(['cashConversion', 'payoutRatio'], sprintf('flujo de caja (%s) y resultados (%s) en monedas distintas', $cashFlowCurrency, $incomeCurrency));
+        }
+
+        // Crecimiento YoY: TTM actual frente a TTM de hace un año; si la
+        // moneda cambio entre uno y otro, la variacion mezclaria unidades.
+        $growthComparable = $this->currenciesCompatible($incomeCurrency, $previousTtm['currencies']['income'] ?? null);
+
+        if (!$growthComparable) {
+            $block(['revenueGrowth', 'peg'], 'la moneda de resultados cambio entre el TTM actual y el de hace un año');
+        }
+
         // Corregido el 2026-09-18 (hallazgo real de Astra, tarea B3):
-        // `$price` y los estados financieros de `$current` no siempre
-        // estan en la misma moneda -- confirmado con datos reales
-        // (AZN.L cotiza en GBX/peniques con estados en USD; ULVR.L en
-        // GBX con estados en EUR). Mezclarlos sin comprobarlo antes
-        // fabrica un PER/rentabilidad por dividendo/EV-EBITDA equivocado
-        // por un factor arbitrario (el fixture de Astra: PER 500 en vez
-        // de 5, un factor de 100 por confundir GBX con GBP). Sin
-        // conversion de tipo de cambio fechado integrada todavia (exige
-        // una fuente de FX historica que este proyecto no tiene
-        // conectada), la unica correccion honesta ante una moneda
-        // GENUINAMENTE distinta es no calcular esos ratios, no adivinar
-        // un tipo de cambio. La subunidad (GBX/GBP) SI se corrige aqui
-        // porque es aritmetica exacta, no una tasa de mercado.
-        [$priceComparable, $priceInStatementCurrency] = $this->comparablePrice($price, $current->statementCurrency);
+        // `$price` y los estados financieros no siempre estan en la misma
+        // moneda -- confirmado con datos reales (AZN.L cotiza en GBX/peniques
+        // con estados en USD; ULVR.L en GBX con estados en EUR). Mezclarlos
+        // sin comprobarlo antes fabrica un PER/rentabilidad por dividendo/
+        // EV-EBITDA equivocado por un factor arbitrario (el fixture de Astra:
+        // PER 500 en vez de 5, un factor de 100 por confundir GBX con GBP). La
+        // subunidad (GBX/GBP) SI se corrige aqui porque es aritmetica exacta,
+        // no una tasa de mercado. Desde C2 (2026-09-22) el precio se compara
+        // con la moneda del ESTADO del que sale cada cifra (EPS -> resultados,
+        // capitalizacion/valor contable -> balance, dividendos -> flujos).
+        [$perComparable, $priceInIncomeCurrency] = $this->comparablePrice($price, $incomeCurrency);
+        [$balanceComparable, $priceInBalanceCurrency] = $this->comparablePrice($price, $balanceCurrency);
+        [$dividendComparable, $priceInCashFlowCurrency] = $this->comparablePrice($price, $cashFlowCurrency);
+
+        if (!$perComparable) {
+            $block(['per', 'peg', 'earningsYield'], sprintf('cotizacion (%s) y resultados (%s) en monedas distintas', $this->priceCurrencyCode, $incomeCurrency));
+        }
+
+        if (!$balanceComparable) {
+            $block(['marketCap', 'priceToBook', 'evToEbitda'], sprintf('cotizacion (%s) y balance (%s) en monedas distintas', $this->priceCurrencyCode, $balanceCurrency));
+        }
+
+        if (!$dividendComparable) {
+            $block(['dividendYield'], sprintf('cotizacion (%s) y flujo de caja (%s) en monedas distintas', $this->priceCurrencyCode, $cashFlowCurrency));
+        }
 
         $shares = $this->positive($current->sharesDiluted);
         $equity = $this->positive($current->totalStockholdersEquity);
         $revenue = $this->positive($this->figure($ttm, 'revenue'));
-        $marketCap = ($priceComparable && $shares !== null && $priceInStatementCurrency > 0.0)
-            ? $priceInStatementCurrency * $shares
+        $marketCap = ($balanceComparable && $shares !== null && $priceInBalanceCurrency > 0.0)
+            ? $priceInBalanceCurrency * $shares
             : null;
 
         $epsTtm = $this->figure($ttm, 'epsDiluted');
-        $per = ($priceComparable && $epsTtm !== null && $epsTtm > 0.0 && $priceInStatementCurrency > 0.0)
-            ? $priceInStatementCurrency / $epsTtm
+        $per = ($perComparable && $epsTtm !== null && $epsTtm > 0.0 && $priceInIncomeCurrency > 0.0)
+            ? $priceInIncomeCurrency / $epsTtm
             : null;
         // Inverso del PER, pero SIN la guarda de positividad de $per: un
         // beneficio negativo es exactamente el caso que earningsYield tiene
         // que poder representar (P3.3, ver el docblock de Fundamentals).
-        $earningsYield = ($priceComparable && $epsTtm !== null && $priceInStatementCurrency > 0.0)
-            ? $epsTtm / $priceInStatementCurrency
+        $earningsYield = ($perComparable && $epsTtm !== null && $priceInIncomeCurrency > 0.0)
+            ? $epsTtm / $priceInIncomeCurrency
             : null;
         $netIncomeTtm = $this->figure($ttm, 'netIncome');
-        $earningsGrowth = $this->growth($netIncomeTtm, $this->figure($previousTtm, 'netIncome'));
+        $earningsGrowth = $growthComparable
+            ? $this->growth($netIncomeTtm, $this->figure($previousTtm, 'netIncome'))
+            : null;
         $dividendPerShareTtm = $this->dividendPerShareTtm($ttm, $shares);
         $ebitdaTtm = $this->positive($this->figure($ttm, 'ebitda'));
         $freeCashFlowTtm = $this->figure($ttm, 'freeCashFlow');
@@ -229,56 +318,65 @@ class PointInTimeFundamentalsBuilder
         // `$netIncomeTtm != 0.0` (guarda anterior) un FCF y un beneficio
         // neto ambos NEGATIVOS producian un ratio POSITIVO que aparentaba
         // buena conversion de caja -- exactamente el caso degenerado que
-        // esta guarda tiene que evitar, no solo la division por cero.
-        $cashConversion = ($freeCashFlowTtm !== null && $netIncomeTtm !== null && $netIncomeTtm > 0.0)
+        // esta guarda tiene que evitar, no solo la division por cero. Y
+        // (C2) solo si flujo de caja y resultados estan en la misma moneda.
+        $cashConversion = ($cashVsIncome && $freeCashFlowTtm !== null && $netIncomeTtm !== null && $netIncomeTtm > 0.0)
             ? $freeCashFlowTtm / $netIncomeTtm
             : null;
+        $payoutRatio = $cashVsIncome ? $this->percentOf($dividendPerShareTtm, $this->positive($epsTtm)) : null;
 
-        return new Fundamentals(
-            per: $per,
-            // PEG solo tiene sentido con crecimiento positivo: con
-            // beneficios cayendo, el ratio sale negativo y se leeria como
-            // "baratisima" en vez de como "en problemas".
-            peg: ($per !== null && $earningsGrowth !== null && $earningsGrowth > 0.0)
-                ? $per / $earningsGrowth
-                : null,
-            roe: $this->percentOf($netIncomeTtm, $equity),
-            roic: $this->roic($current, $ttm),
-            eps: $epsTtm,
-            marketCap: $marketCap,
-            // Ratio puro, no porcentaje: asi lo normaliza YahooParser. El
-            // balance no se suma entre periodos: es el ultimo publicado.
-            // Patrimonio <= 0 se excluye ademas de null (roadmap.md,
-            // "Prioridad cero-ter" punto 3, `2026-09-04`): con patrimonio
-            // negativo el ratio invierte el signo y una empresa insolvente
-            // puntuaria como "poco endeudada" (`debt_to_equity` es "menor es
-            // mejor" en el ranking de `RelativeFundamentalScorer`).
-            debtToEquity: ($current->totalDebt !== null && $equity !== null && $equity > 0.0)
-                ? $current->totalDebt / $equity
-                : null,
-            freeCashFlow: $freeCashFlowTtm,
-            // EV = capitalizacion + deuda neta (balance de cierre). Con
-            // EBITDA TTM negativo el multiplo no significa nada.
-            evToEbitda: ($marketCap !== null && $current->netDebt !== null && $ebitdaTtm !== null)
-                ? ($marketCap + $current->netDebt) / $ebitdaTtm
-                : null,
-            priceToBook: ($marketCap !== null && $equity !== null) ? $marketCap / $equity : null,
-            dividendYield: (!$priceComparable || $dividendPerShareTtm === null || $priceInStatementCurrency <= 0.0)
-                ? null
-                : $dividendPerShareTtm / $priceInStatementCurrency * 100,
-            payoutRatio: $this->percentOf($dividendPerShareTtm, $this->positive($epsTtm)),
-            grossMargin: $this->percentOf($this->figure($ttm, 'grossProfit'), $revenue),
-            operatingMargin: $this->percentOf($this->figure($ttm, 'operatingIncome'), $revenue),
-            netMargin: $this->percentOf($netIncomeTtm, $revenue),
-            revenueGrowth: $this->growth($this->figure($ttm, 'revenue'), $this->figure($previousTtm, 'revenue')),
-            // Balance, foto fija: no depende de la periodicidad.
-            currentRatio: ($current->totalCurrentAssets !== null && $this->positive($current->totalCurrentLiabilities) !== null)
-                ? $current->totalCurrentAssets / $current->totalCurrentLiabilities
-                : null,
-            dividendGrowth5y: $this->dividendGrowth($filed, $current),
-            earningsYield: $earningsYield,
-            cashConversion: $cashConversion
-        );
+        return [
+            'fundamentals' => new Fundamentals(
+                per: $per,
+                // PEG solo tiene sentido con crecimiento positivo: con
+                // beneficios cayendo, el ratio sale negativo y se leeria como
+                // "baratisima" en vez de como "en problemas".
+                peg: ($per !== null && $earningsGrowth !== null && $earningsGrowth > 0.0)
+                    ? $per / $earningsGrowth
+                    : null,
+                roe: $incomeVsBalance ? $this->percentOf($netIncomeTtm, $equity) : null,
+                roic: $incomeVsBalance ? $this->roic($current, $ttm) : null,
+                eps: $epsTtm,
+                marketCap: $marketCap,
+                // Ratio puro, no porcentaje: asi lo normaliza YahooParser. El
+                // balance no se suma entre periodos: es el ultimo publicado.
+                // Patrimonio <= 0 se excluye ademas de null (roadmap.md,
+                // "Prioridad cero-ter" punto 3, `2026-09-04`): con patrimonio
+                // negativo el ratio invierte el signo y una empresa insolvente
+                // puntuaria como "poco endeudada" (`debt_to_equity` es "menor es
+                // mejor" en el ranking de `RelativeFundamentalScorer`). Deuda y
+                // patrimonio son del MISMO balance: siempre comparables.
+                debtToEquity: ($current->totalDebt !== null && $equity !== null && $equity > 0.0)
+                    ? $current->totalDebt / $equity
+                    : null,
+                freeCashFlow: $freeCashFlowTtm,
+                // EV = capitalizacion + deuda neta (balance de cierre). Con
+                // EBITDA TTM negativo el multiplo no significa nada. El EBITDA
+                // es de resultados: exige resultados y balance en la misma moneda.
+                evToEbitda: ($incomeVsBalance && $marketCap !== null && $current->netDebt !== null && $ebitdaTtm !== null)
+                    ? ($marketCap + $current->netDebt) / $ebitdaTtm
+                    : null,
+                priceToBook: ($marketCap !== null && $equity !== null) ? $marketCap / $equity : null,
+                dividendYield: (!$dividendComparable || $dividendPerShareTtm === null || $priceInCashFlowCurrency <= 0.0)
+                    ? null
+                    : $dividendPerShareTtm / $priceInCashFlowCurrency * 100,
+                payoutRatio: $payoutRatio,
+                grossMargin: $this->percentOf($this->figure($ttm, 'grossProfit'), $revenue),
+                operatingMargin: $this->percentOf($this->figure($ttm, 'operatingIncome'), $revenue),
+                netMargin: $this->percentOf($netIncomeTtm, $revenue),
+                revenueGrowth: $growthComparable
+                    ? $this->growth($this->figure($ttm, 'revenue'), $this->figure($previousTtm, 'revenue'))
+                    : null,
+                // Balance, foto fija: no depende de la periodicidad.
+                currentRatio: ($current->totalCurrentAssets !== null && $this->positive($current->totalCurrentLiabilities) !== null)
+                    ? $current->totalCurrentAssets / $current->totalCurrentLiabilities
+                    : null,
+                dividendGrowth5y: $this->dividendGrowth($filed, $current),
+                earningsYield: $earningsYield,
+                cashConversion: $cashConversion
+            ),
+            'not_evaluable' => $reasons,
+        ];
     }
 
     /**
@@ -375,19 +473,79 @@ class PointInTimeFundamentalsBuilder
             return null;
         }
 
+        // C2: cada grupo de cifras se suma SOLO si sus periodos comparten
+        // moneda. Una moneda CONOCIDA distinta dentro de la ventana invalida
+        // el grupo (EUR/EUR/EUR/USD sumaba importes de unidades distintas:
+        // ROE 25% donde los mismos importes en base comun dan 40%); moneda
+        // desconocida (`null`) se asume compatible.
+        [$incomeConflict, $incomeCurrency] = $this->windowCurrency($window, static fn (FiscalPeriod $p): ?string => $p->incomeStatementCurrency());
+        [$cashFlowConflict, $cashFlowCurrency] = $this->windowCurrency($window, static fn (FiscalPeriod $p): ?string => $p->cashFlowStatementCurrency());
+        $income = static fn (callable $getter): ?float => $incomeConflict ? null : $getter();
+        $cashFlow = static fn (callable $getter): ?float => $cashFlowConflict ? null : $getter();
+
         return [
-            'revenue' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->revenue),
-            'grossProfit' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->grossProfit),
-            'operatingIncome' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->operatingIncome),
-            'netIncome' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->netIncome),
-            'ebitda' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->ebitda),
-            'ebit' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->ebit),
-            'incomeBeforeTax' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->incomeBeforeTax),
-            'incomeTaxExpense' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->incomeTaxExpense),
-            'epsDiluted' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->epsDiluted),
-            'freeCashFlow' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->freeCashFlow),
-            'commonDividendsPaid' => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->commonDividendsPaid),
+            'revenue' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->revenue)),
+            'grossProfit' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->grossProfit)),
+            'operatingIncome' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->operatingIncome)),
+            'netIncome' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->netIncome)),
+            'ebitda' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->ebitda)),
+            'ebit' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->ebit)),
+            'incomeBeforeTax' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->incomeBeforeTax)),
+            'incomeTaxExpense' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->incomeTaxExpense)),
+            'epsDiluted' => $income(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->epsDiluted)),
+            'freeCashFlow' => $cashFlow(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->freeCashFlow)),
+            'commonDividendsPaid' => $cashFlow(fn (): ?float => $this->sum($window, static fn (FiscalPeriod $p): ?float => $p->commonDividendsPaid)),
+            'currencies' => [
+                'income' => $incomeCurrency,
+                'cashFlow' => $cashFlowCurrency,
+                'incomeConflict' => $incomeConflict,
+                'cashFlowConflict' => $cashFlowConflict,
+            ],
         ];
+    }
+
+    /**
+     * Moneda comun de un grupo de cifras en una ventana TTM: `[conflicto,
+     * moneda]`. `conflicto` = hay DOS o mas monedas base CONOCIDAS distintas
+     * (tras normalizar subunidades, GBX -> GBP); `moneda` = la unica conocida
+     * (o `null` si ninguna periodo la dio, o si hay conflicto).
+     *
+     * @param list<FiscalPeriod> $window
+     * @return array{0: bool, 1: ?string}
+     */
+    private function windowCurrency(array $window, callable $getter): array
+    {
+        $known = [];
+
+        foreach ($window as $period) {
+            $currency = $getter($period);
+
+            if ($currency !== null) {
+                $known[$this->baseCurrency($currency)] = true;
+            }
+        }
+
+        if (count($known) > 1) {
+            return [true, null];
+        }
+
+        return [false, $known === [] ? null : (string) array_key_first($known)];
+    }
+
+    /**
+     * Dos monedas (base) son compatibles si alguna es desconocida o son la
+     * misma. Sin fuente de FX historica no hay conversion posible entre dos
+     * monedas conocidas distintas.
+     */
+    private function currenciesCompatible(?string $a, ?string $b): bool
+    {
+        return $a === null || $b === null || $this->baseCurrency($a) === $this->baseCurrency($b);
+    }
+
+    /** Moneda base de una subunidad (GBX -> GBP); las demas, tal cual. */
+    private function baseCurrency(string $code): string
+    {
+        return self::CURRENCY_SUBUNITS[$code][0] ?? $code;
     }
 
     /**
@@ -560,6 +718,13 @@ class PointInTimeFundamentalsBuilder
 
         usort($olderWithDividend, static fn (FiscalPeriod $a, FiscalPeriod $b): int => $a->endDate <=> $b->endDate);
         $oldest = $olderWithDividend[array_key_first($olderWithDividend)];
+
+        // C2: el dividendo sale del flujo de caja; si ese estado cambio de moneda entre el
+        // periodo antiguo y el actual, el CAGR mezclaria unidades.
+        if (!$this->currenciesCompatible($oldest->cashFlowStatementCurrency(), $current->cashFlowStatementCurrency())) {
+            return null;
+        }
+
         $oldestDps = $oldest->dividendPerShare();
         $years = ($current->endDate->getTimestamp() - $oldest->endDate->getTimestamp()) / (365.25 * 86400);
 

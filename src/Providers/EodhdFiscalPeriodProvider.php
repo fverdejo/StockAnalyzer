@@ -322,7 +322,11 @@ class EodhdFiscalPeriodProvider
                 totalCurrentLiabilities: $this->numeric($bal['totalCurrentLiabilities'] ?? null),
                 freeCashFlow: $this->numeric($cf['freeCashFlow'] ?? null),
                 commonDividendsPaid: $this->numeric($cf['dividendsPaid'] ?? null),
-                statementCurrency: $this->statementCurrency($bal, $inc)
+                statementCurrency: $this->statementCurrency($bal, $inc),
+                // C2: la moneda de CADA estado, cada una de SU propio payload.
+                incomeCurrency: $this->nullableString($inc['currency_symbol'] ?? null),
+                balanceCurrency: $this->nullableString($bal['currency_symbol'] ?? null),
+                cashFlowCurrency: $this->nullableString($cf['currency_symbol'] ?? null)
             );
         }
 

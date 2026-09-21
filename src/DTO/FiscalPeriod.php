@@ -40,6 +40,15 @@ use DateTimeImmutable;
  * cotiza en GBX/peniques, sus estados en USD; ULVR.L cotiza en
  * GBX, sus estados en EUR). `PointInTimeFundamentalsBuilder` compara esto
  * contra la moneda del precio antes de mezclar los dos en un ratio.
+ *
+ * `$incomeCurrency`/`$balanceCurrency`/`$cashFlowCurrency` (añadidos el
+ * 2026-09-22, encargo C2 de `REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`):
+ * la moneda de CADA estado por separado. Una sola moneda por periodo no bastaba
+ * (un trimestre con resultados y balance en GBP y flujo de caja en USD hacia que
+ * FCF/beneficio saliera 2 en vez de 1) y el TTM suma cuatro periodos que pueden
+ * haber cambiado de moneda entre si (EUR/EUR/EUR/USD daba un ROE del 25% donde
+ * los mismos importes en base comun dan 40%). `statementCurrency` se conserva
+ * (balance, y si no resultados) para lo que ya la usa.
  */
 class FiscalPeriod
 {
@@ -68,8 +77,34 @@ class FiscalPeriod
         // Flujo de caja
         public readonly ?float $freeCashFlow,
         public readonly ?float $commonDividendsPaid,
-        public readonly ?string $statementCurrency = null
+        public readonly ?string $statementCurrency = null,
+        public readonly ?string $incomeCurrency = null,
+        public readonly ?string $balanceCurrency = null,
+        public readonly ?string $cashFlowCurrency = null
     ) {
+    }
+
+    /**
+     * Moneda de la CUENTA DE RESULTADOS de este periodo (C2, encargo de Astra
+     * del 2026-09-21): la propia de ese estado si el proveedor la dio; si no,
+     * cae en `statementCurrency` (proveedores anteriores, que solo daban una
+     * moneda por periodo). `null` = desconocida.
+     */
+    public function incomeStatementCurrency(): ?string
+    {
+        return $this->incomeCurrency ?? $this->statementCurrency;
+    }
+
+    /** Moneda del BALANCE de este periodo (ver `incomeStatementCurrency()`). */
+    public function balanceSheetCurrency(): ?string
+    {
+        return $this->balanceCurrency ?? $this->statementCurrency;
+    }
+
+    /** Moneda del ESTADO DE FLUJOS DE CAJA de este periodo (ver `incomeStatementCurrency()`). */
+    public function cashFlowStatementCurrency(): ?string
+    {
+        return $this->cashFlowCurrency ?? $this->statementCurrency;
     }
 
     /**
