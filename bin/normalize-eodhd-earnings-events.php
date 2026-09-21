@@ -8,6 +8,7 @@ use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Repository\EarningsEventsRepository;
 use StockAnalyzer\Repository\EodhdRawFundamentalsRepository;
 use StockAnalyzer\Repository\EodhdRawFundamentalVersionsRepository;
+use StockAnalyzer\Services\EarningsEventsProjector;
 use StockAnalyzer\Services\EodhdEarningsEventsNormalizer;
 
 /**
@@ -82,7 +83,7 @@ if ($tickers === []) {
 
 $versions = new EodhdRawFundamentalVersionsRepository($connection);
 $repository = new EarningsEventsRepository($connection);
-$normalizer = new EodhdEarningsEventsNormalizer();
+$projector = new EarningsEventsProjector(new EodhdEarningsEventsNormalizer(), $repository);
 
 printf(
     'Normalizacion de EODHD calendar/earnings -> earnings_events: %d tickers%s%s',
@@ -114,7 +115,6 @@ foreach ($tickers as $index => $ticker) {
     }
 
     $sourceHash = $observation['payload_hash'];
-    $capturedAt = new DateTimeImmutable($observation['observed_at_utc']);
     $normalizerVersion = EodhdEarningsEventsNormalizer::VERSION;
 
     if (!$force && $repository->isNormalizedFromSource($ticker, $sourceHash, $normalizerVersion)) {
@@ -125,17 +125,22 @@ foreach ($tickers as $index => $ticker) {
     }
 
     try {
-        $events = $normalizer->parse($ticker, $observation['payload'], $observation['source_symbol']);
-        $written = $repository->replaceForTicker(
-            $ticker,
-            $events,
-            $sourceHash,
-            $capturedAt,
-            $normalizerVersion,
-            $observation['source_symbol'],
-            $observation['request_from'] !== null ? new DateTimeImmutable($observation['request_from']) : null,
-            $observation['request_to'] !== null ? new DateTimeImmutable($observation['request_to']) : null
-        );
+        // C5 (2026-09-22): capturas invalidas o de ventana parcial lanzan ANTES
+        // de tocar `earnings_events` (ver `Services\EarningsEventsProjector`); el
+        // ticker cuenta como error y conserva su proyeccion anterior.
+        $projection = $projector->project($ticker, $observation);
+        $written = $projection['written'];
+
+        if ($projection['rejected_total'] > 0) {
+            echo $prefix . sprintf(
+                'AVISO %d filas descartadas (simbolo ajeno: %d, fecha invalida: %d, no objeto: %d)%s',
+                $projection['rejected_total'],
+                $projection['rejected']['simbolo_ajeno'],
+                $projection['rejected']['fecha_invalida'],
+                $projection['rejected']['fila_no_objeto'],
+                PHP_EOL
+            );
+        }
 
         if ($written === 0) {
             echo $prefix . '0 eventos (calendario archivado vacio para este ticker)' . PHP_EOL;

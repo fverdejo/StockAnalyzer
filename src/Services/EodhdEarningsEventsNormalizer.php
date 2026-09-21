@@ -80,6 +80,18 @@ use StockAnalyzer\DTO\CalendarEarningsEvent;
  * descarta si su `code` no coincide con el simbolo esperado, y si TODAS
  * las filas se descartan por esa razon con una lista no vacia, se lanza
  * excepcion en vez de devolver `[]` (que se leeria como vacio valido).
+ *
+ * **Corregido el 2026-09-22** (encargo C5 de
+ * `REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`, pendiente B2
+ * del 17/09): quedaban dos capturas invalidas que terminaban como `[]`
+ * (fecha imposible en TODAS las filas, y mezcla de simbolo ajeno con fila mal
+ * formada) y que `bin/normalize-eodhd-earnings-events.php` pasaba a
+ * `replaceForTicker()`, que borra el historico del ticker. Ahora el unico
+ * vacio valido sigue siendo `{"earnings": []}`, y una lista NO vacia de la
+ * que no se acepta ninguna fila lanza excepcion, sea cual sea el motivo. Con
+ * al menos una fila aceptada, las demas se descartan y se cuentan por motivo
+ * (`parseWithReport()`). Ver tambien `Services\EarningsEventsProjector`
+ * (ambito de la ventana pedida). `VERSION` sube a 3 porque la logica cambia.
  */
 final class EodhdEarningsEventsNormalizer
 {
@@ -90,12 +102,23 @@ final class EodhdEarningsEventsNormalizer
      * crudo de EODHD no haya cambiado -- necesario cuando la LOGICA de
      * esta clase cambia (como en esta misma correccion).
      */
-    public const VERSION = 2;
+    public const VERSION = 3;
 
     /**
      * @return list<CalendarEarningsEvent>
      */
     public function parse(string $ticker, string $payloadJson, ?string $expectedEodhdSymbol = null): array
+    {
+        return $this->parseWithReport($ticker, $payloadJson, $expectedEodhdSymbol)['events'];
+    }
+
+    /**
+     * Igual que `parse()`, pero ademas informa de cuantas filas de la captura
+     * se descartaron y por que motivo.
+     *
+     * @return array{events: list<CalendarEarningsEvent>, rejected: array{fila_no_objeto: int, simbolo_ajeno: int, fecha_invalida: int}, rejected_total: int, rows_in_payload: int}
+     */
+    public function parseWithReport(string $ticker, string $payloadJson, ?string $expectedEodhdSymbol = null): array
     {
         $ticker = strtoupper(trim($ticker));
 
@@ -146,10 +169,12 @@ final class EodhdEarningsEventsNormalizer
 
         /** @var array<string,CalendarEarningsEvent> $eventsByFiscalPeriod */
         $eventsByFiscalPeriod = [];
-        $rejectedByIdentity = 0;
+        $rejected = ['fila_no_objeto' => 0, 'simbolo_ajeno' => 0, 'fecha_invalida' => 0];
 
         foreach ($earnings as $row) {
             if (!is_array($row)) {
+                $rejected['fila_no_objeto']++;
+
                 continue;
             }
 
@@ -159,7 +184,7 @@ final class EodhdEarningsEventsNormalizer
                 // Fila de un simbolo DISTINTO al pedido -- una respuesta
                 // mal recortada o mezclada entre tickers no debe
                 // atribuirse en silencio al ticker equivocado.
-                $rejectedByIdentity++;
+                $rejected['simbolo_ajeno']++;
 
                 continue;
             }
@@ -168,6 +193,8 @@ final class EodhdEarningsEventsNormalizer
             $reportDate = $this->date($row['report_date'] ?? null);
 
             if ($fiscalPeriodEnd === null || $reportDate === null) {
+                $rejected['fecha_invalida']++;
+
                 continue;
             }
 
@@ -192,11 +219,24 @@ final class EodhdEarningsEventsNormalizer
             );
         }
 
-        if ($earnings !== [] && $rejectedByIdentity === count($earnings)) {
+        // Politica de aceptacion PARCIAL (declarada, C5 de Astra 2026-09-21):
+        // una lista NO vacia de la que no se acepta NINGUNA fila (todas con
+        // simbolo ajeno, fecha imposible, no-objeto, o cualquier mezcla) es una
+        // captura invalida y se rechaza entera -- antes salia `[]`, que el
+        // llamador leia como vacio valido y usaba para BORRAR el historico
+        // del ticker. Con al menos una fila aceptada, las demas se descartan
+        // y se CUENTAN por motivo (`rejected`), nunca en silencio.
+        $rejectedTotal = array_sum($rejected);
+
+        if ($earnings !== [] && $eventsByFiscalPeriod === []) {
             throw new InvalidArgumentException(sprintf(
-                'Todas las filas de calendar/earnings para %s tienen un "code" distinto del simbolo esperado (%s) -- posible mezcla de tickers, se rechaza la captura completa en vez de publicarla como vacia.',
+                'Ninguna de las %d filas de calendar/earnings para %s es aceptable (simbolo distinto de %s: %d, fecha invalida: %d, fila que no es objeto: %d) -- captura rechazada en vez de publicarla como vacia.',
+                count($earnings),
                 $ticker,
-                $expectedSymbol
+                $expectedSymbol,
+                $rejected['simbolo_ajeno'],
+                $rejected['fecha_invalida'],
+                $rejected['fila_no_objeto']
             ));
         }
 
@@ -209,7 +249,7 @@ final class EodhdEarningsEventsNormalizer
                 : $left->fiscalPeriodEnd <=> $right->fiscalPeriodEnd;
         });
 
-        return $events;
+        return ['events' => $events, 'rejected' => $rejected, 'rejected_total' => $rejectedTotal, 'rows_in_payload' => count($earnings)];
     }
 
     private function epsDifference(?float $actual, ?float $estimate): ?float

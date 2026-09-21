@@ -127,6 +127,72 @@ final class EodhdEarningsEventsNormalizerTest extends TestCase
         self::assertSame('2025-12-31', $events[0]->fiscalPeriodEnd->format('Y-m-d'));
     }
 
+    /**
+     * C5 (Astra 2026-09-21), caso 1: fecha imposible en TODAS las filas. Antes
+     * salia `[]` (indistinguible del vacio valido) y el llamador borraba el
+     * historico del ticker.
+     */
+    public function testUnaListaNoVaciaSinNingunaFechaValidaLanzaExcepcionEnVezDeDevolverVacio(): void
+    {
+        $payload = json_encode([
+            'earnings' => [
+                ['report_date' => '2026-02-31', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+                ['report_date' => '2026-01-30', 'date' => '2025-13-01', 'actual' => 1.0, 'estimate' => 1.0],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Ninguna de las 2 filas');
+
+        (new EodhdEarningsEventsNormalizer())->parse('MSFT', $payload);
+    }
+
+    /** C5, caso 2: mezcla de simbolo ajeno con fila mal formada (ninguna aceptable). */
+    public function testMezclaDeSimboloAjenoYFilaMalFormadaLanzaExcepcion(): void
+    {
+        $payload = json_encode([
+            'earnings' => [
+                ['code' => 'AAPL.US', 'report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+                ['code' => 'MSFT.US', 'report_date' => 'sin-fecha', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+                'esto no es una fila',
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('simbolo distinto de MSFT.US: 1, fecha invalida: 1, fila que no es objeto: 1');
+
+        (new EodhdEarningsEventsNormalizer())->parse('MSFT', $payload);
+    }
+
+    /** Aceptacion parcial (declarada): con al menos una fila valida las demas se descartan Y SE CUENTAN. */
+    public function testConAlMenosUnaFilaAceptadaLasRechazadasSeContabilizanPorMotivo(): void
+    {
+        $payload = json_encode([
+            'earnings' => [
+                ['code' => 'MSFT.US', 'report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+                ['code' => 'AAPL.US', 'report_date' => '2026-01-30', 'date' => '2025-12-31', 'actual' => 1.0, 'estimate' => 1.0],
+                ['report_date' => 'sin-fecha', 'date' => '2025-12-31'],
+                7,
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $report = (new EodhdEarningsEventsNormalizer())->parseWithReport('MSFT', $payload);
+
+        self::assertCount(1, $report['events']);
+        self::assertSame(4, $report['rows_in_payload']);
+        self::assertSame(3, $report['rejected_total']);
+        self::assertSame(['fila_no_objeto' => 1, 'simbolo_ajeno' => 1, 'fecha_invalida' => 1], $report['rejected']);
+    }
+
+    public function testElUnicoVacioValidoSigueSiendoEarningsListaVacia(): void
+    {
+        $report = (new EodhdEarningsEventsNormalizer())->parseWithReport('MSFT', '{"earnings": []}');
+
+        self::assertSame([], $report['events']);
+        self::assertSame(0, $report['rows_in_payload']);
+        self::assertSame(0, $report['rejected_total']);
+    }
+
     public function testTickerSinSeccionEarningsDevuelveListaVacia(): void
     {
         $payload = json_encode(['type' => 'Earnings', 'symbols' => 'ANR.US', 'earnings' => []], JSON_THROW_ON_ERROR);
