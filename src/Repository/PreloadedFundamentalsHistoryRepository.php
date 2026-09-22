@@ -148,6 +148,47 @@ final class PreloadedFundamentalsHistoryRepository extends FundamentalsHistoryRe
     }
 
     /**
+     * Huella de los snapshots REALMENTE consumibles del ticker precargado
+     * hasta `$asOf` inclusive (o de todos, sin `$asOf`): sha256 de
+     * `fecha|json_ordenado(payload)` por snapshot, concatenados en el mismo
+     * orden ascendente en que se leyeron. Parte de C4
+     * (`REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`, "identificar de
+     * forma inmutable los fundamentales"): dos ejecuciones que preparan el
+     * MISMO ticker dan la misma huella si y solo si `fundamentals_history` no
+     * ha cambiado para ese ticker en esa ventana -- Astra: "una ejecucion
+     * offline puede leer una BD local que haya cambiado". Se trunca a
+     * `$asOf` para que un snapshot capturado DESPUES del corte de una
+     * medicion (que `orderedFiledBefore()`/`findAsOfWithDate()` jamas
+     * consumirian) no dispare una alarma de "cambio" que no afecta a ningun
+     * resultado. `null` si el ticker no esta precargado.
+     */
+    public function dataFingerprint(string $ticker, ?DateTimeImmutable $asOf = null): ?string
+    {
+        if (strtoupper($ticker) !== $this->preloadedTicker) {
+            return null;
+        }
+
+        $limit = $asOf?->format('Y-m-d');
+        $lines = [];
+
+        foreach ($this->sortedSnapshots as $snapshot) {
+            if ($limit !== null && $snapshot['date'] > $limit) {
+                continue;
+            }
+
+            $payload = $snapshot['payload'];
+
+            if (is_array($payload)) {
+                ksort($payload);
+            }
+
+            $lines[] = $snapshot['date'] . '|' . json_encode($payload, JSON_THROW_ON_ERROR);
+        }
+
+        return hash('sha256', implode("\n", $lines));
+    }
+
+    /**
      * Snapshots UTILIZABLES (payload objeto JSON valido) del ticker
      * precargado, frente a `countSnapshots()` (filas almacenadas): C7,
      * "distinguir filas almacenadas de snapshots utilizables".

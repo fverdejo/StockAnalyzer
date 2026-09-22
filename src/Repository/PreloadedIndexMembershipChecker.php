@@ -72,4 +72,35 @@ final class PreloadedIndexMembershipChecker implements IndexMembershipCheckerInt
 
         return false;
     }
+
+    /**
+     * Huella de los intervalos de pertenencia REALMENTE consumibles del
+     * `(ticker, indexCode)` precargado, hasta `$asOf` inclusive (o de todos,
+     * sin `$asOf`): sha256 de los intervalos `inicio..fin` ordenados. Parte
+     * de C4 (`REVISION_OPTIMIZACION_Y_FIABILIDAD_ASTRA_2026-09-21.md`, "identificar
+     * de forma inmutable las membresias"). Se trunca a intervalos cuyo
+     * inicio sea `<= $asOf` (o sin inicio declarado): un intervalo que
+     * arranca DESPUES del corte no puede afectar a `isMemberAt()` para
+     * ninguna fecha `<= $asOf`, asi que archivarlo mas tarde no debe
+     * disparar una alarma de "cambio". `null` si no esta precargado.
+     */
+    public function dataFingerprint(string $ticker, string $indexCode, ?DateTimeImmutable $asOf = null): ?string
+    {
+        if (strtoupper($ticker) !== $this->preloadedTicker || strtoupper($indexCode) !== $this->preloadedIndexCode) {
+            return null;
+        }
+
+        $limit = $asOf?->format('Y-m-d');
+        $relevant = $limit === null
+            ? $this->intervals
+            : array_values(array_filter($this->intervals, static fn (array $interval): bool => $interval['start'] === null || $interval['start'] <= $limit));
+
+        $lines = array_map(
+            static fn (array $interval): string => ($interval['start'] ?? '') . '..' . ($interval['end'] ?? ''),
+            $relevant
+        );
+        sort($lines, SORT_STRING);
+
+        return hash('sha256', implode("\n", $lines));
+    }
 }
