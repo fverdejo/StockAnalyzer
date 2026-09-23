@@ -8572,6 +8572,20 @@ Incluye:
 
 ---
 
+## 2026-09-23 - `fundamentals_history` regenerada para el universo de 636 tickers tras el fix de `totalDebt()`: la contaminacion de D/E y ROIC identificada ayer queda corregida y verificada al 100% (en el alcance regenerado)
+
+Cierra el pendiente que `gestor-riesgo`/`analista-mercado` marcaron como "bloqueante antes de usar D/E o ROIC en produccion o en otra medicion" (entrada anterior). Tarea puramente de mantenimiento de datos (bug de codigo ya corregido el 17/09, nunca propagado a la tabla), sin decision de metodologia -- no requeria predeclaracion.
+
+**Ejecucion**: `bin/backfill-fundamentals-history-from-archive.php --tickers="<636 del universo congelado>" --force` (sin red: `ddev` se habia detenido entre sesiones, reiniciado antes de empezar). **636/636 tickers rellenados, 0 sin archivar, 0 con error, 1.528.727 filas de historico escritas.**
+
+**Verificacion** (`storage/scratch/fundamentals_history_postbackfill_crosscheck_2026-09-23.php`, muestra aleatoria de 1.000 filas SOLO del universo de 636 tickers regenerado -- `fundamentals_history` tiene 4.258.228 filas en total, de las cuales 1.537.098 (36%) corresponden a este universo; el resto es de otros universos, sp400/sp600/internacional, NUNCA tocados por este backfill y fuera de alcance de esta verificacion): **1.000/1.000 coinciden exactamente en D/E y en ROIC** con un recalculo en fresco desde el archivo crudo (`PointInTimeFundamentalsBuilder`). El caso concreto reproducido ayer (GRMN 2017-08-24, D/E archivado `0` con el bug, ahora `null` correctamente) se confirmo a mano ademas de en la muestra.
+
+**Alcance explicito, no ampliado sin decidirlo**: esto corrige el universo de 636 tickers que usan las mediciones de este proyecto (replay/backtesting point-in-time). El resto de `fundamentals_history` (~2,7 millones de filas de otros universos: `sp400`, `sp600`, internacionales, etc.) **sigue potencialmente afectado por el mismo bug** y NO se ha regenerado -- ampliar el backfill a esos universos es una tarea propia, mas grande (varios miles de tickers adicionales), que no se ha empezado hoy porque nadie la ha pedido todavia y ningun estudio activo depende de ellos.
+
+Incluye: `storage/scratch/run_fundamentals_history_backfill_2026-09-23.sh`, `fundamentals_history_backfill_2026-09-23.log`, `fundamentals_history_postbackfill_crosscheck_2026-09-23.php` (no committeados; el script de backfill que se ejecuto ya estaba committeado). No se ha tocado `config/weights.php` ni ningun codigo de produccion -- solo se ha regenerado una tabla de apoyo a backtesting con el mismo codigo ya corregido y auditado el 17/09.
+
+---
+
 ## 2026-09-20 (quinta entrada) - Interpretacion de la medicion de trailing por `gestor-riesgo` y `analista-mercado`, y cuatro diagnosticos descriptivos POST HOC: A y B no discriminan de la hipotesis nula y NO suben la prioridad de la fase 2 ni justifican un aviso; nada en produccion
 
 > **Correccion de esta entrada tras la auditoria de `auditor-estadistico` (mismo dia, APROBADA CON CAMBIOS) y la respuesta de `gestor-riesgo`**: la primera redaccion (commit `dea0c5c`) leia A y B como si "superaran umbrales predeclarados" y "subieran la prioridad de la fase 2 / justificaran un aviso". El auditor demostro que **ninguno de los dos puede fallar por construccion** (detalle en "Auditoria" mas abajo) y que los umbrales se fijaron **tras** el INDET (aunque antes de calcular cada diagnostico), no antes de la medicion. El estado vigente es el de la seccion final; las frases de las secciones intermedias que digan "se cumple"/"justificado" describen el calculo, no una conclusion.
