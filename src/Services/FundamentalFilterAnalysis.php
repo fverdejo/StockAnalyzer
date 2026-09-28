@@ -181,6 +181,15 @@ final class FundamentalFilterAnalysis
     }
 
     /**
+     * `exposure_end_date` = `horizon_end_date` (cierre de `entry_index+horizon`,
+     * donde `FundamentalFilterMeasurementRows` resuelve V_A/V_C/D/D'_i), NUNCA
+     * `entry_date` -- correccion C8 (auditoria de Astra/Codex, 2026-09-28,
+     * confirmada por `auditor-estadistico` contra el codigo y los datos
+     * persistidos): usar `entry_date` colapsaba la exposicion a cero dias
+     * para TODAS las metricas (`P_cond`, `P`, `D'_i`), inflando artificialmente
+     * `blocks_in_range` (el resultado del 22/09 publico 3.470, ~170x el
+     * minimo de 20 -- ver `versions.md`, entrada marcada `INVALIDADO_C8`).
+     *
      * @param list<array<string, mixed>> $rows
      * @return list<array{entry_date: string, exposure_end_date: string, diff: float}>
      */
@@ -193,9 +202,18 @@ final class FundamentalFilterAnalysis
                 continue;
             }
 
+            if ($row['horizon_end_date'] === null) {
+                throw new LogicException(sprintf(
+                    '%s %s: fila con %s no nulo pero sin horizon_end_date -- exposicion no resuelta.',
+                    $row['ticker'],
+                    $row['entry_date'],
+                    $field
+                ));
+            }
+
             $diffs[] = [
                 'entry_date' => $row['entry_date'],
-                'exposure_end_date' => $row['entry_date'],
+                'exposure_end_date' => $row['horizon_end_date'],
                 'diff' => (float) $row[$field],
             ];
         }

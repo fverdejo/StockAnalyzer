@@ -64,7 +64,7 @@ final class FundamentalFilterMeasurementRows
      * @param list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, managed_return: float}> $fixedTrades trades del brazo A (`PolicyReplaySimulator::replay()['trades']`)
      * @param list<HistoricalQuote> $history MISMO historial que genero `$fixedTrades`
      * @param array<int, array{value: ?float, evaluable: bool, snapshot_date: ?string, signal_date: string, not_evaluable_reason: ?string}> $debtToEquityByEntryIndex ya resuelto (sin BD aqui), una entrada por `entry_index` de `$fixedTrades`
-     * @return list<array<string, mixed>>
+     * @return list<array<string, mixed>> cada fila EN COHORTE incluye `horizon_end_date` (fecha de cierre de `entry_index+horizon`, donde V_A/V_C/D/D'_i quedan resueltos) -- `null` fuera de cohorte
      */
     public function rows(string $ticker, array $fixedTrades, array $history, array $debtToEquityByEntryIndex, string $sector): array
     {
@@ -99,6 +99,7 @@ final class FundamentalFilterMeasurementRows
                 'd' => null,
                 'd_prime' => null,
                 'mfe_a_close' => null,
+                'horizon_end_date' => null,
             ];
 
             if (!$inCohort) {
@@ -124,6 +125,12 @@ final class FundamentalFilterMeasurementRows
             $row['v_a'] = $vA;
             $row['v_c'] = $vC;
             $row['d_prime'] = $vA - $vC;
+            // V_A y V_C (y por tanto D/D'_i) no quedan resueltos hasta el
+            // cierre de horizonte, nunca en `entry_date` -- ver auditoria de
+            // C8 (Astra/Codex, 2026-09-28). El bootstrap de incertidumbre
+            // debe medir la exposicion real hasta ESTA fecha, no un span
+            // degenerado de cero dias.
+            $row['horizon_end_date'] = $history[$horizonIndex]->getDate()->format('Y-m-d');
 
             // MFE (maximo cierre) hasta horizonte, sobre el open de entrada:
             // solo descriptivo (percentiles P5/P1 pedidos por gestor-riesgo).

@@ -165,6 +165,32 @@ final class FundamentalFilterMeasurementRowsTest extends TestCase
         self::assertEqualsWithDelta(30.0, $row['mfe_a_close'], 1e-9);
     }
 
+    public function testHorizonEndDateEsElCierreDeHorizonteAunqueElStopSaltaseAntes(): void
+    {
+        // Regresion C8 (Astra/Codex, 2026-09-28): horizon_end_date debe ser
+        // SIEMPRE la fecha de entry_index+horizon, nunca exit_date -- V_C (y
+        // por tanto D'_i) no queda resuelto hasta esa fecha, cruce el stop o no.
+        $history = $this->history();
+        $trade = $this->trade($history, 10, 20, -12.0); // stop cruzado en el indice 20, mucho antes del horizonte 55.
+
+        $row = (new FundamentalFilterMeasurementRows())->rows('ACME', [$trade], $history, [10 => $this->de(1.0)], 'Technology')[0];
+
+        self::assertSame($history[55]->getDate()->format('Y-m-d'), $row['horizon_end_date']);
+        self::assertNotSame($row['entry_date'], $row['horizon_end_date']);
+        self::assertNotSame($trade['exit_date'], $row['horizon_end_date']);
+    }
+
+    public function testHorizonEndDateEsNuloFueraDeLaCohorte(): void
+    {
+        $history = $this->history([], 40);
+        $trade = $this->trade($history, 10, 39, 5.0, pending: true);
+
+        $row = (new FundamentalFilterMeasurementRows())->rows('ACME', [$trade], $history, [10 => $this->de(1.0)], 'Technology')[0];
+
+        self::assertFalse($row['in_cohort']);
+        self::assertNull($row['horizon_end_date']);
+    }
+
     public function testElHorizonteEsConfigurable(): void
     {
         $history = $this->history([21 => [110.0, 111.0, 109.0, 110.0]]);

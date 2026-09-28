@@ -55,6 +55,10 @@ final class FundamentalFilterAnalysisTest extends TestCase
                 'd' => $rejected ? -$vA : 0.0,
                 'd_prime' => $vA - $vC,
                 'mfe_a_close' => $vA + 5.0,
+                // H45 (protocolo del 22/09): V_A/V_C/D/D'_i solo quedan
+                // resueltos en el cierre de horizonte, nunca en entry_date
+                // -- correccion C8 (Astra/Codex, 2026-09-28).
+                'horizon_end_date' => $entry->modify('+45 days')->format('Y-m-d'),
             ];
         }
 
@@ -82,7 +86,9 @@ final class FundamentalFilterAnalysisTest extends TestCase
     {
         // Rechazar evita perder 10pp de media: D_i = -V_A = -10 en rechazadas -> P_cond ~ -10 (mejora al rechazar).
         // Para VALIDADO hace falta P_cond >= +delta: V_A NEGATIVO en rechazadas (rechazar evita una perdida).
-        $rows = $this->rows(400, 8, 0.3, fn (int $i): float => -6.0 + $this->noise($i));
+        // stepDays=50 > horizonte de 45 dias de horizon_end_date: las ventanas
+        // de exposicion no se solapan entre entradas (regresion C8).
+        $rows = $this->rows(400, 50, 0.3, fn (int $i): float => -6.0 + $this->noise($i));
 
         $result = (new FundamentalFilterAnalysis())->analyze($rows);
 
@@ -95,7 +101,7 @@ final class FundamentalFilterAnalysisTest extends TestCase
     public function testUnRechazoQueEmpeoraElResultadoDaDescartado(): void
     {
         // V_A muy positivo en rechazadas: rechazarlas cuesta D_i = -V_A muy negativo.
-        $rows = $this->rows(400, 8, 0.3, fn (int $i): float => 8.0 + $this->noise($i));
+        $rows = $this->rows(400, 50, 0.3, fn (int $i): float => 8.0 + $this->noise($i));
 
         $result = (new FundamentalFilterAnalysis())->analyze($rows);
 
@@ -105,7 +111,7 @@ final class FundamentalFilterAnalysisTest extends TestCase
 
     public function testUnEfectoPequenoYNoConcluyenteDaInsuficiente(): void
     {
-        $rows = $this->rows(400, 8, 0.3, fn (int $i): float => 0.0 + $this->noise($i) * 0.3);
+        $rows = $this->rows(400, 50, 0.3, fn (int $i): float => 0.0 + $this->noise($i) * 0.3);
 
         $result = (new FundamentalFilterAnalysis())->analyze($rows);
 
@@ -205,9 +211,9 @@ final class FundamentalFilterAnalysisTest extends TestCase
     {
         $analysis = new FundamentalFilterAnalysis();
         $scenarios = [
-            $this->rows(400, 8, 0.3, fn (int $i): float => -8.0 + $this->noise($i)),
-            $this->rows(400, 8, 0.3, fn (int $i): float => 8.0 + $this->noise($i)),
-            $this->rows(400, 8, 0.3, fn (int $i): float => 0.0 + $this->noise($i) * 0.3),
+            $this->rows(400, 50, 0.3, fn (int $i): float => -8.0 + $this->noise($i)),
+            $this->rows(400, 50, 0.3, fn (int $i): float => 8.0 + $this->noise($i)),
+            $this->rows(400, 50, 0.3, fn (int $i): float => 0.0 + $this->noise($i) * 0.3),
             $this->rows(400, 8, 0.01, fn (int $i): float => -8.0 + $this->noise($i)),
         ];
 
@@ -226,6 +232,32 @@ final class FundamentalFilterAnalysisTest extends TestCase
         $this->expectException(LogicException::class);
 
         (new FundamentalFilterAnalysis())->analyze($rows);
+    }
+
+    public function testUnaFilaEnCohorteSinHorizonEndDateLanzaExcepcion(): void
+    {
+        // Regresion C8 (Astra/Codex, 2026-09-28): una fila con d/d_prime no
+        // nulos pero sin horizon_end_date debe detener el analisis, nunca
+        // caer de vuelta a entry_date en silencio.
+        $rows = $this->rows(400, 8, 0.3, fn (int $i): float => -6.0 + $this->noise($i));
+        $rows[0]['horizon_end_date'] = null;
+
+        $this->expectException(LogicException::class);
+
+        (new FundamentalFilterAnalysis())->analyze($rows);
+    }
+
+    public function testLaExposicionUsadaPorElBootstrapEsElCierreDeHorizonteNoLaFechaDeEntrada(): void
+    {
+        // Regresion C8: si exposure_end_date fuera entry_date, blocks_in_range
+        // se dispararia (spans degenerados a 0 dias -> ancho de bloque minimo).
+        // Con horizon_end_date = entry_date+45d, blocks_in_range debe reflejar
+        // un ancho de bloque de ese orden, no miles.
+        $rows = $this->rows(400, 8, 0.3, fn (int $i): float => -6.0 + $this->noise($i));
+
+        $result = (new FundamentalFilterAnalysis())->analyze($rows);
+
+        self::assertLessThan(500, $result['primary']['blocks_in_range'], 'blocks_in_range no debe inflarse por una exposicion degenerada a 0 dias.');
     }
 
     public function testElAnalisisEsDeterministaFrenteAlOrdenDeLasFilas(): void
