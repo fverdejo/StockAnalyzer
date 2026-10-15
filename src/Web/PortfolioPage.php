@@ -690,7 +690,7 @@ HTML;
             $percent = $portfolio->getTransactionProfitPercent($transaction);
             $currency = $portfolio->getCurrencyFor($transaction->getTicker());
             $rows[] = sprintf(
-                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%s</td><td class="num">%s</td><td class="num %s">%s</td></tr>',
+                '<tr><td>%s</td><td><span class="recommendation %s">%s</span></td><td><a class="ticker-link" href="?ticker=%s"><span class="ticker">%s</span></a></td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num %s">%s</td></tr>',
                 Layout::escape($transaction->getExecutedAt()->format('Y-m-d H:i')),
                 $type === TransactionType::BUY ? 'buy' : 'sell',
                 Layout::escape($type->label()),
@@ -699,14 +699,16 @@ HTML;
                 self::number($transaction->getQuantity()),
                 Layout::formatMoney($transaction->getPrice(), $currency)
                     . self::eurEquivalent($portfolio->getTransactionPriceEur($transaction), $currency),
+                Layout::formatMoney($portfolio->getTransactionAmount($transaction), $currency)
+                    . self::eurEquivalent($portfolio->getTransactionAmountEur($transaction), $currency),
                 self::profitClass($profit),
                 self::nullableProfitMoney($profit, $percent, $currency)
             );
         }
 
-        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Beneficio</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>'
+        return '<div class="table-wrap"><table class="table-compact table-middle"><thead><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Total</th><th class="num">Beneficio</th></tr></thead><tbody>' . implode('', $rows) . '</tbody></table></div>'
             . $pagination
-            . '<p class="muted panel-note">El precio de cada operación se muestra en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operación en euros no lleva equivalencia porque sería el mismo importe repetido). La columna de beneficio es el resultado REALIZADO de cada operación: una compra siempre muestra 0 (comprar no genera ganancia ni pérdida por sí sola); una venta muestra lo ganado o perdido de verdad frente a lo que costaron esas acciones. El rendimiento de una posición todavía abierta se ve en "Beneficio latente", en las tarjetas de arriba. Importe y porcentaje entre paréntesis en la misma celda. Las más recientes primero.</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a> (siempre el historial completo, no solo esta página).</p>';
+            . '<p class="muted panel-note">Precio es el valor de una acción y Total es cantidad × precio de ejecución: el importe bruto de esa compra o venta. Ambos se muestran en la divisa en la que cotiza el valor y, debajo en gris, su equivalencia en euros al cambio de hoy (una operación en euros no repite la equivalencia). La columna de beneficio es el resultado REALIZADO de cada operación: una compra siempre muestra 0; una venta muestra lo ganado o perdido frente a lo que costaron esas acciones. El rendimiento de una posición todavía abierta se ve en "Beneficio latente". Importe y porcentaje entre paréntesis en la misma celda. Las más recientes primero.</p><p class="panel-note"><a href="?page=portfolio&amp;export=transactions">Exportar a CSV</a> (siempre el historial completo, no solo esta página).</p>';
     }
 
     /**

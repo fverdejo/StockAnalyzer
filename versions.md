@@ -8890,3 +8890,211 @@ Convierte en estructural la politica ya informal de este proyecto ("nunca tocar 
 Cerrar C9 (verificar segundos reales frente al tope de presupuesto, aplicar la regla de decision, documentar el metodo ganador o `METODO_NO_CALIBRADO`); con C9 cerrado, asignar el `verdict_status` final a los cinco resultados historicos que cita la tabla de Astra (D/E H45, D'_i H45, D'_i H90 -ya usa `horizon_end_date` correctamente, no afectado por C8-, trailing H45) y escribirlo en `storage/formal_test_registry.jsonl`; C11 (pregunta de cartera con limites reales) explicitamente supeditada a que C8 y C9 esten cerrados, no se empieza todavia.
 
 Incluye: `storage/scratch/fundamental_filter_20260928_c8fix_A/` y `_B/` (636 ficheros cada una), `run_fundamental_filter_c8fix.sh`, `fundamental_filter_20260928_c8fix_orchestrator.log`, `fundamental_filter_20260928_c8fix_results_full.txt`; `storage/scratch/c9_read_sector_breakdown.php`, `run_c9_coverage.sh`, `c9_coverage_run.log`, `c9_coverage_results_2026-09-28.json` (parcial, en curso) (no committeados). Committeados: `src/Services/FundamentalFilterAnalysis.php`, `src/Services/FundamentalFilterMeasurementRows.php`, sus tests (commit `1ecef63`); `src/Enums/StudyVerdictStatus.php`, `src/Services/StudyVerdictStatusResolver.php`, `src/Services/FormalTestRegistry.php`, sus tests (commit `8ef8a9b`); `storage/scratch/block_width_coverage_experiment_2026-09-26.php` extendido con el modo C9 (no committeado, vive en scratch como el resto del experimento del 26/09). No se ha tocado `config/weights.php` ni ninguna recomendacion de produccion.
+
+---
+
+## 2026-10-03 - Astra cierra C9 y convierte la calibracion en un bloqueo ejecutable
+
+C9 finalizo con `METODO_NO_CALIBRADO`: ni `pw_mercado` ni `pw_mercado_estacionario` alcanzaron cobertura `[0,93; 0,97]` en los cinco escenarios predeclarados. En escenarios realistas quedaron entre 0,3833 y 0,5600. El escenario homogeneo estacionario se confirmo con R=2.000 y quedo en 0,9135.
+
+`PolicyReplayStatistics` identifica el metodo legado y publica su calibracion. `FundamentalFilterAnalysis` y `PolicyReplayHorizonAnalysis` ya no pueden emitir un veredicto efectivo `VALIDADO`, `GO` o `NO-GO` con esos intervalos. El resultado condicionado se conserva en `verdict_if_method_calibrated`. `StudyVerdictStatusResolver` exige ademas la hipotesis formal completa antes de permitir `VALIDADO_PROVISIONAL`.
+
+Verificacion: 51 pruebas focalizadas con 5.213 aserciones; suite completa de 968 pruebas y 8.095 aserciones, una omitida; PHPStan sin errores. Informe: `AVANCE_BACKTESTING_ASTRA_2026-10-03.md`. `config/weights.php` permanece intacto. El siguiente frente es C11: una serie diaria de cartera con capital, capacidad, costes, exposicion y benchmark invertible.
+
+---
+
+## v2.114 - C11: primera infraestructura de backtesting diario de cartera
+
+Se incorpora `PortfolioBacktestSimulator`, un libro diario determinista con capital compartido. Las ventas se ejecutan antes que las compras y las candidatas compiten por prioridad, con desempate estable por ticker. El simulador aplica costes por lado, maximo de posiciones, peso maximo por posicion y limite de participacion sobre volumen; publica efectivo, valor invertido, patrimonio, retorno diario, drawdown, exposicion, rotacion, costes, ledger y motivos de rechazo.
+
+Los parametros quedan versionados en `config/backtesting.php` y expuestos por `BacktestingConfig`: capital inicial 100.000, maximo 10 posiciones, 10% por posicion y 1% del volumen diario. El contrato exige ordenes conocidas antes de la apertura: la generacion de senales queda separada de la ejecucion para no introducir look-ahead. Una cotizacion ausente conserva la ultima valoracion y aumenta `stale_position_marks`, sin ocultar el problema.
+
+Esta entrega es infraestructura contable y de capacidad; todavia no conecta automaticamente las senales historicas del motor ni declara ventaja economica. La siguiente entrega debe construir las ordenes de entrada de la siguiente apertura desde timelines point-in-time y comparar la curva con un benchmark invertible. El Home pasa de `v2.113` a `v2.114`.
+
+Verificacion: 38 pruebas focalizadas, 166 aserciones; suite completa de 974 pruebas y 8.111 aserciones, una omitida; PHPStan completo sin errores.
+
+---
+
+## v2.115 - Total por operacion y stops diarios en el backtest de cartera
+
+El historial de operaciones de Mi cartera incorpora la columna `Total`, calculada como cantidad por precio real de compra o venta. Se muestra en la divisa nativa y, cuando corresponde, con equivalencia en euros. La exportacion CSV conserva el mismo dato mediante `Total (divisa nativa)` y `Total (EUR)`. El calculo vive en `Portfolio` para que web y exportacion no dupliquen formulas.
+
+C11 avanza con ejecucion diaria de stop-loss en `PortfolioBacktestSimulator`: huecos por debajo del stop salen a la apertura real y cruces intradia salen al nivel del stop. El ledger diferencia ventas por `signal` y por `stop_loss`, publica `stops_triggered` y `stops_not_evaluable`, y acepta `HOLD` como una decision explicita sin operacion. Si falta el minimo diario, el motor no inventa si el stop fue cruzado.
+
+El Home pasa de `v2.114` a `v2.115`.
+
+Verificacion: 41 pruebas focalizadas, 137 aserciones; suite completa de 977 pruebas y 8.123 aserciones, una omitida; PHPStan completo sin errores.
+
+---
+
+## v2.116 - Recomendaciones point-in-time conectadas al capital de cartera
+
+`BacktestingService::replayTimeline()` conserva ahora `score_percentage`, necesario para priorizar de forma determinista las compras simultaneas cuando no caben todas. `RecommendationPortfolioDatasetBuilder` desplaza cada decision del cierre N a la apertura local N+1 usando la vela real: no reconstruye precios desde retornos futuros. BUY genera compra solo si el ticker era elegible, SELL/STRONG SELL genera venta y el resto se registra como HOLD.
+
+`RecommendationPortfolioBacktestService` obtiene timelines e historicos con el mismo corte `asOf`, construye el calendario conjunto y ejecuta `PortfolioBacktestSimulator`. Publica errores por ticker, recomendaciones sin sesion posterior, compras excluidas por membresia, ordenes por accion, curva de patrimonio, ledger, stops, costes, capacidad y rechazos.
+
+El flujo queda disponible en CLI mediante `bin/backtest.php --portfolio`, compatible con `--step`, `--history`, `--tickers`/`--universe` y `--as-of`. Su cadencia por defecto es diaria (`step=1`) para evitar fases locales distintas entre tickers; `--step` permite declarar una frecuencia de revision menor. No admite simultaneamente `--persist` o `--cross-sectional`, ni modos de investigacion distintos de `full`. El Home pasa de `v2.115` a `v2.116`.
+
+La procedencia fundamental no queda oculta: cada punto de `replayTimeline()` publica `fundamentals_is_point_in_time` y el resultado agregado expone `fundamentals_point_in_time_pct`. Con menos del 100% se emite un aviso de curva exploratoria por fallback a fundamentales actuales; incluso al 100% se conserva el aviso de que `dividendGrowth5y` no dispone de vintage historico.
+
+Verificacion: 20 pruebas focalizadas, 249 aserciones; suite completa de 981 pruebas y 8.146 aserciones, una omitida; PHPStan completo sin errores; sintaxis de `bin/backtest.php` valida.
+
+---
+
+## v2.117 - Benchmark invertible para el backtest de cartera
+
+El backtest de cartera incorpora un buy-and-hold de referencia sobre el mismo calendario y con el mismo capital inicial. Compra el benchmark en la primera apertura disponible, aplica el mismo coste de entrada y lo valora diariamente al cierre. De este modo la recomendacion deja de evaluarse solo contra cero: la salida publica patrimonio, retorno y drawdown del benchmark, retorno excedente de la cartera y numero de valoraciones arrastradas por falta de cotizacion.
+
+`RecommendationPortfolioDatasetBuilder` alinea las velas del benchmark con el calendario de ejecucion sin anticipar cierres. `RecommendationPortfolioBacktestService` carga SPY por defecto con el mismo corte `asOf`, aisla cualquier error de esa descarga y permite elegir otro ticker. La CLI expone `--benchmark=SPY`; un valor vacio desactiva la referencia. El Home pasa de `v2.116` a `v2.117`.
+
+La comparacion no fuerza una venta al final: tanto la cartera como el benchmark conservan sus posiciones abiertas valoradas al ultimo cierre. Esto evita cobrar un coste de salida ficticio a una sola de las dos ramas. La cobertura point-in-time y sus avisos siguen siendo condiciones necesarias para interpretar la curva.
+
+Verificacion: 13 pruebas focalizadas, 57 aserciones; suite completa de 982 pruebas y 8.158 aserciones, una omitida; PHPStan completo sin errores; sintaxis de `bin/backtest.php` valida.
+
+---
+
+## v2.118 - Rendimiento ajustado por riesgo y comparacion diaria valida
+
+`PortfolioPerformanceMetrics` resume la curva de cartera y el benchmark con retorno anualizado, volatilidad anualizada, Sharpe con tipo libre de riesgo cero, Sortino con objetivo cero, Calmar, porcentaje de sesiones positivas y tamanos de muestra. Publica tambien exposicion bruta media. La comparacion relativa incorpora retorno excedente diario medio, tracking error anualizado, ratio de informacion y numero de sesiones realmente emparejadas.
+
+`PortfolioBacktestSimulator` conserva ahora el retorno diario del benchmark y marca si su valoracion fue arrastrada. Si falta una cotizacion, ni esa sesion ni el primer precio posterior al hueco se convierten en un retorno diario ficticio: quedan fuera de volatilidad, tracking error y ratio de informacion. Los niveles de patrimonio y retorno acumulado siguen valorandose con el ultimo cierre disponible y `benchmark_stale_marks` hace visible la incidencia.
+
+Las metricas viven bajo `performance` y no ocultan muestras pequenas: cada bloque expone `observations`, `return_observations` o `paired_return_observations`; cuando no hay al menos dos retornos o el denominador es cero, el ratio correspondiente es `null`. El Home pasa de `v2.117` a `v2.118`.
+
+Verificacion: 13 pruebas focalizadas, 67 aserciones; suite completa de 985 pruebas y 8.183 aserciones, una omitida; PHPStan completo sin errores.
+
+---
+
+## v2.119 - Cartera estrictamente point-in-time y membresia historica activa
+
+Una auditoria paralela de estadistica, ejecucion y datos encontro que la infraestructura point-in-time existia pero la CLI de cartera no conectaba `IndexMembershipRepository` ni pasaba `indexCode`. En consecuencia, `eligible` era siempre verdadero. `bin/backtest.php` acepta ahora `--index-code`, usa `GSPC` automaticamente con `--universe=sp500`, conecta `PreloadedIndexMembershipChecker` y pasa el codigo tanto al replay de cartera como al transversal.
+
+Cuando se usa un indice y no se proporcionan tickers manuales, la poblacion incorpora los antiguos miembros archivados que no aparecen en la lista actual. La salida publica cuantos se a�adieron y cuales no tienen historico utilizable. Si no existe ninguna membresia archivada para el codigo solicitado, la CLI se detiene en vez de producir silenciosamente una cartera sin candidatos. Sin indice, el resultado conserva un aviso explicito de sesgo de supervivencia.
+
+`RecommendationPortfolioDatasetBuilder` funciona en modo estricto por defecto: cualquier BUY, SELL o HOLD calculado sin snapshot fundamental point-in-time queda fuera del calendario de ordenes. Publica recomendaciones y compras excluidas, compras PIT/no-PIT y cobertura PIT especifica de las candidatas BUY. El comportamiento exploratorio anterior requiere ahora `--allow-current-fundamentals`; combinar `--portfolio --no-point-in-time` sin esa autorizacion explicita es un error.
+
+La precarga de membresia se activa automaticamente en la primera consulta de cada ticker/indice, evitando una consulta SQL por fecha sin obligar a los consumidores a conocer el decorador. El Home pasa de `v2.118` a `v2.119`.
+
+La correccion elimina dos contaminaciones corregibles, pero no resuelve por si sola los antiguos miembros sin precios fiables, dividendos ausentes, sesiones con cotizacion incompleta ni la calibracion estadistica C9. Esos limites siguen impidiendo declarar ventaja predictiva.
+
+Verificacion: 9 pruebas focalizadas, 49 aserciones; suite completa de 986 pruebas y 8.195 aserciones, una omitida; PHPStan completo sin errores; sintaxis de `bin/backtest.php` valida.
+
+---
+
+## v2.120 - Cronologia correcta de stops en la cartera
+
+El simulador procesaba todo el rango diario de los stops antes de ejecutar las ordenes de apertura. Eso causaba dos errores: una compra nueva no podia activar su stop durante la propia sesion de entrada y una salida por stop intradia podia aportar efectivo para una compra que el modelo situaba retrospectivamente en la apertura.
+
+`PortfolioBacktestSimulator` separa ahora cuatro fases: gaps de posiciones heredadas al open, ventas por senal al open, compras al open y stops intradia. Los stops intradia incluyen las posiciones recien compradas, pero su efectivo llega despues de completar todas las compras de apertura. Una entrada cuyo stop ya esta vulnerado realiza una ida y vuelta al open con ambos costes, criterio conservador que no inventa un precio de salida mejor.
+
+El ledger distingue `stop_loss_gap`, `stop_loss` y `entry_day_stop_loss`; la salida publica `entry_day_stops_triggered`. Tambien queda probado que una venta por senal en apertura precede al minimo intradia y que un stop posterior no puede financiar otra compra al open. El Home pasa de `v2.119` a `v2.120`.
+
+Verificacion focal: 14 pruebas y 57 aserciones; PHPStan sin errores. La suite completa se ejecuta al cerrar la siguiente correccion de liquidez sobre esta misma base.
+
+---
+
+## v2.121 - Capacidad sin volumen futuro
+
+La cartera dimensionaba cada BUY en la apertura usando el volumen total de esa misma sesion, conocido solo al cierre. `RecommendationPortfolioDatasetBuilder` sustituye ese dato por la media de volumen de las 20 sesiones anteriores a la ejecucion. La ventana excluye siempre el dia actual y exige 20 observaciones positivas; si no existe una historia completa, entrega capacidad cero y la compra se rechaza de forma conservadora.
+
+La salida publica el metodo, ventana, cotizaciones totales, estimaciones disponibles/ausentes y compras sin estimacion. `PortfolioBacktestSimulator` a�ade `liquidity_limited_buys` para distinguir compras cuyo tamano quedo limitado por capacidad. Una regresion con volumenes anteriores 1.000/1.100 y volumen actual 1.200 demuestra que una ventana de dos sesiones usa 1.050 y nunca mira 1.200.
+
+`max_volume_participation` se interpreta ahora sobre esta estimacion anterior a la apertura. ADV20 elimina el look-ahead, pero sigue siendo una proxy de capacidad diaria: no garantiza que el 1% pueda ejecutarse integramente en la subasta de apertura ni modela impacto creciente. Limites parciales en salidas y slippage por participacion quedan como tareas posteriores.
+
+El Home pasa de `v2.120` a `v2.121`.
+
+Verificacion: 20 pruebas focalizadas, 106 aserciones; suite completa de 991 pruebas y 8.223 aserciones, una omitida; PHPStan completo sin errores; sintaxis de `bin/backtest.php` valida.
+
+---
+
+## v2.122 - Salidas parciales y stops persistentes con capacidad compartida
+
+La restriccion de volumen solo limitaba las compras: SELL y stops liquidaban
+toda la posicion sin capacidad suficiente. Ademas, un gap podia cerrar y
+reabrir el mismo ticker en la misma apertura.
+
+Astra/Codex aplica ahora un presupuesto de acciones por ticker y sesion,
+calculado con el volumen previo, que consumen compras y ventas sin neteo.
+Las salidas parciales conservan el remanente valorado y ocupan plaza hasta
+cerrar. La intencion de salida persiste aunque aparezca HOLD/BUY o falten
+cotizaciones; se reintenta en aperturas posteriores al precio de esa sesion.
+Un stop activado no se cancela si el precio recupera su nivel. Cada activacion
+se cuenta una vez, incluso cuando no puede ejecutarse ninguna accion.
+
+El ledger publica cantidad solicitada y restante de las ventas ejecutadas.
+La curva y el resumen publican salidas pendientes; el resumen incluye
+cantidades, razones, fecha de activacion, fills parciales e intentos limitados
+o bloqueados por liquidez. Una salida impide recomprar el mismo ticker ese dia.
+Efectivo, costes y rotacion se calculan solo sobre cantidades ejecutadas.
+
+La politica de ejecucion y su limitacion aparecen en el resultado de cartera.
+El coste por lado sigue siendo fijo; el impacto variable por participacion
+requiere calibracion y permanece pendiente. El Home pasa a v2.122.
+
+Verificacion focal v2.122: 9 regresiones nuevas, 98 aserciones; PHPStan del
+archivo de pruebas sin errores. Validacion completa conjunta al cerrar v2.123.
+
+---
+
+## v2.123 - Ratios de cartera sin retornos diarios ficticios por huecos
+
+El benchmark ya excluia retornos cuando faltaban cotizaciones, pero la
+cartera seguia alimentando sus ratios con ceros de valoraciones arrastradas
+y con el salto acumulado del primer precio tras el hueco. Astra/Codex
+reprodujo el fallo con regresiones antes de modificar el calculo.
+
+El retorno diario de cartera queda ahora nulo cuando alguna posicion abierta
+no tiene cotizacion o la valoracion anterior era obsoleta. La regla tambien
+se aplica al vender toda la posicion en la sesion de recuperacion. Tener
+solo efectivo o un precio valido con capacidad de volumen cero no invalida
+la valoracion.
+
+La curva publica portfolio_is_stale y el resumen publica sesiones obsoletas,
+retornos excluidos y un aviso sobre valoraciones arrastradas. Los ratios
+calculados con retornos diarios y las comparaciones relativas consumen solo
+retornos validos y mantienen
+visibles sus tamanos de muestra. La secuencia 100, hueco, hueco, 110, 121
+produce retornos 0, null, null, null, 10%, en lugar de 0, 0, 0, 10%, 10%.
+
+Patrimonio, retorno acumulado y drawdown siguen usando el ultimo cierre
+conocido: esta correccion no resuelve suspensiones ni delistings, ni acredita
+capacidad predictiva del motor. El Home pasa de v2.122 a v2.123.
+
+Verificacion focal conjunta v2.122/v2.123, completada el 2026-10-15:
+36 pruebas, 250 aserciones; PHPStan completo y git diff --check sin errores.
+La revision de integracion detecto un hueco de calendario en el builder,
+corregido en v2.124. La suite completa se registra con ese cierre.
+
+---
+
+## v2.124 - Calendario de cartera que conserva huecos completos
+
+La revision de integracion de Astra/Codex detecto que el builder construia
+el calendario exclusivamente con fechas que tenian precios de algun valor.
+Si todos los valores carecian de cotizacion un dia, esa sesion desaparecia
+incluso cuando el benchmark si tenia datos. El simulador no podia marcar el
+hueco y trataba el salto acumulado como un retorno diario valido.
+
+El calendario es ahora la union ordenada y sin duplicados de las sesiones
+observadas en valores y benchmark, desde la primera ejecucion elegible.
+Las historias ya llegan cortadas por el mismo asOf. Los dias sin precios de
+valores se conservan con quotes vacio, sin inventar precios ni ordenes.
+Tambien se conservan las sesiones del benchmark posteriores al ultimo precio
+del valor: el patrimonio residual se marca obsoleto en lugar de ocultar el
+hueco final. No se crean fechas fuera de las observaciones proporcionadas.
+
+La salida publica calendar_source, calendar_days_without_asset_quotes y
+calendar_warning. Sin benchmark utilizable, el calendario sigue siendo el
+de los valores y declara que no puede detectar huecos comunes. La union no
+distingue festivos locales, suspensiones o ausencia de datos en ambas fuentes.
+
+Las regresiones recorren builder y simulador conjuntamente, verificando que
+el hueco llega a la curva, se excluyen sus retornos y los de recuperacion, y
+se reducen las muestras de comparacion. Se cubren tambien extremos del
+periodo, sesiones exclusivas de los valores, orden/deduplicacion y fallback.
+El Home pasa de v2.123 a v2.124.
+
+Verificacion final conjunta v2.122-v2.124 (2026-10-15): 41 pruebas focalizadas,
+301 aserciones; suite completa de 1.010 pruebas y 8.403 aserciones, una
+omitida; PHPStan completo sin errores. Las cinco regresiones de calendario
+fallaron antes de aplicar v2.124 y pasan con la correccion.

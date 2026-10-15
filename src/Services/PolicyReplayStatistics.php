@@ -118,6 +118,10 @@ final class PolicyReplayStatistics
 {
     private const BOOTSTRAP_REPLICATES = 5000;
 
+    public const BOOTSTRAP_METHOD_ID = 'circular_calendar_2xp90_legacy';
+
+    public const BOOTSTRAP_METHOD_CALIBRATED = false;
+
     /**
      * Si el rango temporal total cabe en menos de este numero de bloques
      * de anchura `$blockWidthDays`, el bootstrap no tiene suficientes
@@ -137,7 +141,7 @@ final class PolicyReplayStatistics
     /**
      * @param list<array{ticker: string, trades: list<array{entry_date: string, entry_index: int, entry_price: float, exit_date: string, exit_index: int, exit_price: float, exit_reason: string, pending: bool, holding_days: int, managed_return: ?float, baseline_return: ?float, baseline_exit_date: ?string, baseline_pending: bool, revisar_tesis_events: int}>, entries_total: int, entries_closed: int, entries_pending: int, candidates_excluded_by_membership: int}> $replaysByTicker
      * @param ?int $seed Semilla de `mt_srand()` para que el bootstrap sea reproducible (Entrega 2: mismo criterio que `$asOf`). `null` usa el estado ambiental del generador -- aceptable para uso exploratorio, no para una medicion que se quiera poder repetir exactamente.
-     * @return array{entries_total: int, entries_closed: int, entries_pending: int, pct_pending: ?float, pending_avg_managed_return: ?float, candidates_excluded_by_membership_total: int, cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int, revisar_tesis_events_total: int}
+     * @return array{entries_total: int, entries_closed: int, entries_pending: int, pct_pending: ?float, pending_avg_managed_return: ?float, candidates_excluded_by_membership_total: int, cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, bootstrap_method_id: string, bootstrap_method_calibrated: bool, verdict_status: string, calendar_windows_observed: int, revisar_tesis_events_total: int}
      */
     public function summarize(array $replaysByTicker, ?int $seed = null): array
     {
@@ -227,7 +231,7 @@ final class PolicyReplayStatistics
      * salvaguardas (`blocks_in_range`, `effective_n`) en vez de copiarlos.
      *
      * @param list<array{entry_date: string, exposure_end_date: string, diff: float}> $pairedDiffs no hace falta que esten ordenadas
-     * @return array{cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int}
+     * @return array{cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, bootstrap_method_id: string, bootstrap_method_calibrated: bool, verdict_status: string, calendar_windows_observed: int}
      */
     public function summarizePairedDiffs(array $pairedDiffs, ?int $seed = null): array
     {
@@ -257,6 +261,9 @@ final class PolicyReplayStatistics
             'bootstrap_has_enough_resolution' => $precise['bootstrap_has_enough_resolution'],
             'result_informative' => $precise['result_informative'],
             'ci_excludes_zero' => $precise['ci_excludes_zero'],
+            'bootstrap_method_id' => $precise['bootstrap_method_id'],
+            'bootstrap_method_calibrated' => $precise['bootstrap_method_calibrated'],
+            'verdict_status' => $precise['verdict_status'],
             'calendar_windows_observed' => $precise['calendar_windows_observed'],
         ];
     }
@@ -271,7 +278,7 @@ final class PolicyReplayStatistics
      * la MISMA muestra pasara de `result_informative=false` a `true`.
      *
      * @param list<array{entry_date: string, exposure_end_date: string, diff: float}> $pairedDiffs no hace falta que esten ordenadas
-     * @return array{cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, calendar_windows_observed: int}
+     * @return array{cohorts: int, avg_diff: ?float, se_naive: ?float, t_stat_naive: ?float, se_bootstrap: ?float, ci95_low: ?float, ci95_high: ?float, pseudo_t_bootstrap: ?float, block_width_days: ?int, blocks_in_range: ?float, bootstrap_replicates: int, design_effect: ?float, effective_n: ?float, bootstrap_has_enough_resolution: bool, result_informative: bool, ci_excludes_zero: ?bool, bootstrap_method_id: string, bootstrap_method_calibrated: bool, verdict_status: string, calendar_windows_observed: int}
      */
     public function summarizePairedDiffsPrecise(array $pairedDiffs, ?int $seed = null): array
     {
@@ -306,6 +313,11 @@ final class PolicyReplayStatistics
         $resultInformative = $bootstrapHasEnoughResolution
             && $effectiveN !== null
             && $effectiveN >= self::MIN_EFFECTIVE_N;
+        $verdictStatus = (new StudyVerdictStatusResolver())->resolve(
+            $resultInformative,
+            $ciExcludesZero,
+            self::BOOTSTRAP_METHOD_CALIBRATED
+        );
 
         return [
             'cohorts' => count($diffValues),
@@ -330,6 +342,9 @@ final class PolicyReplayStatistics
             'bootstrap_has_enough_resolution' => $bootstrapHasEnoughResolution,
             'result_informative' => $resultInformative,
             'ci_excludes_zero' => $ciExcludesZero,
+            'bootstrap_method_id' => self::BOOTSTRAP_METHOD_ID,
+            'bootstrap_method_calibrated' => self::BOOTSTRAP_METHOD_CALIBRATED,
+            'verdict_status' => $verdictStatus->value,
             // Descriptivo unicamente (diseño de la ronda anterior,
             // `2026-09-14`): cuantas ventanas de calendario de ancho fijo
             // (mediana de holding GESTIONADO) contienen al menos una

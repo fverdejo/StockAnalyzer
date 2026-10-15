@@ -54,9 +54,10 @@ final class PreloadedIndexMembershipChecker implements IndexMembershipCheckerInt
     public function isMemberAt(string $ticker, string $indexCode, DateTimeImmutable $date): bool
     {
         if (strtoupper($ticker) !== $this->preloadedTicker || strtoupper($indexCode) !== $this->preloadedIndexCode) {
-            // Combinacion distinta a la precargada: no se puede resolver
-            // en memoria de forma fiable -- se cae al repositorio real.
-            return $this->repository->isMemberAt($ticker, $indexCode, $date);
+            // La primera consulta de cada combinacion la precarga. Asi los
+            // consumidores que recorren un ticker completo no necesitan
+            // conocer este decorador ni caen en una consulta SQL por fecha.
+            $this->preload($ticker, $indexCode);
         }
 
         $target = $date->format('Y-m-d');

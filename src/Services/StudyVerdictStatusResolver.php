@@ -25,8 +25,14 @@ final class StudyVerdictStatusResolver
      * @param bool $resultInformative `result_informative` de `PolicyReplayStatistics`
      * @param ?bool $ciExcludesZero `ci_excludes_zero` de `PolicyReplayStatistics` (null si no informativo)
      * @param bool $bootstrapMethodCalibrated `true` solo si C9 cerro con exito Y esta metrica concreta usa el metodo validado (nunca el 2xP90 legado por defecto mientras C9 no cierre)
+     * @param ?bool $formalHypothesisSupported `true` solo si el llamador comprobo TAMBIEN el umbral economico y el resto de condiciones predeclaradas. `null` nunca valida por si solo un IC que excluye cero.
      */
-    public function resolve(bool $resultInformative, ?bool $ciExcludesZero, bool $bootstrapMethodCalibrated): StudyVerdictStatus
+    public function resolve(
+        bool $resultInformative,
+        ?bool $ciExcludesZero,
+        bool $bootstrapMethodCalibrated,
+        ?bool $formalHypothesisSupported = null
+    ): StudyVerdictStatus
     {
         if (!$resultInformative) {
             return StudyVerdictStatus::NO_INFORMATIVO;
@@ -36,7 +42,7 @@ final class StudyVerdictStatusResolver
             return StudyVerdictStatus::METODO_NO_CALIBRADO;
         }
 
-        return $ciExcludesZero === true
+        return $ciExcludesZero === true && $formalHypothesisSupported === true
             ? StudyVerdictStatus::VALIDADO_PROVISIONAL
             : StudyVerdictStatus::INFORMATIVO_SIN_VENTAJA;
     }

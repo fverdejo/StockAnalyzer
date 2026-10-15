@@ -42,3 +42,6 @@ Thumbs.db
 # Candado y log de AnalysisRefreshTrigger (runtime, no codigo).
 /storage/locks/
 /storage/logs/
+
+# Datos de trabajo y salidas de analisis no reproducibles en Git.
+/storage/scratch/

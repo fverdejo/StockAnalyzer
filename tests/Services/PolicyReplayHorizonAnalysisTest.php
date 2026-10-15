@@ -111,7 +111,9 @@ final class PolicyReplayHorizonAnalysisTest extends TestCase
 
         $result = (new PolicyReplayHorizonAnalysis())->analyze($rows, new DateTimeImmutable(self::CUTOFF));
 
-        self::assertStringStartsWith('GO', $result['verdict']);
+        self::assertStringStartsWith('METODO_NO_CALIBRADO', $result['verdict']);
+        self::assertStringStartsWith('GO', $result['verdict_if_method_calibrated']);
+        self::assertSame('metodo_no_calibrado', $result['primary']['verdict_status']);
         self::assertGreaterThanOrEqual(0.0, $result['primary']['intervals']['T']['ci95_low']);
     }
 
@@ -122,7 +124,8 @@ final class PolicyReplayHorizonAnalysisTest extends TestCase
         $result = (new PolicyReplayHorizonAnalysis())->analyze($rows, new DateTimeImmutable(self::CUTOFF));
 
         // P ~ -6, P_T ~ -5,5: ambos IC superiores por debajo de -δ y de 0.
-        self::assertStringStartsWith('NO-GO', $result['verdict']);
+        self::assertStringStartsWith('METODO_NO_CALIBRADO', $result['verdict']);
+        self::assertStringStartsWith('NO-GO', $result['verdict_if_method_calibrated']);
     }
 
     /**
@@ -139,7 +142,8 @@ final class PolicyReplayHorizonAnalysisTest extends TestCase
 
         self::assertLessThan(-1.0, $result['primary']['intervals']['P']['ci95_high']);
         self::assertGreaterThanOrEqual(0.0, $result['primary']['intervals']['P_T']['ci95_high']);
-        self::assertStringStartsWith('INDET', $result['verdict']);
+        self::assertStringStartsWith('METODO_NO_CALIBRADO', $result['verdict']);
+        self::assertStringStartsWith('INDET', $result['verdict_if_method_calibrated']);
     }
 
     public function testUnRangoCortoNoEsInformativoYNoPuedeDarGoNiNoGo(): void

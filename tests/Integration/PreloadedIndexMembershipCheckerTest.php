@@ -81,7 +81,7 @@ final class PreloadedIndexMembershipCheckerTest extends IntegrationTestCase
         self::assertFalse($this->preloaded->isMemberAt('ZZZZ', 'GSPC', new DateTimeImmutable('2024-01-01')));
     }
 
-    public function testUnaCombinacionNoPrecargadaCaeAlRepositorioRealSinRomper(): void
+    public function testUnaCombinacionNoPrecargadaSeCargaAutomaticamenteYQuedaDisponible(): void
     {
         $this->repository->storeAll([$this->record('GOOGL', '2020-01-01', null)]);
         $this->preloaded->preload('MSFT', 'GSPC'); // se precarga OTRA combinacion
@@ -90,5 +90,6 @@ final class PreloadedIndexMembershipCheckerTest extends IntegrationTestCase
             $this->repository->isMemberAt('GOOGL', 'GSPC', new DateTimeImmutable('2024-01-01')),
             $this->preloaded->isMemberAt('GOOGL', 'GSPC', new DateTimeImmutable('2024-01-01'))
         );
+        self::assertNotNull($this->preloaded->dataFingerprint('GOOGL', 'GSPC'));
     }
 }

@@ -34,7 +34,8 @@ final class StudyVerdictStatusResolverTest extends TestCase
     {
         $resolver = new StudyVerdictStatusResolver();
 
-        self::assertSame(StudyVerdictStatus::VALIDADO_PROVISIONAL, $resolver->resolve(true, true, true));
+        self::assertSame(StudyVerdictStatus::VALIDADO_PROVISIONAL, $resolver->resolve(true, true, true, true));
+        self::assertSame(StudyVerdictStatus::INFORMATIVO_SIN_VENTAJA, $resolver->resolve(true, true, true));
     }
 
     public function testResolucionSuficienteMetodoCalibradoYCiNoExcluyeCeroDaInformativoSinVentaja(): void

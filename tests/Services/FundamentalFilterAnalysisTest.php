@@ -95,7 +95,9 @@ final class FundamentalFilterAnalysisTest extends TestCase
         self::assertTrue($result['coverage_gate_ok']);
         self::assertTrue($result['primary']['result_informative']);
         self::assertGreaterThanOrEqual(FundamentalFilterAnalysis::DELTA_PP, $result['primary']['p_cond']);
-        self::assertStringStartsWith('VALIDADO', $result['verdict']);
+        self::assertSame('METODO_NO_CALIBRADO', $result['verdict']);
+        self::assertSame('VALIDADO', $result['verdict_if_method_calibrated']);
+        self::assertSame('metodo_no_calibrado', $result['primary']['verdict_status']);
     }
 
     public function testUnRechazoQueEmpeoraElResultadoDaDescartado(): void
@@ -106,7 +108,8 @@ final class FundamentalFilterAnalysisTest extends TestCase
         $result = (new FundamentalFilterAnalysis())->analyze($rows);
 
         self::assertLessThan(0.0, $result['primary']['ci95_high']);
-        self::assertSame('DESCARTADO', $result['verdict']);
+        self::assertSame('METODO_NO_CALIBRADO', $result['verdict']);
+        self::assertSame('DESCARTADO', $result['verdict_if_method_calibrated']);
     }
 
     public function testUnEfectoPequenoYNoConcluyenteDaInsuficiente(): void
@@ -116,7 +119,8 @@ final class FundamentalFilterAnalysisTest extends TestCase
         $result = (new FundamentalFilterAnalysis())->analyze($rows);
 
         self::assertTrue($result['primary']['result_informative']);
-        self::assertSame('INSUFICIENTE', $result['verdict']);
+        self::assertSame('METODO_NO_CALIBRADO', $result['verdict']);
+        self::assertSame('INSUFICIENTE', $result['verdict_if_method_calibrated']);
     }
 
     public function testUnaTasaDeRechazoPorDebajoDelGateDaNoInformativoAunqueElEfectoSeaGrande(): void
@@ -217,10 +221,12 @@ final class FundamentalFilterAnalysisTest extends TestCase
             $this->rows(400, 8, 0.01, fn (int $i): float => -8.0 + $this->noise($i)),
         ];
 
-        $verdicts = array_map(static fn (array $rows): string => $analysis->analyze($rows)['verdict'], $scenarios);
+        $results = array_map(static fn (array $rows): array => $analysis->analyze($rows), $scenarios);
+        $verdicts = array_column($results, 'verdict');
+        $conditionalVerdicts = array_column($results, 'verdict_if_method_calibrated');
 
-        self::assertSame(['VALIDADO', 'DESCARTADO', 'INSUFICIENTE', 'NO_INFORMATIVO'], $verdicts);
-        self::assertCount(4, array_unique($verdicts));
+        self::assertSame(['METODO_NO_CALIBRADO', 'METODO_NO_CALIBRADO', 'METODO_NO_CALIBRADO', 'NO_INFORMATIVO'], $verdicts);
+        self::assertSame(['VALIDADO', 'DESCARTADO', 'INSUFICIENTE', 'NO_INFORMATIVO'], $conditionalVerdicts);
     }
 
     public function testUnaViolacionDeLaIdentidadAlgebraicaLanzaExcepcion(): void

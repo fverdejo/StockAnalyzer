@@ -1240,3 +1240,25 @@ Pide ademas cubrir a diario todos los universos (no solo `largecap60`) y evaluar
 El usuario aclara el motivo real de pedir S&P500/Nasdaq100: no es la pregunta de investigacion (esa queda pendiente por otra via, universo small/mid-cap o los `_adr`), es poder **filtrarlos en el Home**, igual que `ibex35`. `fiabilidad-datos-mercado` cura las dos listas completas desde Wikipedia (503/503 y 102/102), verificadas al 100% contra Yahoo real, sin tocar el cron de la Pi. El conjunto unico de `--all-universes` sube de 305 a 628 tickers. Detalle en `versions.md`, `v2.107`.
 
 De paso, el usuario reporta con capturas un fallo real: en "Historial de operaciones", la fila de Compra y la de Venta de una misma posicion cerrada mostraban el mismo beneficio. Investigado: no era un bug de calculo sino un diseño de dos versiones atras (`v2.6`, reafirmado en `v2.97` con test explicito) nunca reconsiderado para el caso de posicion ya cerrada — una compra comparaba contra el precio de HOY, que para una venta reciente coincide casi exacto con el precio de venta. Corregido: una compra siempre muestra 0 (el dato de posicion abierta ya vive sin ambiguedad en "Beneficio latente"), la venta no cambia. Detalle en `versions.md`, `v2.106`.
+
+---
+
+## Prioridades activas de fiabilidad - 2026-10-15
+
+Astra/Codex gestiona directamente estas tareas: analiza, implementa, valida y registra cada avance sin preparar encargos para otro asistente.
+
+Completadas:
+
+- `v2.120`: cronologia correcta de stops, separando gaps al open, ventas por senal, compras al open y stops intradia.
+- `v2.121`: capacidad de compra basada en ADV20 conocido antes de la apertura, sin usar el volumen futuro de la sesion de ejecucion.
+- `v2.122`: capacidad compartida por ticker/sesion para compras, ventas y stops; salidas parciales persistentes, sin liberar plazas ni capital inexistentes.
+- `v2.123`: excluir de los ratios diarios los retornos de cartera con precios obsoletos y la primera recuperacion; publicar cobertura y limites de valoracion.
+- `v2.124`: conservar huecos completos y finales mediante calendario unido de valores y benchmark; cobertura y limites del calendario publicados.
+
+Pendientes, por orden de prioridad:
+
+- Calibrar slippage dependiente de participacion con datos adecuados; el coste por lado sigue siendo fijo.
+- Tratar explicitamente precios obsoletos, suspensiones de cotizacion y delistings.
+- Versionar el contrato y la cache de mercado antes de incorporar ajustes por splits y dividendos, separando retorno de precio y retorno total.
+- Cerrar la calibracion C9 considerando dependencia temporal, clustering por fecha/ticker y colas de la distribucion.
+- Ejecutar el estudio final fuera de muestra sobre un dataset congelado, sin reajustar parametros tras observar sus resultados.

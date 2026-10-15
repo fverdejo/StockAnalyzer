@@ -135,6 +135,27 @@ class Portfolio
         return null;
     }
 
+    /**
+     * Importe bruto de una compra o venta en la divisa nativa del valor.
+     * No incluye comisiones porque las operaciones persistidas no guardan
+     * ese dato por separado.
+     */
+    public function getTransactionAmount(Transaction $transaction): float
+    {
+        return $transaction->getQuantity() * $transaction->getPrice();
+    }
+
+    /**
+     * Equivalencia en euros del importe bruto. Reutiliza exactamente el
+     * mismo tipo de cambio visual que el precio mostrado en el historial.
+     */
+    public function getTransactionAmountEur(Transaction $transaction): ?float
+    {
+        $priceEur = $this->getTransactionPriceEur($transaction);
+
+        return $priceEur === null ? null : $transaction->getQuantity() * $priceEur;
+    }
+
     private function currencyFor(Transaction $transaction): string
     {
         return $this->getCurrencyFor($transaction->getTicker());

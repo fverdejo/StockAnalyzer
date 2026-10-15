@@ -15,12 +15,16 @@ use StockAnalyzer\Infrastructure\Database\Connection;
 use StockAnalyzer\Providers\CachedMarketDataProvider;
 use StockAnalyzer\Providers\YahooFinanceProvider;
 use StockAnalyzer\Repository\FundamentalsHistoryRepository;
+use StockAnalyzer\Repository\IndexMembershipRepository;
 use StockAnalyzer\Repository\MarketDataCacheRepository;
 use StockAnalyzer\Repository\NewsRepository;
+use StockAnalyzer\Repository\PreloadedIndexMembershipChecker;
 use StockAnalyzer\Repository\TickerBacktestCacheRepository;
 use StockAnalyzer\Services\BacktestingService;
 use StockAnalyzer\Services\DividendGrowthCalculator;
+use StockAnalyzer\Services\RecommendationPortfolioDatasetBuilder;
 use StockAnalyzer\Services\RiskLevelsCalculator;
+use StockAnalyzer\Services\RecommendationPortfolioBacktestService;
 use StockAnalyzer\Utils\UniverseTickerResolver;
 
 // Para validar hallazgos con muestras estadisticamente independientes,
@@ -72,6 +76,12 @@ use StockAnalyzer\Utils\UniverseTickerResolver;
 // Pensado para mediciones que se quieren poder reproducir tal cual
 // (config/measured_edge.php); sin --as-of el comportamiento es el de
 // siempre, anclado a la ultima sesion que devuelva hoy el proveedor.
+//
+// --portfolio (v2.117): convierte el timeline point-in-time de cada ticker
+// en ordenes sobre un unico capital. BUY abre, SELL/STRONG SELL cierra y
+// HOLD no opera; todas se ejecutan en la apertura local siguiente. Publica
+// curva diaria, ledger, costes, capacidad, stops y rechazos. --benchmark
+// selecciona el buy-and-hold de referencia (SPY por defecto).
 $options = getopt('', [
     'universe::',
     'tickers::',
@@ -81,6 +91,10 @@ $options = getopt('', [
     'history::',
     'top::',
     'cross-sectional',
+    'portfolio',
+    'benchmark::',
+    'index-code::',
+    'allow-current-fundamentals',
     'persist',
     'no-point-in-time',
     'as-of::',
@@ -91,14 +105,38 @@ $mode = is_string($options['mode'] ?? null) ? (string) $options['mode'] : 'full'
 $historyRange = is_string($options['history'] ?? null) ? (string) $options['history'] : '2y';
 $topN = max(1, min(100, (int) ($options['top'] ?? 10)));
 $crossSectional = array_key_exists('cross-sectional', $options);
+$portfolioReplay = array_key_exists('portfolio', $options);
+$allowCurrentFundamentals = array_key_exists('allow-current-fundamentals', $options);
+$benchmarkTicker = is_string($options['benchmark'] ?? null)
+    ? strtoupper(trim((string) $options['benchmark']))
+    : 'SPY';
+$indexCode = is_string($options['index-code'] ?? null)
+    ? strtoupper(trim((string) $options['index-code']))
+    : ($universeKey === 'sp500' ? 'GSPC' : null);
+$indexCode = $indexCode === '' ? null : $indexCode;
 // Herramienta de investigacion, mismo espiritu que --mode=technical
 // (v2.32): fuerza el comportamiento anterior a v2.91 (fundamentales de HOY
 // en toda fecha pasada) para poder aislar, con todo lo demas identico, que
 // aportaba de verdad el sesgo de anticipacion. No afecta a la aplicacion.
 $noPointInTime = array_key_exists('no-point-in-time', $options);
 $persist = array_key_exists('persist', $options);
-$defaultStep = $crossSectional ? $horizon : 5;
+$defaultStep = $crossSectional ? $horizon : ($portfolioReplay ? 1 : 5);
 $step = max(1, min(120, (int) ($options['step'] ?? $defaultStep)));
+
+if ((int) $persist + (int) $crossSectional + (int) $portfolioReplay > 1) {
+    fwrite(STDERR, '--persist, --cross-sectional y --portfolio son modos incompatibles entre si.' . PHP_EOL);
+    exit(1);
+}
+
+if ($allowCurrentFundamentals && !$portfolioReplay) {
+    fwrite(STDERR, '--allow-current-fundamentals solo tiene efecto con --portfolio.' . PHP_EOL);
+    exit(1);
+}
+
+if ($portfolioReplay && $noPointInTime && !$allowCurrentFundamentals) {
+    fwrite(STDERR, '--portfolio --no-point-in-time exige --allow-current-fundamentals: el modo fiable excluye recomendaciones sin snapshot historico.' . PHP_EOL);
+    exit(1);
+}
 
 if (!in_array($mode, ['full', 'technical'], true)) {
     fwrite(STDERR, "Modo desconocido: '$mode'. Valores validos: 'full', 'technical'." . PHP_EOL);
@@ -109,8 +147,8 @@ $asOfOption = is_string($options['as-of'] ?? null) ? (string) $options['as-of'] 
 $asOf = null;
 
 if ($asOfOption !== null) {
-    if (!$crossSectional) {
-        fwrite(STDERR, '--as-of solo tiene efecto con --cross-sectional.' . PHP_EOL);
+    if (!$crossSectional && !$portfolioReplay) {
+        fwrite(STDERR, '--as-of solo tiene efecto con --cross-sectional o --portfolio.' . PHP_EOL);
         exit(1);
     }
 
@@ -145,6 +183,22 @@ $explicitTickers = is_string($options['tickers'] ?? null) ? (string) $options['t
 $tickers = (new UniverseTickerResolver($universes))->resolve($universeKey, $explicitTickers);
 
 $connection = new Connection();
+$membershipRepository = $indexCode === null ? null : new IndexMembershipRepository($connection);
+
+if ($membershipRepository !== null && $membershipRepository->count((string) $indexCode) === 0) {
+    fwrite(STDERR, "No hay membresia historica archivada para $indexCode; no se ejecuta un backtest point-in-time vacio." . PHP_EOL);
+    exit(1);
+}
+
+$membershipChecker = $membershipRepository === null
+    ? null
+    : new PreloadedIndexMembershipChecker($membershipRepository);
+$formerMembers = [];
+
+if (($portfolioReplay || $crossSectional) && $membershipRepository !== null && $explicitTickers === null) {
+    $formerMembers = $membershipRepository->formerMembersNotIn((string) $indexCode, $tickers);
+    $tickers = array_values(array_unique(array_merge($tickers, $formerMembers)));
+}
 $weights = new ScoreWeights();
 
 try {
@@ -171,8 +225,34 @@ $service = new BacktestingService(
     // `fundamentals_point_in_time_pct` en la salida antes de sacar
     // conclusiones: con la serie recien empezada la mayoria de las muestras
     // siguen usando los fundamentales de hoy, igual que antes.
-    $noPointInTime ? null : new FundamentalsHistoryRepository($connection)
+    $noPointInTime ? null : new FundamentalsHistoryRepository($connection),
+    $membershipChecker
 );
+
+if ($portfolioReplay) {
+    if ($mode !== 'full') {
+        fwrite(STDERR, '--portfolio usa la recomendacion real completa y solo admite --mode=full.' . PHP_EOL);
+        exit(1);
+    }
+
+    $portfolioResult = (new RecommendationPortfolioBacktestService(
+        $service,
+        new RecommendationPortfolioDatasetBuilder(!$allowCurrentFundamentals)
+    ))->run(
+        $tickers,
+        $step,
+        $asOf,
+        $indexCode,
+        $benchmarkTicker
+    );
+    $portfolioResult['former_members_added'] = count($formerMembers);
+    $portfolioResult['former_members_without_usable_history'] = array_values(array_intersect(
+        $formerMembers,
+        array_keys($portfolioResult['errors'])
+    ));
+    echo json_encode($portfolioResult, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+    exit(0);
+}
 
 if ($persist) {
     $cache = new TickerBacktestCacheRepository($connection);
@@ -202,7 +282,7 @@ if ($persist) {
 
 if ($crossSectional) {
     try {
-        $crossSectionalResult = $service->runCrossSectional($tickers, $horizon, $step, $topN, $mode, null, $asOf);
+        $crossSectionalResult = $service->runCrossSectional($tickers, $horizon, $step, $topN, $mode, $indexCode, $asOf);
     } catch (InvalidArgumentException $exception) {
         fwrite(STDERR, $exception->getMessage() . PHP_EOL);
         exit(1);

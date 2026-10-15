@@ -238,6 +238,30 @@ final class PolicyReplayStatisticsTest extends TestCase
         }
     }
 
+    public function testC9MarcaElBootstrapLegadoComoNoCalibrado(): void
+    {
+        $diffs = [];
+
+        for ($i = 0; $i < 100; $i++) {
+            $entry = $i * 60;
+            $diffs[] = [
+                'entry_date' => $this->dateAt($entry),
+                'exposure_end_date' => $this->dateAt($entry + 20),
+                'diff' => (float) (($i % 7) - 3),
+            ];
+        }
+
+        $summary = (new PolicyReplayStatistics())->summarizePairedDiffsPrecise(
+            $diffs,
+            self::SEED
+        );
+
+        self::assertTrue($summary['result_informative']);
+        self::assertSame('circular_calendar_2xp90_legacy', $summary['bootstrap_method_id']);
+        self::assertFalse($summary['bootstrap_method_calibrated']);
+        self::assertSame('metodo_no_calibrado', $summary['verdict_status']);
+    }
+
     public function testUnaVarianzaRealmenteNulaSeDistingueDeUnaMuyPequena(): void
     {
         $stats = new PolicyReplayStatistics();

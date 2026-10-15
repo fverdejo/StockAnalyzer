@@ -29,11 +29,38 @@ class BacktestingConfig
 
     private readonly float $costBps;
 
-    public function __construct(?float $costBps = null)
+    private readonly float $initialCapital;
+
+    private readonly int $maxPositions;
+
+    private readonly float $maxPositionWeight;
+
+    private readonly float $maxVolumeParticipation;
+
+    public function __construct(
+        ?float $costBps = null,
+        ?float $initialCapital = null,
+        ?int $maxPositions = null,
+        ?float $maxPositionWeight = null,
+        ?float $maxVolumeParticipation = null
+    )
     {
-        $overrides = $costBps === null ? self::loadFile(self::CONFIG_PATH) : [];
+        $overrides = self::loadFile(self::CONFIG_PATH);
 
         $this->costBps = $costBps ?? $overrides['cost_bps'] ?? self::DEFAULT_COST_BPS;
+        $this->initialCapital = self::positive(
+            $initialCapital ?? $overrides['initial_capital'] ?? 100000.0,
+            100000.0
+        );
+        $this->maxPositions = max(1, $maxPositions ?? (int) ($overrides['max_positions'] ?? 10));
+        $this->maxPositionWeight = self::fraction(
+            $maxPositionWeight ?? $overrides['max_position_weight'] ?? 0.10,
+            0.10
+        );
+        $this->maxVolumeParticipation = self::fraction(
+            $maxVolumeParticipation ?? $overrides['max_volume_participation'] ?? 0.01,
+            0.01
+        );
     }
 
     /**
@@ -78,5 +105,35 @@ class BacktestingConfig
     public function getCostRate(): float
     {
         return $this->costBps / 10000.0;
+    }
+
+    public function getInitialCapital(): float
+    {
+        return $this->initialCapital;
+    }
+
+    public function getMaxPositions(): int
+    {
+        return $this->maxPositions;
+    }
+
+    public function getMaxPositionWeight(): float
+    {
+        return $this->maxPositionWeight;
+    }
+
+    public function getMaxVolumeParticipation(): float
+    {
+        return $this->maxVolumeParticipation;
+    }
+
+    private static function positive(float $value, float $fallback): float
+    {
+        return is_finite($value) && $value > 0.0 ? $value : $fallback;
+    }
+
+    private static function fraction(float $value, float $fallback): float
+    {
+        return is_finite($value) && $value > 0.0 && $value <= 1.0 ? $value : $fallback;
     }
 }

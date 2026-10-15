@@ -32,11 +32,13 @@ use LogicException;
  * EXACTAMENTE `P = tasa_rechazo x P_cond` (assert de la predeclaracion,
  * comprobado aqui, no supuesto).
  *
- * Cuatro veredictos, exhaustivos y mutuamente excluyentes por construccion
+ * Cuatro candidatos de veredicto, exhaustivos y mutuamente excluyentes por construccion
  * (una unica rama `match(true) { ... default => }`, nunca `elseif`
  * reordenables): VALIDADO, DESCARTADO, INSUFICIENTE (informativo pero ni lo
  * uno ni lo otro -- DISTINTO de no informativo, no se relanza con otro
- * umbral tras verlo) y NO_INFORMATIVO.
+ * umbral tras verlo) y NO_INFORMATIVO. C9 demostro que el bootstrap legado
+ * no esta calibrado: el veredicto efectivo queda en `METODO_NO_CALIBRADO`
+ * y el candidato se conserva en `verdict_if_method_calibrated`.
  *
  * Multiplicidad acumulada del proyecto (obligatorio de `auditor-estadistico`,
  * cambio 4): esta es la QUINTA prueba formal de "fundamentales vs retorno"
@@ -60,7 +62,8 @@ final class FundamentalFilterAnalysis
     public const EXCLUDED_SECTORS = ['Financial Services', 'Real Estate'];
 
     public function __construct(
-        private readonly PolicyReplayStatistics $statistics = new PolicyReplayStatistics()
+        private readonly PolicyReplayStatistics $statistics = new PolicyReplayStatistics(),
+        private readonly StudyVerdictStatusResolver $statusResolver = new StudyVerdictStatusResolver()
     ) {
     }
 
@@ -130,11 +133,22 @@ final class FundamentalFilterAnalysis
         $ciHigh = $primarySummary['ci95_high'];
 
         // Assert 15 (obligatorio de auditor-estadistico): rama UNICA, exhaustiva y mutuamente excluyente.
-        $verdict = match (true) {
+        $verdictIfMethodCalibrated = match (true) {
             !$informative => 'NO_INFORMATIVO',
             $pCond >= self::DELTA_PP && $ciLow !== null && $ciLow > 0.0 => 'VALIDADO',
             $ciHigh !== null && $ciHigh < 0.0 => 'DESCARTADO',
             default => 'INSUFICIENTE',
+        };
+        $verdictStatus = $this->statusResolver->resolve(
+            $informative,
+            $primarySummary['ci_excludes_zero'],
+            $primarySummary['bootstrap_method_calibrated'],
+            $verdictIfMethodCalibrated === 'VALIDADO'
+        );
+        $verdict = match ($verdictStatus) {
+            \StockAnalyzer\Enums\StudyVerdictStatus::NO_INFORMATIVO => 'NO_INFORMATIVO',
+            \StockAnalyzer\Enums\StudyVerdictStatus::METODO_NO_CALIBRADO => 'METODO_NO_CALIBRADO',
+            default => $verdictIfMethodCalibrated,
         };
 
         return [
@@ -157,8 +171,12 @@ final class FundamentalFilterAnalysis
                 'effective_n' => $primarySummary['effective_n'],
                 'result_informative' => $primarySummary['result_informative'],
                 'informative_overall' => $informative,
+                'bootstrap_method_id' => $primarySummary['bootstrap_method_id'],
+                'bootstrap_method_calibrated' => $primarySummary['bootstrap_method_calibrated'],
+                'verdict_status' => $verdictStatus->value,
             ],
             'verdict' => $verdict,
+            'verdict_if_method_calibrated' => $verdictIfMethodCalibrated,
             'secondary_diluted' => [
                 'label' => 'P = media(D_i), toda la cohorte evaluable (D_i=0 en aceptadas) -- sin veredicto',
                 'p' => $p,
@@ -166,6 +184,7 @@ final class FundamentalFilterAnalysis
                 'ci95_high' => $secondarySummary['ci95_high'],
                 'blocks_in_range' => $secondarySummary['blocks_in_range'],
                 'result_informative' => $secondarySummary['result_informative'],
+                'verdict_status' => $secondarySummary['verdict_status'],
             ],
             'secondary_a_vs_c' => [
                 'label' => "D'_i = V_A - V_C (tecnica+gestion vs mantener sin gestionar) -- sin veredicto",
@@ -174,6 +193,7 @@ final class FundamentalFilterAnalysis
                 'ci95_high' => $primeSummary['ci95_high'],
                 'blocks_in_range' => $primeSummary['blocks_in_range'],
                 'result_informative' => $primeSummary['result_informative'],
+                'verdict_status' => $primeSummary['verdict_status'],
             ],
             'descriptive' => $this->descriptive($cohort, $accepted, $rejected),
             'multiplicity_note' => 'Quinta prueba formal de fundamentales-vs-retorno sobre este universo/periodo (score compuesto x4 con veredicto nulo, mas este filtro D/E). Un VALIDADO es provisional, pendiente de confirmacion prospectiva via D_prime (A-vs-C); B esta bloqueada en evaluacion prospectiva genuina desde el fin de la suscripcion EODHD (2026-10-01).',

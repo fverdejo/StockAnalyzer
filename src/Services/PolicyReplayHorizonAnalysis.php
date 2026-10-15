@@ -17,7 +17,11 @@ use DateTimeImmutable;
  * con `P_drift = -r̄ x media(Δx)`; penalizacion de reentrada
  * `T = P_T - 0,40pp x cuota`. GO = informativo y `ci95_low(T) >= 0`;
  * NO-GO = informativo y `ci95_high(P) < -δ` Y `ci95_high(P_T) < 0`; INDET el
- * resto. Las puertas G1-G5 son DESCRIPTIVAS de prioridad. Todos los IC
+ * resto, condicionado a disponer de un metodo de incertidumbre calibrado.
+ * C9 demostro el 2026-09-29 que el metodo legado no lo esta: mientras siga
+ * activo, el veredicto efectivo es `METODO_NO_CALIBRADO` y el calculo
+ * GO/NO-GO se conserva solo en `verdict_if_method_calibrated` para auditoria.
+ * Las puertas G1-G5 son DESCRIPTIVAS de prioridad. Todos los IC
  * salen del mismo bootstrap circular de bloques de `PolicyReplayStatistics`
  * (5.000 replicas, cada llamada re-siembra con `SEED`), recalculando
  * `P`, `P_T` y `T` (con `r̄`, `media(Δx)` y `cuota` incluidos) DENTRO de cada
@@ -34,7 +38,8 @@ final class PolicyReplayHorizonAnalysis
     private const MIN_ENTRIES_PER_BEAR_BLOCK = 20;
 
     public function __construct(
-        private readonly PolicyReplayStatistics $statistics = new PolicyReplayStatistics()
+        private readonly PolicyReplayStatistics $statistics = new PolicyReplayStatistics(),
+        private readonly StudyVerdictStatusResolver $statusResolver = new StudyVerdictStatusResolver()
     ) {
     }
 
@@ -56,11 +61,22 @@ final class PolicyReplayHorizonAnalysis
         $go = $informative && $ci !== null && $ci['T']['ci95_low'] >= 0.0;
         $noGo = $informative && $ci !== null && $ci['P']['ci95_high'] < -self::DELTA_PP && $ci['P_T']['ci95_high'] < 0.0;
 
-        $verdict = match (true) {
+        $verdictIfMethodCalibrated = match (true) {
             !$informative => 'NO_INFORMATIVO (ningun GO ni NO-GO posible; solo cabe una nueva predeclaracion)',
             $go => 'GO (prioridad alta de fase 2)',
             $noGo => 'NO-GO (cierra solo raise-only k=2,5, cadencia 5, H=45)',
             default => 'INDET (fase 2 tras el backlog)',
+        };
+        $verdictStatus = $this->statusResolver->resolve(
+            $informative,
+            $summary['ci_excludes_zero'],
+            $summary['bootstrap_method_calibrated'],
+            $go
+        );
+        $verdict = match ($verdictStatus) {
+            \StockAnalyzer\Enums\StudyVerdictStatus::NO_INFORMATIVO => $verdictIfMethodCalibrated,
+            \StockAnalyzer\Enums\StudyVerdictStatus::METODO_NO_CALIBRADO => 'METODO_NO_CALIBRADO (intervalos exploratorios; ningun GO ni NO-GO posible)',
+            default => $verdictIfMethodCalibrated,
         };
 
         return [
@@ -74,6 +90,9 @@ final class PolicyReplayHorizonAnalysis
                 'effective_n' => $summary['effective_n'],
                 'design_effect' => $summary['design_effect'],
                 'result_informative' => $informative,
+                'bootstrap_method_id' => $summary['bootstrap_method_id'],
+                'bootstrap_method_calibrated' => $summary['bootstrap_method_calibrated'],
+                'verdict_status' => $verdictStatus->value,
                 // Control: el IC de D del bootstrap propio, redondeado a 2
                 // decimales, debe coincidir con el de `summarizePairedDiffs()`.
                 'ci_consistent_with_summarize' => $ci !== null
@@ -81,6 +100,7 @@ final class PolicyReplayHorizonAnalysis
                     && round($ci['P']['ci95_high'], 2) === $summary['ci95_high'],
             ],
             'verdict' => $verdict,
+            'verdict_if_method_calibrated' => $verdictIfMethodCalibrated,
             'gates_descriptive_of_priority' => $this->gates($cohort, $estimates, $ci, $bootstrap['block_width_days']),
             'descriptive' => $this->descriptive($rows, $cohort, $cutoff, $bootstrap['block_width_days']),
         ];

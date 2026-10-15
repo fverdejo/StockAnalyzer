@@ -2359,7 +2359,7 @@ class BacktestingService
      * pueda "recolocar el stop donde se pondria si se entrara hoy" durante
      * una posicion abierta. `stop_loss` no cambia (sigue `null` salvo BUY).
      *
-     * @return list<array{date: string, index: int, recommendation: string, stop_loss: ?float, candidate_stop: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float, eligible: bool}>
+     * @return list<array{date: string, index: int, recommendation: string, score_percentage: float, fundamentals_is_point_in_time: bool, stop_loss: ?float, candidate_stop: ?float, fundamental_change: ?FundamentalChangeAssessment, entry_price: ?float, eligible: bool}>
      */
     public function replayTimeline(string $ticker, int $step = 5, ?DateTimeImmutable $asOf = null, ?string $indexCode = null): array
     {
@@ -2372,8 +2372,10 @@ class BacktestingService
         for ($index = $minimumLookback; $index < count($history); $index += $step) {
             $current = $history[$index];
             $synthetic = $this->stockAt($stock, $current);
+            $fundamentalsArePointInTime = $this->lastMarketCapWasPointInTime;
             $technical = $this->technicalAnalyzer->analyze(array_slice($history, 0, $index + 1));
-            $recommendation = $this->scoreCalculator->calculate($synthetic, $technical)->getScore()->getRecommendation();
+            $score = $this->scoreCalculator->calculate($synthetic, $technical)->getScore();
+            $recommendation = $score->getRecommendation();
 
             // Mismo calculo para TODOS los puntos, sea BUY o no: `stop_loss`
             // sigue siendo el de siempre (solo con BUY), `candidate_stop` es
@@ -2403,6 +2405,8 @@ class BacktestingService
                 'date' => $current->getDate()->format('Y-m-d'),
                 'index' => $index,
                 'recommendation' => $recommendation,
+                'score_percentage' => $score->getPercentage(),
+                'fundamentals_is_point_in_time' => $fundamentalsArePointInTime,
                 'stop_loss' => $stopLoss,
                 'candidate_stop' => $candidateStop,
                 'fundamental_change' => $fundamentalChange,

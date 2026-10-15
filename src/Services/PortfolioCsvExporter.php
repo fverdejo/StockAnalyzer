@@ -42,7 +42,7 @@ class PortfolioCsvExporter
 
     public static function transactions(Portfolio $portfolio): string
     {
-        $rows = [['Fecha', 'Tipo', 'Ticker', 'Cantidad', 'Precio (EUR)', 'Precio (USD)', 'Beneficio', 'Beneficio %']];
+        $rows = [['Fecha', 'Tipo', 'Ticker', 'Cantidad', 'Precio (EUR)', 'Precio (USD)', 'Total (divisa nativa)', 'Total (EUR)', 'Beneficio', 'Beneficio %']];
 
         foreach ($portfolio->getTransactions() as $transaction) {
             $currency = $portfolio->getCurrencyFor($transaction->getTicker());
@@ -53,6 +53,8 @@ class PortfolioCsvExporter
                 Layout::formatNumber($transaction->getQuantity()),
                 Layout::formatNullable($portfolio->getTransactionPriceEur($transaction)),
                 Layout::formatNullable($portfolio->getTransactionPriceUsd($transaction)),
+                Layout::formatMoney($portfolio->getTransactionAmount($transaction), $currency),
+                Layout::formatNullable($portfolio->getTransactionAmountEur($transaction)),
                 Layout::formatNullableMoney($portfolio->getTransactionProfit($transaction), $currency),
                 Layout::formatNullable($portfolio->getTransactionProfitPercent($transaction)),
             ];

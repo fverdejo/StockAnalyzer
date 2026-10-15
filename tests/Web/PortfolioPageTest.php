@@ -460,6 +460,33 @@ final class PortfolioPageTest extends TestCase
         );
     }
 
+    public function testHistorialMuestraElTotalDeCantidadPorPrecio(): void
+    {
+        $transaction = new Transaction(
+            1,
+            1,
+            'ADBE',
+            TransactionType::BUY,
+            2.5,
+            100.0,
+            new DateTimeImmutable('2026-01-02 10:00:00')
+        );
+        $portfolio = new Portfolio(
+            [],
+            [$transaction],
+            0.0,
+            [],
+            ['ADBE' => 'USD'],
+            0.8649
+        );
+        $html = PortfolioPage::render($this->user(), $portfolio, 'token', null, null);
+
+        self::assertStringContainsString('<th class="num">Total</th>', $html);
+        self::assertStringContainsString('250,00 $', $html);
+        self::assertStringContainsString('216,23 €', $html);
+        self::assertStringContainsString('cantidad × precio de ejecución', $html);
+    }
+
     public function testHistorialDeOperacionesSePaginaConLasMasRecientesPrimero(): void
     {
         $pagina1 = $this->renderWithTransactions(1);

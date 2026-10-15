@@ -23,4 +23,17 @@ return [
     // la practica se comen la comision. Ponlo a 0 si quieres el retorno
     // bruto de mercado, sin friccion.
     'cost_bps' => 10.0,
+
+    // C11 (v2.114): restricciones comunes para el replay diario de cartera.
+    // Se expresan aqui para que una medicion conserve su configuracion y no
+    // dependa de constantes escondidas dentro del simulador.
+    'initial_capital' => 100000.0,
+    'max_positions' => 10,
+    'max_position_weight' => 0.10,
+    // Participacion maxima sobre ADV20 calculado exclusivamente con las
+    // sesiones anteriores a la apertura. Es una proxy conservadora de
+    // capacidad diaria, no una garantia de ejecucion en la subasta open.
+    // Compras, ventas y stops comparten este presupuesto por ticker/sesion
+    // sin neteo. Las salidas que no caben persisten para aperturas posteriores.
+    'max_volume_participation' => 0.01,
 ];
